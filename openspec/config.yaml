@@ -1,0 +1,43 @@
+# =========================================================================
+# OPEN SPECIFICATION CONFIGURATION - PROJETO SOFÍA (ASADOS)
+# =========================================================================
+
+project_name: "Sofía (Asados)"
+sdd_version: "1.0.0"
+
+stack:
+  core: "Next.js 16 (App Router)"
+  language: "TypeScript"
+  styling: "TailwindCSS"
+  ui_components: "shadcn/ui"
+  database: "Supabase (PostgreSQL)"
+  auth: "Supabase Auth"
+  realtime: "Supabase Realtime"
+  storage: "Supabase Storage"
+  integrations:
+    whatsapp: "Meta WhatsApp Business Cloud API"
+    llm: "OpenRouter API (Gemini/other LLMs)"
+    payment: "Mercado Pago Sandbox"
+    calendar: "Google Calendar API"
+
+conventions:
+  language: "pt-BR"
+  telephony_validation:
+    pattern: "^55419[0-9]{8}$"
+    region: "Curitiba (DDI 55, DDD 41, prefix 9)"
+  price_format: "cents (INTEGER)"
+  otp_verification: true
+  security: "strict RLS policies"
+
+persistence:
+  mode: "openspec"
+  path: "openspec/"
+
+testing:
+  strict_tdd: true
+  runner: "vitest"
+  capabilities:
+    unit_tests: true
+    integration_tests: true
+    rls_verification: false
+    e2e_tests: true

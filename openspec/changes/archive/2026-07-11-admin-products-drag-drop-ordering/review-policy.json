@@ -1,0 +1,7 @@
+{
+  "schema": "gentle-ai.review-policy/v1",
+  "mode": "ordinary_4r",
+  "severity_threshold": "CRITICAL",
+  "scope": "admin-products-drag-drop-ordering",
+  "notes": "Bounded review after SDD apply for filtered-view admin product drag-and-drop ordering."
+}

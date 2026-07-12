@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "changeName": "admin-products-inventory-hardening",
+  "target": "bounded-post-apply-review",
+  "requiredVerdict": "PASS_WITH_WARNINGS_ALLOWED",
+  "requiredEvidence": [
+    "focused-vitest",
+    "full-vitest",
+    "lint",
+    "build",
+    "local-supabase-db-push",
+    "runtime-sql-rpc-verification",
+    "fresh-context-review"
+  ]
+}

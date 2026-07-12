@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Confirme seu e-mail - Asados Sofía</title>
+  <style>
+    /* Reset and overrides for email clients */
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100% !important;
+      -webkit-text-size-adjust: 100%;
+      -ms-text-size-adjust: 100%;
+    }
+    img {
+      border: 0;
+      height: auto;
+      line-height: 100%;
+      outline: none;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body style="background-color: #09090b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; padding: 0; color: #ffffff;">
+  <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #09090b; min-height: 100vh;">
+    <tr>
+      <td align="center" valign="top" style="padding: 40px 10px;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 500px; background-color: #18181b; border: 1px solid #27272a; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);">
+          <!-- Header (Brand Icon & Name) -->
+          <tr>
+            <td align="center" style="padding: 32px 32px 16px 32px;">
+              <table border="0" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="background: linear-gradient(135deg, #dc2626, #f59e0b); padding: 10px; border-radius: 12px; width: 40px; height: 40px;">
+                    <span style="font-size: 24px; line-height: 40px; color: #ffffff; display: block; text-align: center;">🔥</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="padding-top: 12px;">
+                    <span style="font-size: 22px; font-weight: bold; letter-spacing: -0.5px; background: linear-gradient(to right, #ffffff, #d4d4d8); -webkit-background-clip: text; color: #ffffff;">Asados Sofía</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Main Content -->
+          <tr>
+            <td style="padding: 16px 32px 32px 32px;">
+              <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td style="font-size: 18px; font-weight: bold; color: #ffffff; padding-bottom: 12px;">
+                    Olá, {{ .Email }}!
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-size: 15px; line-height: 24px; color: #a1a1aa; padding-bottom: 24px;">
+                    Obrigado por se cadastrar na <strong>Casa de Asados</strong>. Para ativar a sua conta e ter acesso completo ao nosso sistema de reservas e pedidos, confirme o seu endereço de e-mail clicando no botão abaixo:
+                  </td>
+                </tr>
+                <!-- CTA Button -->
+                <tr>
+                  <td align="center" style="padding-bottom: 28px;">
+                    <table border="0" cellpadding="0" cellspacing="0" style="width: 100%;">
+                      <tr>
+                        <td align="center">
+                          <a href="{{ .ConfirmationURL }}" target="_blank" style="display: block; width: 100%; max-width: 240px; padding: 14px 20px; font-size: 14px; font-weight: bold; text-decoration: none; color: #ffffff; background-color: #dc2626; background: linear-gradient(to right, #f59e0b, #dc2626); border-radius: 12px; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25); text-align: center;">
+                            CONFIRMAR MEU E-MAIL
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <!-- Fallback URL -->
+                <tr>
+                  <td style="font-size: 13px; line-height: 20px; color: #71717a; padding-bottom: 12px; border-top: 1px solid #27272a; padding-top: 20px;">
+                    Se o botão acima não funcionar, copie e cole o link a seguir no seu navegador:
+                  </td>
+                </tr>
+                <tr>
+                  <td style="font-size: 13px; word-break: break-all; line-height: 18px; color: #f59e0b; padding-bottom: 20px;">
+                    <a href="{{ .ConfirmationURL }}" target="_blank" style="color: #f59e0b; text-decoration: underline;">{{ .ConfirmationURL }}</a>
+                  </td>
+                </tr>
+                <!-- Expiry warning -->
+                <tr>
+                  <td style="font-size: 12px; color: #71717a; text-align: center;">
+                    Este link é válido por 24 horas.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="background-color: #0f0f11; padding: 20px 32px; border-top: 1px solid #27272a;">
+              <span style="font-size: 11px; color: #52525b; display: block; line-height: 16px;">
+                © 2026 Casa de Asados · Curitiba, PR
+              </span>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
