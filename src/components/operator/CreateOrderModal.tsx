@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { X, Plus, Trash2, Loader2, ShoppingCart, DollarSign, MapPin } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { criarPedidoOperador } from '@/app/actions/pedidos'
+import { sortProductsByOfficialOrder } from '@/lib/product-ordering'
 import { Conversa } from './ConversationsQueue'
 
 interface Produto {
@@ -12,6 +13,7 @@ interface Produto {
   descricao: string | null
   preco_centavos: number
   ativo: boolean
+  ordem_exibicao: number | null
 }
 
 interface ItemSelecionado {
@@ -66,12 +68,15 @@ export default function CreateOrderModal({
           .from('produtos')
           .select('*')
           .eq('ativo', true)
-          .order('nome')
+          .order('ordem_exibicao', { ascending: true, nullsFirst: false })
+          .order('nome', { ascending: true })
+          .order('id', { ascending: true })
 
         if (error) throw error
-        setProdutos(data || [])
-        if (data && data.length > 0) {
-          setProdutoSelecionadoId(data[0].id)
+        const orderedProducts = sortProductsByOfficialOrder(data || [])
+        setProdutos(orderedProducts)
+        if (orderedProducts.length > 0) {
+          setProdutoSelecionadoId(orderedProducts[0].id)
         }
       } catch (err: any) {
         console.error('Erro ao buscar produtos:', err)

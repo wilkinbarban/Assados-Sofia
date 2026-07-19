@@ -27,6 +27,7 @@ import {
   uploadImagemProduto,
   removerImagemProduto
 } from '@/app/actions/estoque'
+import { sortProductsByOfficialOrder } from '@/lib/product-ordering'
 
 interface Produto {
   id: string
@@ -41,6 +42,7 @@ interface Produto {
   url_imagem_thumb: string | null
   url_imagem_2: string | null
   url_imagem_2_thumb: string | null
+  ordem_exibicao: number | null
   data_criacao?: string
   data_atualizacao?: string
 }
@@ -133,7 +135,7 @@ export default function InventoryManager() {
     try {
       const res = await listarProdutos(filter === 'todos' ? undefined : filter === 'ativos' ? 'ativos' : 'esgotados')
       if (res.success && res.data) {
-        setProdutos(res.data)
+        setProdutos(sortProductsByOfficialOrder(res.data))
       } else {
         setError(res.error || 'Erro ao carregar produtos')
       }

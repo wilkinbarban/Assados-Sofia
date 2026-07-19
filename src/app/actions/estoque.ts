@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import sharp from 'sharp'
+import { sortProductsByOfficialOrder } from '@/lib/product-ordering'
 
 async function verificarPermissaoAdminEstoque() {
   const supabase = await createClient()
@@ -425,7 +426,9 @@ export async function listarProdutos(filtro?: 'todos' | 'ativos' | 'esgotados') 
     let query = adminSupabase
       .from('produtos')
       .select('*')
+      .order('ordem_exibicao', { ascending: true, nullsFirst: false })
       .order('nome', { ascending: true })
+      .order('id', { ascending: true })
 
     if (filtro === 'ativos') {
       query = query.eq('ativo', true)
@@ -443,7 +446,7 @@ export async function listarProdutos(filtro?: 'todos' | 'ativos' | 'esgotados') 
       return { success: false, error: `ERRO_BANCO: ${error.message}` }
     }
 
-    return { success: true, data }
+    return { success: true, data: sortProductsByOfficialOrder(data || []) }
   } catch (error: any) {
     console.error('Erro na action listarProdutos:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
