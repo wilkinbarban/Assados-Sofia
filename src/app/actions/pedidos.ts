@@ -191,7 +191,17 @@ export async function criarPedidoOperador(data: {
   }
 }
 
-export async function confirmarPedidoOperador(pedidoId: string) {
+function mapearErroEstoquePedido(error: { code?: string; message?: string }) {
+  if (error.message?.includes('ESTOQUE_INSUFICIENTE')) return 'ESTOQUE_INSUFICIENTE'
+  if (error.message?.includes('CANCELAMENTO_SEM_CONFIRMACAO')) return 'CANCELAMENTO_SEM_CONFIRMACAO'
+  if (error.message?.includes('EFEITOS_ESTOQUE_INDISPONIVEIS')) return 'EFEITOS_ESTOQUE_INDISPONIVEIS'
+  if (error.message?.includes('IDEMPOTENCY_CONFLICT') || error.code === '23505') return 'CONFLITO_IDEMPOTENCIA'
+  if (error.message?.includes('PEDIDO_NAO_ENCONTRADO')) return 'PEDIDO_NAO_ENCONTRADO'
+  if (error.code === '42501') return 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE'
+  return 'ERRO_ESTOQUE_PEDIDO'
+}
+
+export async function confirmarPedidoOperador(pedidoId: string, correlationId = pedidoId) {
   try {
     const check = await verificarPermissaoOperador()
     if (!check.authorized) {
@@ -200,80 +210,11 @@ export async function confirmarPedidoOperador(pedidoId: string) {
 
     const { supabase } = check
 
-    // 1. Atualizar o status do pedido para 'confirmado'
-    const { data: pedido, error: updateError } = await supabase
-      .from('pedidos')
-      .update({ status: 'confirmado' })
-      .eq('id', pedidoId)
-      .select()
-      .single()
-
-    if (updateError || !pedido) {
-      console.error(`[Pedidos] Erro ao confirmar pedido: ${updateError?.message || 'Pedido não encontrado'}`)
-      return { success: false, error: `ERRO_CONFIRMACAO_PEDIDO: ${updateError?.message || 'Falha ao atualizar status'}` }
-    }
-
-    // Integração de estoque: baixar produtos vendidos
-    try {
-      const supabaseAdmin = createAdminClient()
-
-      // Obter usuário atual para registro de movimentação
-      const { data: { user: currentUser } } = await supabase.auth.getUser()
-      const usuarioId = currentUser?.id
-
-      const { data: itensPedido, error: itensError } = await supabaseAdmin
-        .from('itens_pedido')
-        .select('produto_id, quantidade')
-        .eq('pedido_id', pedidoId)
-
-      if (!itensError && itensPedido && itensPedido.length > 0) {
-        for (const item of itensPedido) {
-          const { data: produto, error: prodError } = await supabaseAdmin
-            .from('produtos')
-            .select('quantidade_estoque, controlar_estoque')
-            .eq('id', item.produto_id)
-            .single()
-
-          if (prodError || !produto || !produto.controlar_estoque) continue
-
-          const qtdAnterior = produto.quantidade_estoque
-          const qtdNova = qtdAnterior - item.quantidade
-
-          const { error: updateEstoqueError } = await supabaseAdmin
-            .from('produtos')
-            .update({
-              quantidade_estoque: qtdNova,
-              ativo: qtdNova > 0,
-              data_atualizacao: new Date().toISOString(),
-            })
-            .eq('id', item.produto_id)
-
-          if (updateEstoqueError) {
-            console.error(`[Pedidos] Erro ao atualizar estoque do produto ${item.produto_id}:`, updateEstoqueError)
-            continue
-          }
-
-          const { error: movError } = await supabaseAdmin
-            .from('movimentacoes_estoque')
-            .insert({
-              produto_id: item.produto_id,
-              tipo: 'saida',
-              quantidade: item.quantidade,
-              quantidade_anterior: qtdAnterior,
-              quantidade_nova: qtdNova,
-              motivo: 'Venda confirmada',
-              usuario_id: usuarioId,
-              pedido_id: pedidoId,
-            })
-
-          if (movError) {
-            console.error(`[Pedidos] Erro ao registrar movimentação de estoque para produto ${item.produto_id}:`, movError)
-          }
-        }
-      }
-    } catch (stockError) {
-      console.error('[Pedidos] Erro na integração de estoque:', stockError)
-    }
+    const { data: pedido, error: stockError } = await supabase.rpc('confirmar_pedido_estoque', {
+      p_pedido_id: pedidoId,
+      p_correlation_id: correlationId,
+    }).single()
+    if (stockError || !pedido) return { success: false, error: mapearErroEstoquePedido(stockError || {}) }
 
     // 2. Agendar no Google Calendar de forma resiliente
     const googleEventId = await agendarPedidoNoCalendario(pedidoId)
@@ -488,7 +429,7 @@ export async function gerarPreferenciaPagamento(pedidoId: string) {
  * Cancela um pedido e restaura o estoque dos produtos vendidos.
  * Registra movimentações de estoque do tipo 'cancelamento'.
  */
-export async function cancelarPedido(pedidoId: string) {
+export async function cancelarPedido(pedidoId: string, correlationId = pedidoId) {
   try {
     const check = await verificarPermissaoOperador()
     if (!check.authorized) {
@@ -496,81 +437,11 @@ export async function cancelarPedido(pedidoId: string) {
     }
 
     const { supabase } = check
-    const supabaseAdmin = createAdminClient()
-
-    // Obter usuário atual
-    const { data: { user: currentUser } } = await supabase.auth.getUser()
-    const usuarioId = currentUser?.id
-
-    // 1. Buscar pedido e validar
-    const { data: pedido, error: pedidoError } = await supabase
-      .from('pedidos')
-      .select('id, status')
-      .eq('id', pedidoId)
-      .single()
-
-    if (pedidoError || !pedido) {
-      return { success: false, error: 'PEDIDO_NAO_ENCONTRADO' }
-    }
-
-    if (pedido.status === 'cancelado') {
-      return { success: false, error: 'PEDIDO_JA_CANCELADO' }
-    }
-
-    // 2. Buscar itens do pedido para restaurar estoque
-    const { data: itensPedido, error: itensError } = await supabaseAdmin
-      .from('itens_pedido')
-      .select('produto_id, quantidade')
-      .eq('pedido_id', pedidoId)
-
-    if (!itensError && itensPedido && itensPedido.length > 0) {
-      for (const item of itensPedido) {
-        const { data: produto } = await supabaseAdmin
-          .from('produtos')
-          .select('quantidade_estoque, controlar_estoque')
-          .eq('id', item.produto_id)
-          .single()
-
-        if (!produto || !produto.controlar_estoque) continue
-
-        const qtdAnterior = produto.quantidade_estoque
-        const qtdNova = qtdAnterior + item.quantidade
-
-        // Restaurar estoque
-        await supabaseAdmin
-          .from('produtos')
-          .update({
-            quantidade_estoque: qtdNova,
-            ativo: true, // reativa o produto ao restaurar estoque
-            data_atualizacao: new Date().toISOString(),
-          })
-          .eq('id', item.produto_id)
-
-        // Registrar movimentação
-        await supabaseAdmin
-          .from('movimentacoes_estoque')
-          .insert({
-            produto_id: item.produto_id,
-            tipo: 'cancelamento',
-            quantidade: item.quantidade,
-            quantidade_anterior: qtdAnterior,
-            quantidade_nova: qtdNova,
-            motivo: 'Pedido cancelado',
-            usuario_id: usuarioId,
-            pedido_id: pedidoId,
-          })
-      }
-    }
-
-    // 3. Atualizar status do pedido
-    const { error: updateError } = await supabaseAdmin
-      .from('pedidos')
-      .update({ status: 'cancelado' })
-      .eq('id', pedidoId)
-
-    if (updateError) {
-      return { success: false, error: `ERRO_CANCELAMENTO: ${updateError.message}` }
-    }
+    const { error } = await supabase.rpc('cancelar_pedido_estoque', {
+      p_pedido_id: pedidoId,
+      p_correlation_id: correlationId,
+    }).single()
+    if (error) return { success: false, error: mapearErroEstoquePedido(error) }
 
     return { success: true, message: 'Pedido cancelado e estoque restaurado.' }
   } catch (error: any) {
