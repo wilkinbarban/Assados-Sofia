@@ -184,22 +184,24 @@ export default function WhatsAppCard({
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaving(true)
+    const entries = provedorAtivo === 'meta'
+      ? [
+          ['WHATSAPP_ACCESS_TOKEN', accessToken],
+          ['WHATSAPP_PHONE_NUMBER_ID', phoneNumberId],
+          ['WHATSAPP_APP_SECRET', appSecret],
+          ['WHATSAPP_VERIFY_TOKEN', verifyToken],
+        ] as const
+      : [
+          ['EVOLUTION_API_URL', apiUrl],
+          ['EVOLUTION_API_KEY', apiKey],
+          ['EVOLUTION_INSTANCE_NAME', instanceName],
+        ] as const
     try {
-      const results = await Promise.all([
-        salvarConfiguracaoAdmin('WHATSAPP_ACCESS_TOKEN', accessToken),
-        salvarConfiguracaoAdmin('WHATSAPP_PHONE_NUMBER_ID', phoneNumberId),
-        salvarConfiguracaoAdmin('WHATSAPP_APP_SECRET', appSecret),
-        salvarConfiguracaoAdmin('WHATSAPP_VERIFY_TOKEN', verifyToken),
-        salvarConfiguracaoAdmin('EVOLUTION_API_URL', apiUrl),
-        salvarConfiguracaoAdmin('EVOLUTION_API_KEY', apiKey),
-        salvarConfiguracaoAdmin('EVOLUTION_INSTANCE_NAME', instanceName)
-      ])
-
-      const failed = results.filter(r => !r.success)
-      if (failed.length > 0) {
-        showToast('error', 'Falha ao salvar as configurações do WhatsApp.')
+      const results = await Promise.all(entries.map(([key, value]) => salvarConfiguracaoAdmin(key, value)))
+      if (results.some(result => !result.success)) {
+        showToast('error', `Falha ao salvar a configuração da ${provedorAtivo === 'meta' ? 'Meta' : 'Evolution'}.`)
       } else {
-        showToast('success', 'Configurações do WhatsApp salvas com sucesso!')
+        showToast('success', `Configuração da ${provedorAtivo === 'meta' ? 'Meta' : 'Evolution'} salva com sucesso!`)
       }
     } catch (err) {
       console.error(err)
@@ -230,9 +232,11 @@ export default function WhatsAppCard({
           <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Canal de Envio Ativo</h4>
           <p className="text-xs text-zinc-500 mt-0.5">Selecione qual infraestrutura de WhatsApp deve ser usada pelo sistema.</p>
         </div>
-        <div className="flex items-center bg-zinc-900 p-1.5 rounded-lg border border-zinc-800 shrink-0 select-none">
+        <div role="radiogroup" aria-label="Provedor ativo do WhatsApp" className="flex items-center bg-zinc-900 p-1.5 rounded-lg border border-zinc-800 shrink-0 select-none">
           <button
             type="button"
+            role="radio"
+            aria-checked={isMetaActive}
             onClick={() => handleToggleProvider('meta')}
             className={`px-3 py-1.5 rounded text-xs font-semibold transition-all cursor-pointer ${
               isMetaActive ? 'bg-amber-500 text-zinc-950 shadow' : 'text-zinc-400 hover:text-zinc-200'
@@ -242,6 +246,8 @@ export default function WhatsAppCard({
           </button>
           <button
             type="button"
+            role="radio"
+            aria-checked={isEvolutionActive}
             onClick={() => handleToggleProvider('evolution')}
             className={`px-3 py-1.5 rounded text-xs font-semibold transition-all cursor-pointer ${
               isEvolutionActive ? 'bg-amber-500 text-zinc-950 shadow' : 'text-zinc-400 hover:text-zinc-200'
@@ -253,32 +259,30 @@ export default function WhatsAppCard({
       </div>
 
       <div className="space-y-8">
-        {/* SECTION 1: META CLOUD API */}
-        <div className={`space-y-4 transition-all duration-305 ${!isMetaActive ? 'filter grayscale opacity-60 pointer-events-none' : ''}`}>
+        {isMetaActive && <section className="space-y-4" aria-labelledby="meta-config-title">
           <div className="flex items-center gap-2 border-b border-zinc-800/50 pb-2">
             <span className={`h-2 w-2 rounded-full ${isMetaActive ? 'bg-amber-500 animate-pulse' : 'bg-zinc-600'}`} />
-            <h4 className="text-sm font-bold text-zinc-300">Opção 1: Meta Cloud API (Canal Oficial)</h4>
+            <h4 id="meta-config-title" className="text-sm font-bold text-zinc-300">Configuração da Meta Cloud API</h4>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2 md:col-span-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <label htmlFor="meta-access-token" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
                 <Key className="h-3 w-3 text-zinc-500" />
-                WHATSAPP_ACCESS_TOKEN
+                Token de acesso da Meta
               </label>
               <div className="relative">
                 <input
+                  id="meta-access-token"
                   type={showAccessToken ? 'text' : 'password'}
                   placeholder="EAA..."
                   value={accessToken}
                   onChange={(e) => setAccessToken(e.target.value)}
-                  disabled={!isMetaActive}
                   className="w-full pl-4 pr-10 py-2 bg-zinc-900/40 border border-zinc-850 focus:border-amber-500/80 rounded-xl text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all focus:ring-1 focus:ring-amber-500/30 disabled:cursor-not-allowed"
                 />
                 <button
                   type="button"
                   onClick={() => setShowAccessToken(!showAccessToken)}
-                  disabled={!isMetaActive}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-50"
                 >
                   {showAccessToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -287,38 +291,37 @@ export default function WhatsAppCard({
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <label htmlFor="meta-phone-number-id" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
                 <Server className="h-3 w-3 text-zinc-500" />
-                WHATSAPP_PHONE_NUMBER_ID
+                ID do número de telefone
               </label>
               <input
+                  id="meta-phone-number-id"
                 type="text"
                 placeholder="Ex: 1092837465"
                 value={phoneNumberId}
                 onChange={(e) => setPhoneNumberId(e.target.value)}
-                disabled={!isMetaActive}
                 className="w-full px-4 py-2 bg-zinc-900/40 border border-zinc-850 focus:border-amber-500/80 rounded-xl text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all focus:ring-1 focus:ring-amber-500/30 disabled:cursor-not-allowed"
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <label htmlFor="meta-app-secret" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
                 <Key className="h-3 w-3 text-zinc-500" />
-                WHATSAPP_APP_SECRET
+                Segredo do aplicativo Meta
               </label>
               <div className="relative">
                 <input
+                  id="meta-app-secret"
                   type={showAppSecret ? 'text' : 'password'}
                   placeholder="Chave secreta do app Meta"
                   value={appSecret}
                   onChange={(e) => setAppSecret(e.target.value)}
-                  disabled={!isMetaActive}
                   className="w-full pl-4 pr-10 py-2 bg-zinc-900/40 border border-zinc-850 focus:border-amber-500/80 rounded-xl text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all focus:ring-1 focus:ring-amber-500/30 disabled:cursor-not-allowed"
                 />
                 <button
                   type="button"
                   onClick={() => setShowAppSecret(!showAppSecret)}
-                  disabled={!isMetaActive}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-50"
                 >
                   {showAppSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -327,23 +330,22 @@ export default function WhatsAppCard({
             </div>
 
             <div className="space-y-2 md:col-span-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <label htmlFor="meta-verify-token" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
                 <Key className="h-3 w-3 text-zinc-500" />
-                WHATSAPP_VERIFY_TOKEN
+                Token de verificação do webhook
               </label>
               <div className="relative">
                 <input
+                  id="meta-verify-token"
                   type={showVerifyToken ? 'text' : 'password'}
                   placeholder="Token de verificação do Webhook"
                   value={verifyToken}
                   onChange={(e) => setVerifyToken(e.target.value)}
-                  disabled={!isMetaActive}
                   className="w-full pl-4 pr-10 py-2 bg-zinc-900/40 border border-zinc-850 focus:border-amber-500/80 rounded-xl text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all focus:ring-1 focus:ring-amber-500/30 disabled:cursor-not-allowed"
                 />
                 <button
                   type="button"
                   onClick={() => setShowVerifyToken(!showVerifyToken)}
-                  disabled={!isMetaActive}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-50"
                 >
                   {showVerifyToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -356,7 +358,7 @@ export default function WhatsAppCard({
               <button
                 type="button"
                 onClick={handleTestMeta}
-                disabled={testingMeta || !isMetaActive}
+                disabled={testingMeta}
                 className="flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-850 text-amber-500 hover:text-amber-400 font-semibold text-xs border border-zinc-800 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {testingMeta ? <Loader2 className="h-3 w-3 animate-spin" /> : <Server className="h-3 w-3" />}
@@ -371,49 +373,47 @@ export default function WhatsAppCard({
               )}
             </div>
           </div>
-        </div>
+        </section>}
 
-        {/* SECTION 2: EVOLUTION API */}
-        <div className={`space-y-4 transition-all duration-300 ${!isEvolutionActive ? 'filter grayscale opacity-60 pointer-events-none' : ''}`}>
+        {isEvolutionActive && <section className="space-y-4" aria-labelledby="evolution-config-title">
           <div className="flex items-center gap-2 border-b border-zinc-800/50 pb-2">
             <span className={`h-2 w-2 rounded-full ${isEvolutionActive ? 'bg-amber-500 animate-pulse' : 'bg-zinc-600'}`} />
-            <h4 className="text-sm font-bold text-zinc-300">Opção 2: Evolution API (WhatsApp Web Alternativo)</h4>
+            <h4 id="evolution-config-title" className="text-sm font-bold text-zinc-300">Configuração da Evolution API</h4>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2 md:col-span-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <label htmlFor="evolution-api-url" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
                 <Server className="h-3 w-3 text-zinc-500" />
-                URL DO EVOLUTION API
+                URL da Evolution API
               </label>
               <input
+                  id="evolution-api-url"
                 type="text"
                 placeholder="Ex: http://localhost:8080 ou https://sua-api.com/evolution"
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
-                disabled={!isEvolutionActive}
                 className="w-full px-4 py-2 bg-zinc-900/40 border border-zinc-850 focus:border-amber-500/80 rounded-xl text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all focus:ring-1 focus:ring-amber-500/30 disabled:cursor-not-allowed"
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <label htmlFor="evolution-api-key" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
                 <Key className="h-3 w-3 text-zinc-500" />
-                CHAVE GLOBAL DE API (API KEY)
+                Chave da Evolution API
               </label>
               <div className="relative">
                 <input
+                  id="evolution-api-key"
                   type={showApiKey ? 'text' : 'password'}
                   placeholder="Chave global configurada na Evolution API"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  disabled={!isEvolutionActive}
                   className="w-full pl-4 pr-10 py-2 bg-zinc-900/40 border border-zinc-850 focus:border-amber-500/80 rounded-xl text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all focus:ring-1 focus:ring-amber-500/30 disabled:cursor-not-allowed"
                 />
                 <button
                   type="button"
                   onClick={() => setShowApiKey(!showApiKey)}
-                  disabled={!isEvolutionActive}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-50"
                 >
                   {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -422,16 +422,16 @@ export default function WhatsAppCard({
             </div>
 
             <div className="space-y-2">
-              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+              <label htmlFor="evolution-instance-name" className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
                 <Server className="h-3 w-3 text-zinc-500" />
-                NOME DA INSTÂNCIA (INSTANCE NAME)
+                Nome da instância
               </label>
               <input
+                  id="evolution-instance-name"
                 type="text"
                 placeholder="Ex: asados-instance"
                 value={instanceName}
                 onChange={(e) => setInstanceName(e.target.value)}
-                disabled={!isEvolutionActive}
                 className="w-full px-4 py-2 bg-zinc-900/40 border border-zinc-855 focus:border-amber-500/80 rounded-xl text-xs text-zinc-200 placeholder-zinc-700 outline-none transition-all focus:ring-1 focus:ring-amber-500/30 disabled:cursor-not-allowed"
               />
             </div>
@@ -442,7 +442,7 @@ export default function WhatsAppCard({
                 <button
                   type="button"
                   onClick={handleTestEvolution}
-                  disabled={testingEvolution || generatingQr || !isEvolutionActive}
+                  disabled={testingEvolution || generatingQr}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-850 text-amber-500 hover:text-amber-400 font-semibold text-xs border border-zinc-800 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {testingEvolution ? <Loader2 className="h-3 w-3 animate-spin" /> : <Server className="h-3 w-3" />}
@@ -451,7 +451,7 @@ export default function WhatsAppCard({
                 <button
                   type="button"
                   onClick={handleGetQrCode}
-                  disabled={generatingQr || testingEvolution || !isEvolutionActive}
+                  disabled={generatingQr || testingEvolution}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg bg-zinc-900 hover:bg-zinc-850 text-zinc-300 hover:text-zinc-200 font-semibold text-xs border border-zinc-800 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {generatingQr ? <Loader2 className="h-3 w-3 animate-spin" /> : <QrCode className="h-3 w-3" />}
@@ -488,7 +488,7 @@ export default function WhatsAppCard({
               )}
             </div>
           </div>
-        </div>
+        </section>}
       </div>
 
       {/* Save configurations button */}
@@ -504,7 +504,7 @@ export default function WhatsAppCard({
               Salvando...
             </>
           ) : (
-            'Salvar Configurações do WhatsApp'
+            provedorAtivo === 'meta' ? 'Salvar configuração da Meta' : 'Salvar configuração da Evolution'
           )}
         </button>
       </div>

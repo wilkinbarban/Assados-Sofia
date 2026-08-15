@@ -141,15 +141,6 @@ export default function AdminDashboard({
   const [logSearchQuery, setLogSearchQuery] = useState('')
   const [logLevelFilter, setLogLevelFilter] = useState<'all' | 'info' | 'warning' | 'error'>('all')
 
-  // States para Reordenação de Integrações
-  const [integracoesOrdem, setIntegracoesOrdem] = useState<string[]>([
-    'whatsapp',
-    'telegram',
-    'llm',
-    'calendar',
-    'mercadopago'
-  ])
-  const [draggedCardIndex, setDraggedCardIndex] = useState<number | null>(null)
   // Modal de confirmação
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean
@@ -493,26 +484,6 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
     }
   }
 
-  const handleCardDragStart = (e: React.DragEvent, index: number) => {
-    setDraggedCardIndex(index)
-    e.dataTransfer.effectAllowed = 'move'
-  }
-
-  const handleCardDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault()
-  }
-
-  const handleCardDrop = (e: React.DragEvent, index: number) => {
-    e.preventDefault()
-    if (draggedCardIndex === null || draggedCardIndex === index) return
-
-    const newOrdem = [...integracoesOrdem]
-    const [draggedItem] = newOrdem.splice(draggedCardIndex, 1)
-    newOrdem.splice(index, 0, draggedItem)
-    setIntegracoesOrdem(newOrdem)
-    setDraggedCardIndex(null)
-    showToast('success', 'Layout de integrações reordenado!')
-  }
 
   function getLogLevel(acao: string, detalhes: any): 'info' | 'warning' | 'error' {
     const hasError = detalhes && (
@@ -1008,57 +979,25 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
             <div>
               <h2 className="text-2xl font-bold text-zinc-100 tracking-tight">Integrações do Sistema</h2>
               <p className="text-sm text-zinc-400 mt-1">
-                Monitore e gerencie as integrações externas como o Google Calendar, WhatsApp API, Telegram Bot, OpenRouter e Mercado Pago. Arraste e solte os cartões para reorganizar a visualização.
+                Configure cada serviço em uma posição fixa. As opções permanecem organizadas e não podem ser reordenadas.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
-              {integracoesOrdem.map((item, index) => {
-                const isWhatsapp = item === 'whatsapp'
-                return (
-                  <div
-                    key={item}
-                    draggable
-                    onDragStart={(e) => handleCardDragStart(e, index)}
-                    onDragOver={(e) => handleCardDragOver(e, index)}
-                    onDrop={(e) => handleCardDrop(e, index)}
-                    className={`transition-all duration-300 cursor-grab active:cursor-grabbing hover:scale-[1.01] ${
-                      isWhatsapp ? 'col-span-1 lg:col-span-3' : 'col-span-1'
-                    } ${draggedCardIndex === index ? 'opacity-40 border border-dashed border-amber-500/50 rounded-2xl' : ''}`}
-                  >
-                    {item === 'whatsapp' && (
-                      <WhatsAppCard 
-                        initialConfigs={systemConfigs} 
-                        showToast={showToast} 
-                        provedorAtivo={provedorAtivo}
-                        onProvedorChange={setProvedorAtivo}
-                      />
-                    )}
-                    {item === 'telegram' && (
-                      <TelegramBotCard
-                        initialConfigs={systemConfigs}
-                        showToast={showToast}
-                      />
-                    )}
-                    {item === 'llm' && (
-                      <LlmApiCard initialConfigs={systemConfigs} showToast={showToast} />
-                    )}
-                    {item === 'calendar' && (
-                      <GoogleCalendarCard 
-                        initialConfigs={systemConfigs} 
-                        showToast={showToast}
-                        calendarConfig={calendarConfig}
-                      />
-                    )}
-                    {item === 'mercadopago' && (
-                      <MercadoPagoCard 
-                        initialConfigs={systemConfigs} 
-                        showToast={showToast} 
-                      />
-                    )}
-                  </div>
-                )
-              })}
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 items-start" aria-label="Opções de integração">
+              <article aria-label="WhatsApp" className="lg:col-span-2">
+                <WhatsAppCard
+                  initialConfigs={systemConfigs}
+                  showToast={showToast}
+                  provedorAtivo={provedorAtivo}
+                  onProvedorChange={setProvedorAtivo}
+                />
+              </article>
+              <article aria-label="Telegram"><TelegramBotCard initialConfigs={systemConfigs} showToast={showToast} /></article>
+              <article aria-label="OpenRouter"><LlmApiCard initialConfigs={systemConfigs} showToast={showToast} /></article>
+              <article aria-label="Google Calendar">
+                <GoogleCalendarCard initialConfigs={systemConfigs} showToast={showToast} calendarConfig={calendarConfig} />
+              </article>
+              <article aria-label="Mercado Pago"><MercadoPagoCard initialConfigs={systemConfigs} showToast={showToast} /></article>
             </div>
           </div>
         )}
