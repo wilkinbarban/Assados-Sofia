@@ -1,11 +1,11 @@
 {
-  "name": "next-temp",
+  "name": "asados-monorepo",
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "npm run dev --workspace @asados/web",
+    "build": "npm run build --workspace @asados/web",
+    "start": "npm run start --workspace @asados/web",
     "lint": "eslint",
     "lin": "npm run lint",
     "test": "vitest run",
@@ -14,18 +14,6 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "test:all": "npm run test:unit && npm run test:e2e"
-  },
-  "dependencies": {
-    "@supabase/ssr": "^0.12.0",
-    "@supabase/supabase-js": "^2.110.0",
-    "googleapis": "^173.0.0",
-    "lucide-react": "^1.23.0",
-    "mammoth": "^1.12.0",
-    "next": "16.2.10",
-    "pdf-parse": "^2.4.5",
-    "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
@@ -50,5 +38,9 @@
   "allowScripts": {
     "sharp": true,
     "unrs-resolver": true
-  }
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
 }

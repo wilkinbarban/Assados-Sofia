@@ -16,12 +16,16 @@ const eslintConfig = defineConfig([
       // migrated codebase. Keep runtime-safe hook rules active.
       "react-hooks/set-state-in-effect": "off",
       "react-hooks/purity": "off",
+      // This is an App Router project; the Pages Router path lookup is not
+      // applicable when ESLint runs from the monorepo root.
+      "@next/next/no-html-link-for-pages": "off",
     },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([
     // Default ignores of eslint-config-next:
     ".next/**",
+    "apps/*/.next/**",
     "out/**",
     "build/**",
     "next-env.d.ts",
