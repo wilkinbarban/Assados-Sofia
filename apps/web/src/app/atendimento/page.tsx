@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import OperatorInboxContainer from '@/components/operator/OperatorInboxContainer'
+import { OperatorLogoutButton } from '@/components/operator/OperatorLogoutButton'
 import { obterStatusSofiaAtendimento } from '@/app/actions/atendimento'
 import type { SofiaAtendimentoStatus } from '@/app/actions/atendimento'
 import type { Cliente, Conversa, Mensagem } from '@/components/operator/ConversationsQueue'
@@ -148,6 +149,8 @@ export default async function AtendimentoPage() {
           >
             Meu Perfil
           </Link>
+
+          <OperatorLogoutButton />
 
           <div className="flex items-center gap-2">
             <span className="relative flex h-2 w-2">
