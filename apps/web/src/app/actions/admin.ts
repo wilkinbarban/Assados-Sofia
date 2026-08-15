@@ -3,6 +3,10 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { google } from 'googleapis'
+import {
+  getEvolutionConnectionState,
+  getEvolutionQrCode,
+} from '@/lib/whatsapp/evolution-admin-client'
 import { revalidatePath } from 'next/cache'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 
@@ -832,23 +836,11 @@ export async function testarConexaoEvolution(apiUrl: string, apiKey: string, ins
       return { success: false, error: 'URL, API Key e Nome da Instância são obrigatórios.' }
     }
 
-    const cleanUrl = apiUrl.replace(/\/$/, '')
-    const url = `${cleanUrl}/instance/connectionState/${instanceName}`
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'apikey': apiKey,
-        'Content-Type': 'application/json'
-      }
-    })
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '')
-      throw new Error(`HTTP ${response.status} - ${errText || response.statusText}`)
-    }
-
-    const data = await response.json()
-    const isConnected = data.instance?.state === 'open' || data.instance?.connected === true
+    const publicOrigin = process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org'
+    const { connected: isConnected, state, data } = await getEvolutionConnectionState(
+      { apiUrl, apiKey, instanceName },
+      publicOrigin,
+    )
 
     // Log de auditoria
     const adminSupabase = createAdminClient()
@@ -857,7 +849,7 @@ export async function testarConexaoEvolution(apiUrl: string, apiKey: string, ins
       acao: 'teste_evolution',
       detalhes: {
         instance_name: instanceName,
-        state: data.instance?.state || 'unknown',
+        state,
         connected: isConnected
       }
     })
@@ -884,27 +876,11 @@ export async function obterQrCodeEvolution(apiUrl: string, apiKey: string, insta
       return { success: false, error: 'URL, API Key e Nome da Instância são obrigatórios.' }
     }
 
-    const cleanUrl = apiUrl.replace(/\/$/, '')
-    const url = `${cleanUrl}/instance/connect/${instanceName}`
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'apikey': apiKey,
-        'Content-Type': 'application/json'
-      }
-    })
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '')
-      throw new Error(`HTTP ${response.status} - ${errText || response.statusText}`)
-    }
-
-    const data = await response.json()
-    const qrcode = data.base64 || data.qrcode?.base64 || data.code || data.qrcode?.code
-
-    if (!qrcode) {
-      throw new Error('Nenhum QR Code retornado pela Evolution API. A instância já pode estar conectada.')
-    }
+    const publicOrigin = process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org'
+    const { qrcode } = await getEvolutionQrCode(
+      { apiUrl, apiKey, instanceName },
+      publicOrigin,
+    )
 
     // Log de auditoria
     const adminSupabase = createAdminClient()
