@@ -1,5 +1,7 @@
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
+import { allowsIntegrationMock } from '@/lib/runtime/environment'
 import { ProvedorWhatsApp, EnviarMensagemPayload, ResultadoEnvio, obterProvedorAtivo, validarJanelaEnvio, inferirTipoMidia } from './provider'
+import { validarEnvioWhatsAppSafety } from './safety'
 
 export type { EnviarMensagemPayload }
 
@@ -32,6 +34,35 @@ export async function enviarMensagemMeta(
 ): Promise<ResultadoEnvio> {
   const { telefone, supabase } = await validarJanelaEnvio(conversaId, payload)
 
+  // Safety Gate: Validar permissão prévia do envio
+  const { data: conversa } = await supabase
+    .from('conversas')
+    .select('id, cliente_id')
+    .eq('id', conversaId)
+    .single()
+
+  if (conversa?.cliente_id) {
+    const safety = await validarEnvioWhatsAppSafety({
+      supabase,
+      clienteId: conversa.cliente_id,
+      conversaId,
+      texto: payload.texto,
+      categoria: payload.categoria || 'REACTIVE',
+      origem: payload.remetente || 'ia',
+    })
+
+    if (!safety.permitido) {
+      console.warn(`[Meta Send Safety Gate] Envio bloqueado: ${safety.motivo} (cliente: ${conversa.cliente_id})`)
+      return {
+        sucesso: false,
+        whatsappMensagemId: null,
+        safetyBlocked: true,
+        motivo: safety.motivo,
+        error: `Bloqueado pelo Safety Gate: ${safety.motivo}`,
+      }
+    }
+  }
+
   let whatsappMensagemId = ''
 
   const token = await obterConfiguracaoSistema('WHATSAPP_ACCESS_TOKEN')
@@ -39,6 +70,14 @@ export async function enviarMensagemMeta(
   const mockMode = isMockMode(token, phoneId)
 
   if (mockMode) {
+    if (!allowsIntegrationMock()) {
+      return {
+        sucesso: false,
+        whatsappMensagemId: null,
+        error: 'WhatsApp Cloud API não configurada para este ambiente.',
+      }
+    }
+
     // Modo Mock: Simular a chamada da Meta Cloud API
     const mockIdSuffix = Math.random().toString(36).substring(2).toUpperCase()
     whatsappMensagemId = `wamid.HBgMNDUxOTk5OTk5OTk5FQIAERg${mockIdSuffix}`
@@ -162,3 +201,66 @@ export async function enviarMensagemWhatsapp(
   const provedor = await obterProvedorAtivo()
   return provedor.enviarMensagem(conversaId, payload)
 }
+
+/**
+ * Envia um código OTP diretamente para um número de telefone de destino via Meta Cloud API
+ * Não exige conversaId prévia nem vinculação de janela de atendimento.
+ */
+export async function sendOtpMeta(
+  destination: string,
+  code: string
+): Promise<{ sucesso: boolean; whatsappMensagemId?: string | null; error?: string }> {
+  try {
+    const token = await obterConfiguracaoSistema('WHATSAPP_ACCESS_TOKEN')
+    const phoneId = await obterConfiguracaoSistema('WHATSAPP_PHONE_NUMBER_ID')
+    const mockMode = isMockMode(token, phoneId)
+
+    if (mockMode) {
+      if (!allowsIntegrationMock()) {
+        return {
+          sucesso: false,
+          whatsappMensagemId: null,
+          error: 'WhatsApp Cloud API não configurada para este ambiente.',
+        }
+      }
+      const mockId = `wamid.HBgM${Date.now()}${Math.random().toString(36).substring(2, 7)}`
+      return { sucesso: true, whatsappMensagemId: mockId }
+    }
+
+    const url = `https://graph.facebook.com/v18.0/${phoneId}/messages`
+    const bodyData = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: destination,
+      type: 'text',
+      text: {
+        preview_url: false,
+        body: `🔐 Código de Verificação — Asados\n\nSeu código é: ${code}\n\n⏳ Válido por 10 minutos.`
+      }
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(bodyData),
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      return {
+        sucesso: false,
+        error: `Erro na API da Meta (${response.statusText}): ${JSON.stringify(errorData)}`
+      }
+    }
+
+    const responseData = await response.json()
+    const msgId = responseData.messages?.[0]?.id || `wamid.${Date.now()}`
+    return { sucesso: true, whatsappMensagemId: msgId }
+  } catch (err: any) {
+    return { sucesso: false, error: err.message || 'Erro inesperado na API da Meta' }
+  }
+}
+

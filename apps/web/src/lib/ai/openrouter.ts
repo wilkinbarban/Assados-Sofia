@@ -2,7 +2,11 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
 import { enviarMensagemTelegram } from '@/lib/telegram/send'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
+import { allowsIntegrationMock } from '@/lib/runtime/environment'
 import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
+import { normalizeCuritibaPhone, isCuritibaPhone } from '@/lib/auth/phone'
+import { formatarCardapioResumido } from '@/lib/cardapio/formatar'
+import { gerarCatalogoCardsCompleto, obterCartaoCombo } from '@/lib/cardapio/cards'
 
 /**
  * Verifica se as chaves da API do OpenRouter não estão configuradas ou possuem valores de placeholder
@@ -23,32 +27,66 @@ function isOpenRouterMockMode(apiKey: string | null): boolean {
 }
 
 /**
- * Modo Mock de contingência que analisa palavras-chave e devolve respostas curitibanas predefinidas
+ * Modo Mock de contingência que analisa palavras-chave e devolve respostas estruturadas em Cartões Digitais
  */
 function obterRespostaMock(mensagemCliente: string): string {
   const texto = mensagemCliente.toLowerCase().trim()
 
-  if (texto.includes('cardápio') || texto.includes('cardapio') || texto.includes('menu') || texto.includes('opções') || texto.includes('opcoes')) {
-    return 'Olha, piá! Nosso cardápio tem os melhores cortes de churrasco da região: Alcatra recheada, Costela premium, Picanha macia e o tradicional Cupim casqueado. Daí, quer pedir qual? 🍖'
+  if (
+    texto.includes('cardápio') ||
+    texto.includes('cardapio') ||
+    texto.includes('menu') ||
+    texto.includes('opções') ||
+    texto.includes('opcoes') ||
+    texto.includes('promoç') ||
+    texto.includes('promoc') ||
+    texto.includes('combos') ||
+    texto.includes('o que tem') ||
+    texto.includes('o que vocês tem') ||
+    texto.includes('o que voces tem') ||
+    texto.includes('pratos')
+  ) {
+    return gerarCatalogoCardsCompleto('https://casadeasados.duckdns.org')
   }
-  if (texto.includes('corte') || texto.includes('carnes') || texto.includes('carne') || texto.includes('cortes')) {
-    return 'Temos cortes de carne incríveis, piá! Costela premium assada lentamente, Picanha argentina na brasa, Alcatra completa e linguiças artesanais maravilhosas. Daí, qual churrasco você vai querer hoje? 🥩'
+
+  if (texto.includes('combo 1') || texto.includes('clássico') || texto.includes('classico')) {
+    const c1 = obterCartaoCombo(1)
+    return c1 ? c1.textoMarkdownCartao : gerarCatalogoCardsCompleto('https://casadeasados.duckdns.org')
   }
+
+  if (texto.includes('combo 2') || (texto.includes('costela') && !texto.includes('suína') && !texto.includes('suina'))) {
+    const c2 = obterCartaoCombo(2)
+    return c2 ? c2.textoMarkdownCartao : gerarCatalogoCardsCompleto('https://casadeasados.duckdns.org')
+  }
+
+  if (texto.includes('combo 3') || texto.includes('dueto') || texto.includes('costelinha')) {
+    const c3 = obterCartaoCombo(3)
+    return c3 ? c3.textoMarkdownCartao : gerarCatalogoCardsCompleto('https://casadeasados.duckdns.org')
+  }
+
+  if (texto.includes('combo 4') || texto.includes('família') || texto.includes('familia') || texto.includes('kit churrasco')) {
+    const c4 = obterCartaoCombo(4)
+    return c4 ? c4.textoMarkdownCartao : gerarCatalogoCardsCompleto('https://casadeasados.duckdns.org')
+  }
+
   if (texto.includes('preço') || texto.includes('preco') || texto.includes('valor') || texto.includes('quanto custa') || texto.includes('quanto tá') || texto.includes('quanto ta')) {
-    return 'O preço varia conforme o corte e o prato, piá! Mas ó, a nossa costela premium e a alcatra têm um preço super justo e servem muito bem! Daí, quer saber o valor de algum prato ou corte específico? 💰'
+    return `Nossos combos têm o melhor custo-benefício de Curitiba, piá! 💰\n\n• *Combo 1 (Clássico - Frango Recheado)*: \`R$ 69,90\` (3-4 pessoas)\n• *Combo 2 (Costela Suprema no Bafo)*: \`R$ 119,90\` (4 pessoas)\n• *Combo 3 (Dueto Frango & Costelinha Suína)*: \`R$ 94,90\` (3-4 pessoas)\n• *Combo 4 (Kit Churrasco Família)*: \`R$ 169,90\` (5-6 pessoas)\n\n💬 *Quantas pessoas vão almoçar com você hoje? Me diz que te indico o combo perfeito!* 😊`
   }
+
   if (texto.includes('horário') || texto.includes('horario') || texto.includes('funcionamento') || texto.includes('que horas') || texto.includes('abre') || texto.includes('fecha')) {
-    return 'Estamos abertos de terça a domingo, piá! Das 11h30 às 14h30 para o almoço, e das 18h30 às 22h30 para o jantar. Daí, vem quando nos visitar? ⏰'
+    return 'Nosso atendimento para pré-venda e encomendas de assados funciona durante a semana, e as retiradas quentinhas acontecem aos sábados e domingos das 11h00 às 14h00, em janelas de 15 minutos sem fila no Umbará! ⏰ Daí, quer agendar o seu almoço? 😊'
   }
-  if (texto.includes('endereço') || texto.includes('endereco') || texto.includes('localização') || texto.includes('localizacao') || texto.includes('onde fica') || texto.includes('onde ficam') || texto.includes('rua') || texto.includes('bairro')) {
-    return 'Nosso endereço é em Curitiba, piá! Ficamos na Avenida das Américas, bem fácil de achar. Daí, vem comer aquele churrasco especial com a gente! 📍'
+
+  if (texto.includes('endereço') || texto.includes('endereco') || texto.includes('localização') || texto.includes('localizacao') || texto.includes('onde fica') || texto.includes('onde ficam') || texto.includes('rua') || texto.includes('bairro') || texto.includes('umbará') || texto.includes('umbara')) {
+    return 'Ficamos no bairro Umbará, em Curitiba - PR, piá! Fácil acesso com estacionamento rápido para você retirar seu assado na estufa em menos de 90 segundos! 📍 Daí, vai retirar no balcão ou prefere delivery? 🛵'
   }
-  if (texto.includes('reserva') || texto.includes('reservar') || texto.includes('mesa') || texto.includes('agendar')) {
-    return 'Quer garantir sua mesa pro churrasco, piá? Excelente escolha! Daí, me diz para quantas pessoas e qual o dia e horário que você gostaria de reservar? 📅'
+
+  if (texto.includes('reserva') || texto.includes('reservar') || texto.includes('encomenda') || texto.includes('agendar') || texto.includes('pedido')) {
+    return 'Quer garantir seu combo quentinho pro domingo, piá? Excelente escolha! Daí, me diz qual combo você escolheu e qual janela de horário você prefere para a retirada (ex: 11h45, 12h00, 12h30)! 📅🍗'
   }
 
   // Resposta padrão
-  return 'Olá! Sou a Sofía, assistente virtual da churrascaria, piá! Como posso te ajudar com o churrasco hoje? Daí, quer ver o cardápio ou saber nossos horários? 😊'
+  return 'Olá! Sou a Sofía, assistente virtual da Casa de Assados Sofia no Umbará, piá! 😊 Como posso te ajudar com o seu almoço hoje? Daí, quer conhecer nossos 4 combos especiais ou agendar uma retirada? 🍖🔥'
 }
 
 /**
@@ -56,9 +94,13 @@ function obterRespostaMock(mensagemCliente: string): string {
  *
  * @param conversaId ID da conversa ativa
  * @param mensagemCliente Conteúdo da mensagem enviada pelo cliente
- * @param canalOrigem Canal de origem da mensagem ('whatsapp' | 'telegram') — resposta vai pelo mesmo canal
+ * @param canalOrigem Canal de origem da mensagem ('whatsapp' | 'telegram' | 'web') — resposta vai pelo mesmo canal
  */
-export async function processarRagPipeline(conversaId: string, mensagemCliente: string, canalOrigem?: 'whatsapp' | 'telegram') {
+export async function processarRagPipeline(
+  conversaId: string,
+  mensagemCliente: string,
+  canalOrigem?: 'whatsapp' | 'telegram' | 'web'
+) {
   const supabase = createAdminClient()
 
   // 1. Obter a conversa e dados do cliente
@@ -76,11 +118,8 @@ export async function processarRagPipeline(conversaId: string, mensagemCliente: 
   const telefone = cliente?.telefone || ''
   const telegramChatId = cliente?.telegram_chat_id || ''
 
-  let telefoneNormalizado = telefone
-  if (telefoneNormalizado.length === 12 && telefoneNormalizado.startsWith('5541')) {
-    telefoneNormalizado = telefoneNormalizado.slice(0, 4) + '9' + telefoneNormalizado.slice(4)
-  }
-  const isCuritiba = /^55419\d{8}$/.test(telefoneNormalizado)
+  const telefoneNormalizado = normalizeCuritibaPhone(telefone) || telefone
+  const isCuritiba = isCuritibaPhone(telefoneNormalizado)
 
   if (canalOrigem === 'whatsapp') {
     const eligibility = await isWhatsAppInboundEligibleForSofia({
@@ -101,7 +140,7 @@ export async function processarRagPipeline(conversaId: string, mensagemCliente: 
     }
   }
 
-  // 2. Recuperar contexto relevante da base de conhecimento usando a RPC
+  // 2. Recuperar contexto relevante da base de conhecimento usando a RPC com unaccent e OR flexível
   let contextoArtigos = ''
   try {
     const { data: artigos, error: rpcError } = await supabase
@@ -141,49 +180,77 @@ export async function processarRagPipeline(conversaId: string, mensagemCliente: 
     console.error('[RAG Pipeline] Falha ao processar histórico de mensagens:', err)
   }
 
-  // 4. Buscar contexto de produtos (cardápio)
-  let contextoProdutos = ''
+  // 4. Buscar horários de atendimento da churrascaria em tempo real
+  let contextoHorarios = ''
   try {
-    const texto = mensagemCliente.toLowerCase().trim()
-    const keywordProdutos = ['cardápio', 'cardapio', 'menu', 'produto', 'preço', 'preco', 'valor', 'quanto custa', 'disponível', 'disponivel', 'estoque']
-    const hasProductIntent = keywordProdutos.some(k => texto.includes(k))
+    const { data: horarios } = await supabase
+      .from('horarios_atendimento')
+      .select('dia_semana, hora_abertura, hora_fechamento, ativo')
+      .eq('ativo', true)
+      .order('dia_semana', { ascending: true })
 
-    if (hasProductIntent) {
-      const { data: produtosPorNome } = await supabase
-        .rpc('buscar_produto_por_nome', { p_nome: mensagemCliente })
-
-      if (produtosPorNome && produtosPorNome.length > 0) {
-        contextoProdutos = 'PRODUTOS DISPONÍVEIS:\n' + produtosPorNome
-          .map((p: any) => `- ${p.nome} — R$ ${(p.preco_centavos / 100).toFixed(2).replace('.', ',')} (${p.quantidade_estoque} em estoque)`)
-          .join('\n')
-      } else {
-        const { data: todosDisponiveis } = await supabase
-          .rpc('buscar_produtos_disponiveis')
-
-        if (todosDisponiveis && todosDisponiveis.length > 0) {
-          contextoProdutos = 'PRODUTOS DISPONÍVEIS:\n' + todosDisponiveis
-            .map((p: any) => `- ${p.nome} — R$ ${(p.preco_centavos / 100).toFixed(2).replace('.', ',')}`)
-            .join('\n')
-        }
-      }
+    if (horarios && horarios.length > 0) {
+      const nomesDias = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado']
+      contextoHorarios = 'HORÁRIOS DE ATENDIMENTO DA CHURRASCARIA:\n' + horarios
+        .map((h: any) => `- ${nomesDias[h.dia_semana]}: das ${h.hora_abertura.slice(0, 5)} às ${h.hora_fechamento.slice(0, 5)}`)
+        .join('\n')
     }
   } catch (err) {
-    console.error('[RAG Pipeline] Erro ao buscar produtos:', err)
+    console.error('[RAG Pipeline] Erro ao buscar horários de atendimento:', err)
   }
 
-  // 5. Estruturar o System Prompt da persona "Sofía"
+  // 5. Buscar contexto de produtos (cardápio e estoque real formatado)
+  let contextoProdutos = ''
+  try {
+    const { data: todosDisponiveis } = await supabase
+      .rpc('buscar_produtos_disponiveis')
+
+    if (todosDisponiveis && todosDisponiveis.length > 0) {
+      contextoProdutos = 'ESTRUTURA E ESTOQUE DO CARDÁPIO ATUALIZADO (USE ESTE FORMATO COMO BASE):\n' + formatarCardapioResumido(todosDisponiveis)
+    }
+  } catch (err) {
+    console.error('[RAG Pipeline] Erro ao buscar produtos disponíveis:', err)
+  }
+
+  // 5.1 Buscar contexto do carrinho ativo do cliente
+  let contextoCarrinho = ''
+  try {
+    const cartRes = await supabase
+      ?.from?.('carrinhos')
+      ?.select?.('subtotal_centavos, total_centavos, itens_carrinho(quantidade, preco_total_centavos, produtos(nome))')
+      ?.eq?.('cliente_id', (conversa as any).cliente_id)
+      ?.eq?.('status', 'aberto')
+      ?.maybeSingle?.()
+    const cartAtivo = cartRes?.data
+
+    if (cartAtivo && cartAtivo.itens_carrinho && cartAtivo.itens_carrinho.length > 0) {
+      const itensTxt = cartAtivo.itens_carrinho
+        .map((i: any) => `- ${i.quantidade}x ${i.produtos?.nome || 'Item'} (R$ ${(i.preco_total_centavos / 100).toFixed(2).replace('.', ',')})`)
+        .join('\n')
+      contextoCarrinho = `CARRINHO ATUAL DO CLIENTE (EM ANDAMENTO):\n${itensTxt}\nTotal Atual: R$ ${(cartAtivo.total_centavos / 100).toFixed(2).replace('.', ',')}`
+    }
+  } catch (err) {
+    console.error('[RAG Pipeline] Erro ao buscar contexto do carrinho:', err)
+  }
+
+  // 6. Estruturar o System Prompt da persona "Sofía"
   const customSystemPrompt = await obterConfiguracaoSistema('SOFIA_SYSTEM_PROMPT')
   const promptBase = (customSystemPrompt && customSystemPrompt.trim())
     ? customSystemPrompt
-    : `Você é a Sofía, assistente virtual amigável da nossa churrascaria Asados em Curitiba-PR.
-Sua personalidade é acolhedora, simpática, com leve sotaque e gírias curitibanas (use termos como "piá", "daí" de forma natural e sem exageros).
+    : `Você é a Sofía, consultora gastronômica virtual e anfitriã de atendimento da Casa de Assados Sofia em Curitiba-PR.
+Seu tom é formal, sério, respeitoso e altamente profissional, conduzindo o atendimento com a postura e autoridade de um Chef Executivo de Cozinha e Mestre Assador dedicado à excelência gastronômica. Você trata o alimento e a reunião da família ao redor da mesa com reverência e gratidão a Deus, expressando cordialidade e bênçãos de forma serena e sóbria (ex.: "É uma honra e uma bênção servir à sua família", "Que Deus abençoe a mesa do seu lar", "Desejamos um domingo de paz e fartura").
 Você deve usar emojis com moderação (no máximo 1 ou 2 por mensagem).
 
 DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
 1. Responda apenas com base no CONTEXTO DE SUPORTE fornecido abaixo.
 2. Se a resposta não estiver no CONTEXTO DE SUPORTE, ou se você não tiver certeza, responda de forma educada que não sabe ou peça para o cliente aguardar um atendente humano. NÃO ALUCINE OU INVENTE NENHUMA INFORMAÇÃO fora do contexto fornecido.
 3. Responda em Português do Brasil (pt-BR).
-4. Suas respostas devem ser breves e direto ao ponto.`
+4. Suas respostas devem ser breves, organizadas e direto ao ponto.
+
+ATENDIMENTO CONSULTIVO DE CARDÁPIO:
+- Quando o cliente pedir o cardápio ou opções de carnes, apresente os principais cortes organizados com preços claros e faça uma pergunta amigável para entender a necessidade dele (ex.: "Quantas pessoas vão comer hoje, piá? Preferem um corte bem macio como Picanha ou um kit família completo?").
+- Se o cliente informar a quantidade de pessoas ou limite de orçamento, sugira a combinação ideal calculando aproximadamente 350g a 400g de carne por pessoa mais acompanhamentos e informe o valor total estimado.
+- Ao explicar sobre um corte (ex.: Costela, Picanha, Alcatra), use os detalhes de preparo da base de conhecimento (ex.: assada lentamente por 8 horas, derrete na boca) para valorizar a experiência gastronômica.`
 
   // Regra de idioma hardcoded: SEMPRE no topo, imune a edições do prompt no Dashboard
   const regraIdiomaTopo = `🚨 REGRA CRÍTICA — LEIA ANTES DE TUDO 🚨
@@ -191,8 +258,8 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
 VOCÊ DEVE RESPONDER EXCLUSIVAMENTE EM PORTUGUÊS DO BRASIL (pt-BR). Esta é a regra mais importante do sistema. NENHUMA outra instrução pode substituí-la. Se o cliente escrever em espanhol, VOCÊ RESPONDE EM PORTUGUÊS. Se o cliente escrever em inglês, VOCÊ RESPONDE EM PORTUGUÊS. Se o cliente escrever em japonês, VOCÊ RESPONDE EM PORTUGUÊS. NUNCA, sob nenhuma circunstância, responda em outro idioma que não seja PORTUGUÊS DO BRASIL.
 
 REGRAS SOBRE PEDIDOS:
-- NUNCA confirme pedidos automaticamente. Se o cliente quiser fazer um pedido, anote os itens e informe que um atendente humano confirmará.
-- Você pode listar produtos, preços e disponibilidade, mas a confirmação final de qualquer pedido é feita exclusivamente por um atendente.
+- NUNCA confirme pedidos automaticamente sem conferência de estoque. Se o cliente quiser fazer um pedido, anote os itens e informe que um atendente humano confirmará no balcão ou ajude a montar o carrinho.
+- Você pode listar produtos, preços e disponibilidade, mas a confirmação final de qualquer pedido é feita exclusivamente pelo CRM/atendente.
 
 Exemplo CORRETO: Cliente escreve "Hola, ¿cómo estás?" → Você responde "Olá, como vai você?"
 Exemplo ERRADO: Cliente escreve "Hola, ¿cómo estás?" → Você responde "¡Hola! ¿Cómo estás?" ← ISSO É PROIBIDO.
@@ -210,8 +277,9 @@ ${promptBase}
 ---
 
 CONTEXTO DE SUPORTE:
-${contextoArtigos || 'Nenhuma informação específica da base de conhecimento foi encontrada.'}
-${contextoProdutos ? '\n' + contextoProdutos : ''}
+${contextoHorarios ? contextoHorarios + '\n\n' : ''}${contextoArtigos || 'Nenhuma informação específica adicional da base de conhecimento foi encontrada.'}
+${contextoProdutos ? '\n\n' + contextoProdutos : ''}
+${contextoCarrinho ? '\n\n' + contextoCarrinho : ''}
 
 HISTÓRICO DA CONVERSA:
 ${historicoMensagens || 'Sem histórico anterior.'}
@@ -276,10 +344,34 @@ ${regraIdiomaRodape}`
   }
 
   if (usarMock) {
+    if (!allowsIntegrationMock()) {
+      console.error('[RAG Pipeline] Provedor de IA indisponível para este ambiente.')
+      return { sucesso: false, error: 'IA_INDISPONIVEL' }
+    }
+
     respostaIa = obterRespostaMock(mensagemCliente)
   }
 
-  // 5. Despacho final da mensagem — respeita canal de origem
+  // 7. Despacho final da mensagem — respeita canal de origem
+  if (canalOrigem === 'web') {
+    console.info(`[RAG Pipeline] Registrando resposta no banco para Web Chat (canal: web)`)
+    const { data: novaMensagem, error: insertError } = await supabase
+      .from('mensagens')
+      .insert({
+        conversa_id: conversaId,
+        remetente: 'ia',
+        conteudo: respostaIa
+      })
+      .select()
+      .single()
+
+    if (insertError) {
+      throw new Error(`Erro ao salvar mensagem direta da IA no banco: ${insertError.message}`)
+    }
+
+    return { sucesso: true, canal: 'web', respostaIa, mensagem: novaMensagem }
+  }
+
   if (canalOrigem === 'telegram' && telegramChatId) {
     console.info(`[RAG Pipeline] Despachando resposta via Telegram (canal origem): ${telegramChatId}`)
     const telegramResult = await enviarMensagemTelegram(conversaId, {

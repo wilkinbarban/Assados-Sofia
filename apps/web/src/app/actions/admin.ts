@@ -98,89 +98,15 @@ export async function listarUsuariosAdmin() {
  */
 export async function atualizarPerfilUsuario(usuarioAlvoId: string, funcao: string, ativo: boolean) {
   try {
-    const check = await verificarPermissaoOperador()
-    if (!check.authorized || !check.user) {
-      return { success: false, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
-    }
-
-    const { user, supabase } = check
-    const callerId = user.id
-
-    // 1. Anti-Lockout: Não permite que o chamador atualize o próprio perfil
-    if (usuarioAlvoId === callerId) {
-      return { success: false, error: 'ANTI_LOCKOUT' }
-    }
-
-    // Validação de função permitida
     const funcoesValidas = ['admin', 'supervisor', 'vendedor', 'cliente']
     if (!funcoesValidas.includes(funcao)) {
       return { success: false, error: 'FUNCAO_INVALIDA' }
     }
-
-    // 2. Buscar perfil atual do usuário alvo
-    const { data: perfilAlvo, error: erroAlvo } = await supabase
-      .from('perfis')
-      .select('funcao, ativo')
-      .eq('id', usuarioAlvoId)
-      .single()
-
-    if (erroAlvo || !perfilAlvo) {
-      return { success: false, error: 'PERFIL_ALVO_NAO_ENCONTRADO' }
-    }
-
-    const eraAdminAtivo = perfilAlvo.funcao === 'admin' && perfilAlvo.ativo === true
-    const mudandoStatusOuFuncao = !ativo || funcao !== 'admin'
-
-    // 3. Admin Mínimo: Se era admin ativo e está deixando de ser admin ou ativo
-    if (eraAdminAtivo && mudandoStatusOuFuncao) {
-      // Conta quantos outros administradores ativos restam
-      const { count, error: countError } = await supabase
-        .from('perfis')
-        .select('*', { count: 'exact', head: true })
-        .eq('funcao', 'admin')
-        .eq('ativo', true)
-        .neq('id', usuarioAlvoId)
-
-      if (countError) {
-        return { success: false, error: `ERRO_VALIDACAO_ADMIN: ${countError.message}` }
-      }
-
-      if (!count || count < 1) {
-        return { success: false, error: 'MINIMO_UM_ADMIN_ATIVO' }
-      }
-    }
-
-    // 4. Executar a atualização. Como o RLS de public.perfis para UPDATE exige public.eh_admin()
-    // e o chamador pode ser supervisor, utilizamos o admin client para garantir bypass seguro.
-    const adminSupabase = createAdminClient()
-    const { error: updateError } = await adminSupabase
-      .from('perfis')
-      .update({ funcao, ativo })
-      .eq('id', usuarioAlvoId)
-
-    if (updateError) {
-      return { success: false, error: `ERRO_ATUALIZACAO: ${updateError.message}` }
-    }
-
-    // 5. Inserir log de auditoria
-    const { error: logError } = await adminSupabase
-      .from('logs_auditoria')
-      .insert({
-        usuario_id: callerId,
-        acao: 'atualizar_perfil',
-        detalhes: {
-          usuario_alvo_id: usuarioAlvoId,
-          funcao_anterior: perfilAlvo.funcao,
-          ativo_anterior: perfilAlvo.ativo,
-          nova_funcao: funcao,
-          novo_ativo: ativo,
-        },
-      })
-
-    if (logError) {
-      // Logamos no servidor, mas a atualização principal já foi feita
-      console.error('Erro ao inserir log de auditoria:', logError)
-    }
+    const supabase = await createClient()
+    const { error } = await supabase.rpc('gerenciar_funcao_status_perfil', {
+      p_usuario_alvo_id: usuarioAlvoId, p_funcao: funcao, p_ativo: ativo,
+    })
+    if (error) return { success: false, error: error.message }
 
     revalidatePath('/atendimento/admin')
     return { success: true }
@@ -604,7 +530,6 @@ export async function deletarUsuarioAdmin(usuarioAlvoId: string) {
       acao: 'excluir_usuario',
       detalhes: {
         usuario_alvo_id: usuarioAlvoId,
-        nome: perfilAlvo.nome,
         funcao: perfilAlvo.funcao
       }
     })

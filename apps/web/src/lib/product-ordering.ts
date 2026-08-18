@@ -4,6 +4,25 @@ type OfficiallyOrderedProduct = {
   ordem_exibicao: number | null
 }
 
+export function moveProduct<T extends { id: string }>(products: T[], draggedId: string, targetId: string): T[] {
+  const fromIndex = products.findIndex((product) => product.id === draggedId)
+  const toIndex = products.findIndex((product) => product.id === targetId)
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return products
+
+  const reordered = [...products]
+  const [moved] = reordered.splice(fromIndex, 1)
+  reordered.splice(toIndex, 0, moved)
+  return reordered
+}
+
+export function buildGlobalProductOrderPayload(products: Array<{ id: string }>) {
+  return products.map((product, index) => ({ id: product.id, ordem_exibicao: index + 1 }))
+}
+
+export function isProductReorderingDisabled(search: string, filter: string) {
+  return search.trim().length > 0 || filter !== 'todos'
+}
+
 function compareText(left: string, right: string) {
   return left.localeCompare(right, 'pt-BR')
 }

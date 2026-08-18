@@ -50,39 +50,9 @@ export async function atualizarPerfilProprio(nome: string) {
       return { success: false, error: 'NOME_INVALIDO' }
     }
 
-    const check = await verificarPermissaoQualquerOperador()
-    if (!check.authorized || !check.user) {
-      return { success: false, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
-    }
-
-    const { user, supabase } = check
-
-    // O RLS permite que o usuário atualize o seu próprio perfil
-    const { error: updateError } = await supabase
-      .from('perfis')
-      .update({ nome })
-      .eq('id', user.id)
-
-    if (updateError) {
-      return { success: false, error: `ERRO_ATUALIZACAO: ${updateError.message}` }
-    }
-
-    // Gravar log de auditoria anonimizado (sem PII como o nome em si)
-    const adminSupabase = createAdminClient()
-    const { error: logError } = await adminSupabase
-      .from('logs_auditoria')
-      .insert({
-        usuario_id: user.id,
-        acao: 'atualizar_perfil',
-        detalhes: {
-          perfil_id: user.id,
-          nome_atualizado: true
-        }
-      })
-
-    if (logError) {
-      console.error('Erro ao registrar log de auditoria de alteração de perfil:', logError)
-    }
+    const supabase = await createClient()
+    const { error } = await supabase.rpc('atualizar_nome_perfil', { p_nome: nome })
+    if (error) return { success: false, error: error.message }
 
     revalidatePath('/atendimento/perfil')
     return { success: true }
@@ -140,3 +110,68 @@ export async function atualizarSenhaPropria(novaSenha: string) {
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
 }
+
+/**
+ * Server Action: atualizarPerfilCliente
+ * Permite ao cliente autenticado atualizar seus dados cadastrais (nome, endereço e e-mail opcional).
+ */
+export async function atualizarPerfilCliente(dados: {
+  nome?: string
+  email?: string | null
+  endereco?: string | null
+}) {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    // Validar e-mail opcional se fornecido
+    let emailNormalizado: string | null = null
+    if (dados.email && dados.email.trim() !== '') {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      if (!emailRegex.test(dados.email.trim())) {
+        return { success: false, error: 'EMAIL_INVALIDO' }
+      }
+      emailNormalizado = dados.email.trim().toLowerCase()
+    }
+
+    const payloadAtualizacao: Record<string, any> = {
+      data_atualizacao: new Date().toISOString()
+    }
+
+    if (dados.nome !== undefined) {
+      if (!dados.nome || dados.nome.trim().length < 2) {
+        return { success: false, error: 'NOME_INVALIDO' }
+      }
+      payloadAtualizacao.nome = dados.nome.trim()
+    }
+
+    if (dados.email !== undefined) {
+      payloadAtualizacao.email = emailNormalizado
+    }
+
+    if (dados.endereco !== undefined) {
+      payloadAtualizacao.endereco = dados.endereco ? dados.endereco.trim() : null
+    }
+
+    const { error: updateError } = await supabase
+      .from('clientes')
+      .update(payloadAtualizacao)
+      .eq('usuario_id', user.id)
+
+    if (updateError) {
+      console.error('Erro ao atualizar perfil do cliente:', updateError)
+      return { success: false, error: updateError.message }
+    }
+
+    revalidatePath('/cliente/perfil')
+    return { success: true }
+  } catch (error: any) {
+    console.error('Erro em atualizarPerfilCliente:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+

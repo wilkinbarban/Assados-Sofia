@@ -1,9 +1,9 @@
 import React from 'react'
 import { redirect } from 'next/navigation'
 import { headers } from 'next/headers'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import { Flame, LogOut } from 'lucide-react'
+import { BrandLogo } from '@/components/ui/BrandLogo'
+import { LogOut } from 'lucide-react'
 import ClienteNav from '@/components/cliente/ClienteNav'
 
 // Server Action for logout
@@ -49,17 +49,10 @@ export default async function ClienteLayout({
   return (
     <div className="h-screen bg-zinc-950 text-zinc-100 flex flex-col font-sans animate-in fade-in duration-300 overflow-hidden">
       {/* Header bar */}
-      <header className="border-b border-zinc-900 bg-zinc-900/40 backdrop-blur-md sticky top-0 z-40">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+      <header className="border-b border-zinc-900/90 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-40">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center space-x-6">
-            <div className="flex items-center space-x-3">
-              <div className="h-9 w-9 rounded-xl bg-linear-to-tr from-red-600 to-amber-500 flex items-center justify-center shadow-md">
-                <Flame className="h-5 w-5 text-white" />
-              </div>
-              <span className="font-bold text-lg tracking-tight bg-linear-to-r from-white to-zinc-400 bg-clip-text text-transparent">
-                Asados Sofía
-              </span>
-            </div>
+            <BrandLogo size="md" href="/cliente/chat" />
 
             {/* Navigation Tabs */}
             <ClienteNav />

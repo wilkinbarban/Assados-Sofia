@@ -3,6 +3,9 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { z } from 'zod'
 import { enviarOtpTelegram } from '@/lib/telegram/send'
+import { allowsIntegrationMock } from '@/lib/runtime/environment'
+import { normalizeCuritibaPhone } from '@/lib/auth/phone'
+import crypto from 'node:crypto'
 
 const otpSchema = z.object({
   telefone: z.string().min(1, 'Telefone é obrigatório'),
@@ -62,14 +65,8 @@ export async function POST(request: Request) {
     }
 
     // 3. Sanitizar e validar o número de telefone (Formato de Curitiba: 55419XXXXXXXX)
-    let sanitized = parsed.data.telefone.replace(/\D/g, '')
-
-    if (sanitized.length === 11 && sanitized.startsWith('419')) {
-      sanitized = '55' + sanitized
-    }
-
-    const curitibaRegex = /^55419[0-9]{8}$/
-    if (!curitibaRegex.test(sanitized)) {
+    const sanitized = normalizeCuritibaPhone(parsed.data.telefone)
+    if (!sanitized) {
       return NextResponse.json(
         { error: 'O telefone deve ser um celular válido de Curitiba com DDD 41 (ex: 41 9XXXX-XXXX).' },
         { status: 400 }
@@ -103,8 +100,8 @@ export async function POST(request: Request) {
       )
     }
 
-    // 5. Gerar OTP de 6 dígitos
-    const codigo = Math.floor(100000 + Math.random() * 900000).toString()
+    // 5. Gerar OTP de 6 dígitos (usando crypto para aleatoriedade segura)
+    const codigo = crypto.randomInt(100000, 1000000).toString()
     const expiraEm = new Date(Date.now() + 10 * 60 * 1000).toISOString()
 
     // 6. Persistir no banco de dados usando o admin client
@@ -191,8 +188,8 @@ export async function POST(request: Request) {
           console.error('Erro de conexão ao enviar WhatsApp API:', err)
           erros.push(`WhatsApp: ${err.message}`)
         }
-      } else {
-        // Modo desenvolvimento: mock no terminal
+      } else if (allowsIntegrationMock()) {
+        // Mocks are restricted to local/test execution so production never reports a fake delivery.
         const maskedPhone = sanitized.length >= 8
           ? sanitized.slice(0, 4) + '*****' + sanitized.slice(-4)
           : '***********'
@@ -203,6 +200,8 @@ export async function POST(request: Request) {
         console.log(`---------------------------\n`)
         envioSucesso = true
         canalUsado = 'whatsapp'
+      } else {
+        erros.push('WhatsApp: credenciais não configuradas')
       }
     }
 

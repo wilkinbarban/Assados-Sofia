@@ -1,0 +1,29 @@
+[Unit]
+Description=Asados Slice 2 manifest-aware staging receipt
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+TimeoutStartSec=10m
+LoadCredentialEncrypted=staging-secret:/etc/credstore.encrypted/asados.slice2.staging-secret.cred
+LoadCredentialEncrypted=staging-publishable:/etc/credstore.encrypted/asados.slice2.staging-publishable.cred
+Environment=RECEIPT_EXECUTION=authorized
+Environment=SLICE2_LOCK_ROOT=/run/asados/slice2
+RuntimeDirectory=asados/slice2
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/env STAGING_BASELINE_REF=mhoqwjatrendnhfnwewv STAGING_TARGET_REF=mhoqwjatrendnhfnwewv STAGING_TARGET_IDENTITY=staging:mhoqwjatrendnhfnwewv RECEIPT_DIR=/var/lib/asados/slice2/receipts RECEIPT_TRIGGER=automatic PRIOR_SUCCESS_FINGERPRINT_FILE=/var/lib/asados/slice2/state/prior-success-fingerprint /usr/local/lib/asados/repo/ops/systemd/run-slice2-receipt
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/asados/slice2/receipts /var/lib/asados/slice2/locks /var/lib/asados/slice2/state

@@ -33,9 +33,9 @@ describe('ClienteNav', () => {
     const chatLink = screen.getByRole('link', { name: /chat/i })
     const perfilLink = screen.getByRole('link', { name: /perfil/i })
 
-    expect(chatLink.className).toContain('bg-zinc-900')
-    expect(chatLink.className).toContain('text-white')
-    expect(perfilLink.className).not.toContain('bg-zinc-900')
+    expect(chatLink.className).toContain('text-amber-400')
+    expect(chatLink.className).toContain('bg-amber-500/15')
+    expect(perfilLink.className).not.toContain('bg-amber-500/15')
     expect(perfilLink.className).toContain('text-zinc-400')
   })
 
@@ -46,9 +46,9 @@ describe('ClienteNav', () => {
     const chatLink = screen.getByRole('link', { name: /chat/i })
     const perfilLink = screen.getByRole('link', { name: /perfil/i })
 
-    expect(perfilLink.className).toContain('bg-zinc-900')
-    expect(perfilLink.className).toContain('text-white')
-    expect(chatLink.className).not.toContain('bg-zinc-900')
+    expect(perfilLink.className).toContain('text-amber-400')
+    expect(perfilLink.className).toContain('bg-amber-500/15')
+    expect(chatLink.className).not.toContain('bg-amber-500/15')
     expect(chatLink.className).toContain('text-zinc-400')
   })
 })

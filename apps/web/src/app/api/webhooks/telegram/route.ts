@@ -1,8 +1,11 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { allowsIntegrationMock } from '@/lib/runtime/environment'
 import { processarRagPipeline } from '@/lib/ai/openrouter'
 import { obterConfiguracaoSistema, obterSofiaGlobalChannelConfig } from '@/lib/config/sistema'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { deriveTelegramMessageKey } from '@/lib/telegram/idempotency'
+import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
+import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 
 /**
  * Envia mensagem direta via API do Telegram (sem passar pelo pipeline RAG)
@@ -24,19 +27,6 @@ async function enviarMensagemDireta(chatId: string, texto: string): Promise<bool
     console.error('[Telegram Webhook] Erro ao enviar mensagem direta:', err)
     return false
   }
-}
-
-/**
- * Normaliza número de telefone brasileiro para formato internacional
- */
-function normalizarTelefone(phone: string): string {
-  let sanitized = phone.replace(/\D/g, '')
-  // Remove leading zeros and ensure Brazil country code
-  if (sanitized.startsWith('0')) sanitized = sanitized.replace(/^0+/, '')
-  if (sanitized.length <= 11 && !sanitized.startsWith('55')) {
-    sanitized = '55' + sanitized
-  }
-  return sanitized
 }
 
 const MENSAGEM_BOAS_VINDAS = `🍖 *Olá! Seja bem-vindo(a) à Asados!*
@@ -71,7 +61,8 @@ function getSafeTelegramMessageContent(message: TelegramMessage, senderName: str
   if (message.contact) {
     const contatoNome = message.contact.first_name || senderName
     if (message.contact.phone_number && isOwnTelegramContact(message)) {
-      return `[📱 Contact shared: ${contatoNome} — +${normalizarTelefone(message.contact.phone_number)}]`
+      const canonical = normalizeCuritibaPhone(message.contact.phone_number) || message.contact.phone_number
+      return `[📱 Contact shared: ${contatoNome} — +${canonical}]`
     }
     return `[📱 Contact shared without verified ownership: ${contatoNome}]`
   }
@@ -117,8 +108,13 @@ async function validateTelegramWebhookSecret(request: Request): Promise<boolean>
   const expectedSecret = await obterConfiguracaoSistema('TELEGRAM_WEBHOOK_SECRET_TOKEN')
 
   if (!expectedSecret) {
-    console.warn('[Telegram Webhook] TELEGRAM_WEBHOOK_SECRET_TOKEN is not configured; accepting webhook temporarily.')
-    return true
+    if (allowsIntegrationMock()) {
+      console.warn('[Telegram Webhook] TELEGRAM_WEBHOOK_SECRET_TOKEN is not configured; accepting webhook in local/test mode.')
+      return true
+    }
+
+    console.error('[Telegram Webhook] TELEGRAM_WEBHOOK_SECRET_TOKEN is required outside local/test mode.')
+    return false
   }
 
   return request.headers.get('x-telegram-bot-api-secret-token') === expectedSecret
@@ -261,30 +257,36 @@ export async function POST(request: Request) {
       const contatoNome = message.contact.first_name || senderName
       const contactIsOwnedBySender = isOwnTelegramContact(message)
       const safeContactDisplay = contactIsOwnedBySender
-        ? `[📱 Contact shared: ${contatoNome} — +${normalizarTelefone(message.contact.phone_number)}]`
+        ? `[📱 Contact shared: ${contatoNome} — +${normalizeCuritibaPhone(message.contact.phone_number) || message.contact.phone_number}]`
         : `[📱 Contact shared without verified ownership: ${contatoNome}]`
 
       if (contactIsOwnedBySender) {
-        const telefoneNormalizado = normalizarTelefone(message.contact.phone_number)
+        const telefoneNormalizado = normalizeCuritibaPhone(message.contact.phone_number)
 
-        console.log(`[Telegram Webhook] Verified contact shared: ${contatoNome} (${telefoneNormalizado})`)
+        if (telefoneNormalizado) {
+          console.log(`[Telegram Webhook] Verified contact shared: ${contatoNome} (${maskPhone(telefoneNormalizado)})`)
 
-        // Atualizar telefone no registro do cliente
-        const { error: updatePhoneError } = await supabaseAdmin
-          .from('clientes')
-          .update({
-            telefone: telefoneNormalizado,
-            nome: contatoNome,
-            data_atualizacao: new Date().toISOString()
-          })
-          .eq('id', clienteId)
+          // Atualizar telefone e metadados de verificação explícita no registro do cliente
+          const { error: updatePhoneError } = await supabaseAdmin
+            .from('clientes')
+            .update({
+              telefone: telefoneNormalizado,
+              nome: contatoNome,
+              telefone_verificado_em: new Date().toISOString(),
+              telefone_verificado_origem: 'telegram',
+              data_atualizacao: new Date().toISOString()
+            })
+            .eq('id', clienteId)
 
-        if (updatePhoneError) {
-          console.error('[Telegram Webhook] Erro ao salvar telefone do contato:', updatePhoneError)
-          return Response.json({ ok: false, error: 'Erro ao salvar telefone' }, { status: 500 })
+          if (updatePhoneError) {
+            console.error('[Telegram Webhook] Erro ao salvar telefone do contato:', updatePhoneError)
+            return Response.json({ ok: false, error: 'Erro ao salvar telefone' }, { status: 500 })
+          }
+
+          telefoneExistente = telefoneNormalizado
+        } else {
+          console.warn('[Telegram Webhook] Telefone fora do padrão de Curitiba:', maskPhone(message.contact.phone_number))
         }
-
-        telefoneExistente = telefoneNormalizado
       } else {
         console.warn('[Telegram Webhook] Contact ignored because Telegram ownership could not be verified.', {
           chatId: telegramChatId,
@@ -424,6 +426,26 @@ Como posso te ajudar com o churrasco hoje? 🥩`
     if (insertMessageError) {
       console.error('[Telegram Webhook] Erro ao inserir mensagem:', insertMessageError)
       return Response.json({ ok: false, error: 'Erro ao salvar mensagem' }, { status: 500 })
+    }
+
+    // Processar Governança de Contatos (Opt-In / Opt-Out / Candidatos / Timestamps)
+    const statusContato = await processarStatusContatoInbound(supabaseAdmin, clienteId, messageText)
+
+    if (statusContato.suprimirSofia) {
+      console.log(`[Telegram Webhook] Sofia suprimida por solicitação de opt-out para cliente ${clienteId}.`)
+      if (statusContato.mensagemRespostaCurta) {
+        try {
+          await enviarMensagemDireta(telegramChatId, statusContato.mensagemRespostaCurta)
+          await supabaseAdmin.from('mensagens').insert({
+            conversa_id: conversationId,
+            remetente: 'ia',
+            conteudo: statusContato.mensagemRespostaCurta,
+          })
+        } catch (err) {
+          console.error('[Telegram Webhook] Erro ao enviar resposta curta de opt-out:', err)
+        }
+      }
+      return Response.json({ ok: true, message: 'Opt-out processado' })
     }
 
     // Disparar pipeline RAG

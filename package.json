@@ -2,21 +2,40 @@
   "name": "asados-monorepo",
   "version": "0.1.0",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
   "scripts": {
     "dev": "npm run dev --workspace @asados/web",
     "build": "npm run build --workspace @asados/web",
     "start": "npm run start --workspace @asados/web",
-    "lint": "eslint",
+    "lint": "eslint apps/web/src apps/web/proxy.ts tests",
     "lin": "npm run lint",
     "test": "vitest run",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
-    "test:e2e": "playwright test",
+    "test:coverage": "vitest run --coverage tests/unit/integration-mode-policy.test.ts tests/unit/mercadopago-webhook-security.test.ts tests/unit/telegram-webhook-security.test.ts tests/unit/webhook-global-gates.test.ts tests/unit/safe-redirect.test.ts",
+    "test:e2e": "env -u NO_COLOR playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:all": "npm run test:unit && npm run test:e2e"
+    "test:all": "npm run test:unit && npm run test:e2e",
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:status": "supabase status",
+    "supabase:reset": "supabase db reset --local",
+    "supabase:test": "supabase test db",
+    "selfhost:config": "cd ops/supabase && docker compose config --quiet",
+    "selfhost:migrate": "ops/supabase/migrate.sh",
+    "selfhost:verify": "ops/supabase/verify.sh",
+    "integration:verify": "ops/verify-integrations.sh",
+    "test:e2e:production": "docker run --rm --network host -v $PWD:/work -v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker:ro -w /work -e HOME=/root -e SELFHOST_E2E=true -e NPM_CONFIG_UPDATE_NOTIFIER=false mcr.microsoft.com/playwright:v1.61.1-noble npx playwright test --config=playwright.production.config.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@supabase/supabase-js": "^2.110.0",
     "@tailwindcss/postcss": "^4",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
@@ -25,9 +44,11 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.3",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9",
-    "eslint-config-next": "16.2.10",
+    "eslint-config-next": "16.3.0",
     "jsdom": "^29.1.1",
+    "supabase": "2.109.1",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.10"
@@ -38,9 +59,5 @@
   "allowScripts": {
     "sharp": true,
     "unrs-resolver": true
-  },
-  "workspaces": [
-    "apps/*",
-    "packages/*"
-  ]
+  }
 }

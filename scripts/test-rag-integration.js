@@ -78,12 +78,12 @@ function runDbQuery(sql) {
 // Import RAG pipeline using jiti compiled on the fly
 const jiti = require('jiti')(__filename, {
   alias: {
-    '@': path.resolve(__dirname, '../src'),
+    '@': path.resolve(__dirname, '../apps/web/src'),
     'next/headers': path.resolve(__dirname, './mock-headers.js')
   }
 });
 
-const { processarRagPipeline } = jiti('../src/lib/ai/openrouter.ts');
+const { processarRagPipeline } = jiti('../apps/web/src/lib/ai/openrouter.ts');
 
 async function runTests() {
   logSection('Starting RAG Integration & Security Test Suite (Épica 5)');

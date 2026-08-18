@@ -30,7 +30,7 @@ conventions:
   security: "strict RLS policies"
 
 persistence:
-  mode: "openspec"
+  mode: "both"
   path: "openspec/"
 
 testing:

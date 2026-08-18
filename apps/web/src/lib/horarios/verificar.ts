@@ -8,9 +8,12 @@ export async function verificarHorarioAtendimento(): Promise<{
   try {
     const supabase = createAdminClient()
 
+    // Obter a data e hora atual na timezone America/Sao_Paulo (Curitiba)
     const agora = new Date()
-    const diaSemana = agora.getDay()
-    const minutosAtual = agora.getHours() * 60 + agora.getMinutes()
+    const tzString = agora.toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' })
+    const dateInTimezone = new Date(tzString)
+    const diaSemana = dateInTimezone.getDay()
+    const minutosAtual = dateInTimezone.getHours() * 60 + dateInTimezone.getMinutes()
 
     const { data: horario, error } = await supabase
       .from('horarios_atendimento')
@@ -41,7 +44,8 @@ export async function verificarHorarioAtendimento(): Promise<{
     return { dentro: false, mensagem }
   } catch (error) {
     console.error('Erro ao verificar horário de atendimento:', error)
-    return { dentro: true }
+    // Fail Closed: Em caso de falha de banco ou runtime, rejeitar e informar erro
+    return { dentro: false, mensagem: 'Erro de conexão ao verificar o horário de funcionamento.' }
   }
 }
 

@@ -1,0 +1,8 @@
+[Unit]
+Description=Schedule Asados Slice 2 receipt retention
+[Timer]
+OnCalendar=*-*-* 04:02:00
+Persistent=true
+Unit=asados-slice2-retention.service
+[Install]
+WantedBy=timers.target

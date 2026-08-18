@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import ClienteLayout from '@/app/cliente/layout'
@@ -88,7 +89,7 @@ describe('ClienteLayout', () => {
     
     expect(screen.getByTestId('verification-content')).toBeInTheDocument()
     // It should NOT render the header logo or links
-    expect(screen.queryByText('Asados Sofía')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Casa de Assados/i)).not.toBeInTheDocument()
     expect(redirect).not.toHaveBeenCalled()
   })
 
@@ -106,7 +107,7 @@ describe('ClienteLayout', () => {
     render(layout)
 
     expect(screen.getByTestId('chat-content')).toBeInTheDocument()
-    expect(screen.getByText('Asados Sofía')).toBeInTheDocument()
+    expect(screen.getByText(/Casa de Assados/i)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /chat/i })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /perfil/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /sair/i })).toBeInTheDocument()

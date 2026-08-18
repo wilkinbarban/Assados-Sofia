@@ -66,7 +66,7 @@ function logSection(title) {
 // Import actions using jiti compiled on the fly
 const jiti = require('jiti')(__filename, {
   alias: {
-    '@': path.resolve(__dirname, '../src'),
+    '@': path.resolve(__dirname, '../apps/web/src'),
     'next/headers': path.resolve(__dirname, './mock-headers.js'),
     'next/cache': path.resolve(__dirname, './mock-next-cache.js')
   }
@@ -78,7 +78,7 @@ const {
   alternarSofiaGlobal,
   enviarMensagemOperador,
   obterStatusSofiaAtendimento
-} = jiti('../src/app/actions/atendimento');
+} = jiti('../apps/web/src/app/actions/atendimento');
 
 // Helper to update the mock headers cookie with user session
 function setSessionCookies(session) {

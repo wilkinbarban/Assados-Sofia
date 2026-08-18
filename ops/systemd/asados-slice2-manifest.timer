@@ -1,0 +1,9 @@
+[Unit]
+Description=Schedule Asados Slice 2 manifest receipt
+[Timer]
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=asados-slice2-manifest.service
+[Install]
+WantedBy=timers.target

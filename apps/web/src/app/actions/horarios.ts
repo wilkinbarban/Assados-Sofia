@@ -107,6 +107,12 @@ export async function salvarHorarioDia(
 
 export async function listarHorarios() {
   try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
     const adminSupabase = createAdminClient()
 
     const { data, error } = await adminSupabase
@@ -200,6 +206,12 @@ export async function salvarMensagemForaHorario(mensagem: string) {
 
 export async function obterMensagemForaHorario() {
   try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
     const adminSupabase = createAdminClient()
 
     const { data: config, error: configError } = await adminSupabase

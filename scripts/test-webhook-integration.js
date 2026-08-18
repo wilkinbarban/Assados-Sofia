@@ -338,10 +338,10 @@ async function runTests() {
   try {
     const jiti = require('jiti')(__filename, {
       alias: {
-        '@': path.resolve(__dirname, '../src'),
+        '@': path.resolve(__dirname, '../apps/web/src'),
       }
     });
-    const sendModule = jiti('../src/lib/whatsapp/send');
+    const sendModule = jiti('../apps/web/src/lib/whatsapp/send');
     enviarMensagemWhatsapp = sendModule.enviarMensagemWhatsapp;
   } catch (err) {
     logError('No se pudo importar enviarMensagemWhatsapp mediante jiti.', err);

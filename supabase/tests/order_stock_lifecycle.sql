@@ -35,6 +35,14 @@ insert into public.pedidos(id,cliente_id,status,tipo_entrega,total_produtos_cent
 insert into public.pedido_estoque_efeitos values('55555555-5555-4555-8555-555555555560','55555555-5555-4555-8555-555555555524',1,true);
 insert into public.pedido_estoque_snapshots values('55555555-5555-4555-8555-555555555560','[]');
 
+-- The ledger is intentionally private in production. This transaction-only
+-- read policy lets the authenticated test actor verify function side effects
+-- without weakening the deployed grants or write boundary.
+grant select on public.pedido_estoque_efeitos to authenticated;
+create policy test_authenticated_order_effect_reads
+on public.pedido_estoque_efeitos for select to authenticated
+using (true);
+
 set local role authenticated;
 select set_config('request.jwt.claim.sub','55555555-5555-4555-8555-555555555502',true);
 do $$ begin begin perform * from public.confirmar_pedido_estoque('55555555-5555-4555-8555-555555555531','55555555-5555-4555-8555-555555555541'); raise exception 'client accepted'; exception when insufficient_privilege then null; end; end $$;
@@ -84,6 +92,7 @@ do $$ declare r record; begin
  if (select quantidade_estoque from public.produtos where id='55555555-5555-4555-8555-555555555522')<>2 or exists(select 1 from public.movimentacoes_estoque where pedido_id='55555555-5555-4555-8555-555555555532') then raise exception 'shortage partial state'; end if;
 end $$;
 reset role;
+update public.produtos set controlar_estoque=true where id='55555555-5555-4555-8555-555555555521';
 create function pg_temp.reject_order_effect() returns trigger language plpgsql as $$ begin raise exception 'forced effect failure'; end $$;
 create trigger reject_order_movement before insert on public.movimentacoes_estoque for each row execute function pg_temp.reject_order_effect();
 set local role authenticated; select set_config('request.jwt.claim.sub','55555555-5555-4555-8555-555555555501',true);
@@ -112,9 +121,10 @@ do $$ begin
  insert into public.pedidos(id,cliente_id,status,tipo_entrega,total_produtos_centavos,total_pedido_centavos,meio_pagamento) values('55555555-5555-4555-8555-555555555537','55555555-5555-4555-8555-555555555510','novo','retirada',0,0,'dinheiro');
 end $$;
 reset role;
-do $$ begin
+do $$ declare audit_count integer; begin
  if has_function_privilege('anon','public.confirmar_pedido_estoque(uuid,uuid)','execute') then raise exception 'anon execute granted'; end if;
- if (select count(*) from public.logs_auditoria where acao in('confirmar_pedido_estoque','cancelar_pedido_estoque') and usuario_id='55555555-5555-4555-8555-555555555501')<>4 then raise exception 'audit attribution missing'; end if;
+ select count(*) into audit_count from public.logs_auditoria where acao in('confirmar_pedido_estoque','cancelar_pedido_estoque') and usuario_id='55555555-5555-4555-8555-555555555501';
+ if audit_count<>4 then raise exception 'audit attribution missing: expected 4, got %', audit_count; end if;
  if (select google_event_id from public.pedidos where id='55555555-5555-4555-8555-555555555531')<>'order-stock-boundary-event' then raise exception 'unrelated order update missing'; end if;
  if (select estoque_estado from public.pedidos where id='55555555-5555-4555-8555-555555555533')<>'pendente' or (select quantidade_estoque from public.produtos where id='55555555-5555-4555-8555-555555555521')<>8 then raise exception 'effect failure did not roll back'; end if;
 end $$;

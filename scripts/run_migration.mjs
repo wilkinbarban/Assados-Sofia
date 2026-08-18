@@ -1,29 +1,52 @@
-import { createClient } from '@supabase/supabase-js'
-import { readFileSync } from 'fs'
-import { fileURLToPath } from 'url'
-import { dirname, join } from 'path'
+import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 
-const __dirname = dirname(fileURLToPath(import.meta.url))
+const protectedProjectRef = 'xvzdxoktwnzmxsfizkxo'
+const projectRoot = new URL('../', import.meta.url)
+const requiredEnvironment = ['SUPABASE_ACCESS_TOKEN', 'SUPABASE_DB_PASSWORD']
+const missingEnvironment = requiredEnvironment.filter((name) => !process.env[name])
 
-const supabase = createClient(
-  'https://xvzdxoktwnzmxsfizkxo.supabase.co',
-  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh2emR4b2t0d256bXhzZml6a3hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mjk0MDUwOCwiZXhwIjoyMDk4NTE2NTA4fQ.bmUb58m-_4V5g0sqQzxyS-f0MnsElFycHU9PTXxByY4',
-  { auth: { persistSession: false, autoRefreshToken: false } }
-)
+function abort(reason) {
+  process.stderr.write(`migration-runner:${reason}\n`)
+  process.exit(2)
+}
 
-const sql = readFileSync(join(__dirname, '..', 'supabase', 'migrations', '20260707180000_mesclar_contas_telegram.sql'), 'utf8')
+function redact(output) {
+  const sensitiveValues = requiredEnvironment.map((name) => process.env[name]).filter(Boolean).sort((a, b) => b.length - a.length)
+  return sensitiveValues.reduce((safeOutput, value) => safeOutput.replaceAll(value, '[REDACTED]'), output)
+}
 
-// Try direct SQL execution via REST API using the SQL endpoint
-const resp = await fetch('https://xvzdxoktwnzmxsfizkxo.supabase.co/rest/v1/rpc/exec_sql', {
-  method: 'POST',
-  headers: {
-    'apikey': 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh2emR4b2t0d256bXhzZml6a3hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mjk0MDUwOCwiZXhwIjoyMDk4NTE2NTA4fQ.bmUb58m-_4V5g0sqQzxyS-f0MnsElFycHU9PTXxByY4',
-    'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh2emR4b2t0d256bXhzZml6a3hvIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4Mjk0MDUwOCwiZXhwIjoyMDk4NTE2NTA4fQ.bmUb58m-_4V5g0sqQzxyS-f0MnsElFycHU9PTXxByY4',
-    'Content-Type': 'application/json',
-    'Prefer': 'params=single-object'
-  },
-  body: JSON.stringify({})
+if (missingEnvironment.length > 0) {
+  abort(`missing-required-environment:${missingEnvironment.join(',')}`)
+}
+
+if (process.env.SUPABASE_PROJECT_REF !== protectedProjectRef) {
+  abort('project-ref-mismatch')
+}
+
+const linkedProjectRef = readFileSync(new URL('supabase/.temp/project-ref', projectRoot), 'utf8').trim()
+if (linkedProjectRef !== protectedProjectRef) {
+  abort('linked-project-ref-mismatch')
+}
+
+const apply = process.argv.includes('--apply')
+if (apply && process.env.SUPABASE_MIGRATION_APPLY !== 'AUTHORIZED') {
+  abort('apply-authorization-missing')
+}
+
+const executable = process.env.SUPABASE_CLI_BIN || 'supabase'
+const args = ['db', 'push', '--linked', ...(apply ? [] : ['--dry-run'])]
+const childEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) => name !== 'SUPABASE_WORKDIR'))
+const result = spawnSync(executable, args, {
+  cwd: projectRoot,
+  encoding: 'utf8',
+  env: childEnvironment,
 })
-console.log('Status:', resp.status)
-const text = await resp.text()
-console.log('Response:', text.substring(0, 500))
+
+if (result.error) {
+  abort('cli-execution-failed')
+}
+
+process.stdout.write(redact(result.stdout || ''))
+process.stderr.write(redact(result.stderr || ''))
+process.exit(result.status ?? 1)

@@ -42,6 +42,11 @@ export async function atualizarClienteCrm(
     const ehOperador = funcoesOperador.includes(perfil.funcao)
 
     if (!ehOperador) {
+      // Clientes não podem alterar metadatos de CRM
+      if (data.tags !== undefined || data.notas !== undefined || data.score !== undefined) {
+        return { success: false, error: 'ACESSO_NEGADO_METADADOS_RESTRITOS' }
+      }
+
       // Verifica se o cliente sendo editado é o proprietário (usuario_id = user.id)
       const { data: cliente, error: clienteError } = await supabase
         .from('clientes')

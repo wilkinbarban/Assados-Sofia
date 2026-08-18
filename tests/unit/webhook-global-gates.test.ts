@@ -96,10 +96,10 @@ function metaRequest(payload: unknown) {
   })
 }
 
-function evolutionRequest(messageId: string, text = 'Hello') {
+function evolutionRequest(messageId: string, text = 'Hello', headers: HeadersInit = { apikey: 'evolution-key' }) {
   return new Request('https://asados.test/api/webhooks/evolution', {
     method: 'POST',
-    headers: { apikey: 'evolution-key' },
+    headers,
     body: JSON.stringify({
       event: 'messages.upsert',
       data: {
@@ -124,6 +124,7 @@ beforeEach(() => {
   mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => {
     if (key === 'WHATSAPP_APP_SECRET') return 'test_secret'
     if (key === 'EVOLUTION_API_KEY') return 'evolution-key'
+    if (key === 'EVOLUTION_WEBHOOK_SECRET') return 'evolution-webhook-secret'
     if (key === 'EVOLUTION_API_URL') return 'https://evolution.test'
     if (key === 'EVOLUTION_INSTANCE_NAME') return 'asados-main'
     if (key === 'TELEGRAM_WEBHOOK_SECRET_TOKEN') return 'secret-token'
@@ -137,6 +138,59 @@ beforeEach(() => {
 })
 
 describe('webhook global Sofia gates', () => {
+  it('rejects a placeholder Meta app secret outside local/test mode', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => {
+      if (key === 'WHATSAPP_APP_SECRET') return 'placeholder'
+      return null
+    })
+
+    const response = await postMetaWhatsApp(new Request('https://asados.test/api/webhooks/whatsapp', {
+      method: 'POST',
+      body: JSON.stringify({ object: 'whatsapp_business_account' }),
+    }))
+
+    expect(response.status).toBe(503)
+    vi.unstubAllEnvs()
+  })
+
+  it('rejects Evolution query-string secrets before parsing the request body', async () => {
+    const request = new Request('https://asados.test/api/webhooks/evolution?webhook_secret=evolution-key', {
+      method: 'POST',
+      body: '{',
+    })
+
+    const response = await postEvolution(request)
+
+    expect(response.status).toBe(401)
+  })
+
+  it('accepts an Evolution webhook authenticated only by the header secret', async () => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+
+    const response = await postEvolution(evolutionRequest(
+      'evo-header-secret',
+      'Header secret',
+      { 'x-webhook-secret': 'evolution-webhook-secret' },
+    ))
+
+    expect(response.status).toBe(200)
+  })
+
+  it('accepts the dedicated Evolution webhook secret from the configured query parameter', async () => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    const request = new Request('https://asados.test/api/webhooks/evolution?webhook_secret=evolution-webhook-secret', {
+      method: 'POST',
+      body: JSON.stringify({ event: 'connection.update' }),
+    })
+
+    const response = await postEvolution(request)
+
+    expect(response.status).toBe(200)
+  })
+
   it('persists Meta WhatsApp inbound but skips schedule and RAG when global WhatsApp is off', async () => {
     const { client, log } = createSupabaseMock()
     mocks.createAdminClient.mockReturnValue(client)

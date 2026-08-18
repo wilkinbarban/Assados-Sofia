@@ -2,12 +2,15 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { cache } from 'react'
 
+export type TipoCategoriaMensagem = 'REACTIVE' | 'ORDER' | 'SERVICE' | 'MARKETING' | 'CARDAPIO'
+
 export interface EnviarMensagemPayload {
   texto?: string;
   anexoPath?: string;
   templateName?: string;
   templateParams?: any[];
   remetente?: 'operador' | 'ia';
+  categoria?: TipoCategoriaMensagem;
 }
 
 export interface ResultadoEnvio {
@@ -15,6 +18,8 @@ export interface ResultadoEnvio {
   whatsappMensagemId: string | null;
   mensagem?: any;
   error?: string;
+  safetyBlocked?: boolean;
+  motivo?: string;
 }
 
 export interface ProvedorWhatsApp {

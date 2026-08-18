@@ -6,6 +6,8 @@ import { obterConfiguracaoSistema, obterSofiaGlobalChannelConfig } from '@/lib/c
 import { resolveWhatsAppInboundConversation } from '@/lib/whatsapp/sofia-control'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
+import { allowsIntegrationMock } from '@/lib/runtime/environment'
+import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
 
 /**
  * Helper to infer file extension from mime type
@@ -21,16 +23,6 @@ function getExtensionFromMime(mimeType: string): string {
     return sub
   }
   return 'bin'
-}
-
-/**
- * Mask phone number for LGPD compliance in production logs
- */
-function maskPhone(phone: string): string {
-  if (!phone) return ''
-  const clean = phone.replace(/\D/g, '')
-  if (clean.length <= 8) return '********'
-  return clean.slice(0, 5) + '****' + clean.slice(-4)
 }
 
 /**
@@ -117,15 +109,16 @@ export async function POST(request: Request) {
 
     // 2. Validar assinatura HMAC-SHA256
     const signatureHeader = request.headers.get('x-hub-signature-256')
-    const isDev = process.env.NODE_ENV === 'development'
     const isSecretMissingOrPlaceholder = !appSecret || 
       appSecret.includes('placeholder') || 
       appSecret === 'seu_app_secret_whatsapp_aqui' ||
       appSecret === 'your_app_secret' || 
       appSecret === 'your_whatsapp_app_secret'
 
-    if (isDev && isSecretMissingOrPlaceholder) {
-      console.warn('[WhatsApp Webhook] Ignorando validação de assinatura HMAC em desenvolvimento devido à falta do app secret.')
+    if (isSecretMissingOrPlaceholder && allowsIntegrationMock()) {
+      console.warn('[WhatsApp Webhook] Ignorando validação de assinatura HMAC em local/test devido à falta do app secret.')
+    } else if (isSecretMissingOrPlaceholder) {
+      return NextResponse.json({ error: 'Configuração de assinatura indisponível' }, { status: 503 })
     } else {
       if (!signatureHeader) {
         return NextResponse.json({ error: 'Assinatura x-hub-signature-256 ausente' }, { status: 401 })
@@ -205,14 +198,9 @@ export async function POST(request: Request) {
     }
 
     // 6. Validar telefone do cliente para Curitiba
-    let sanitizedPhone = (message.from || '').replace(/\D/g, '')
-    if (sanitizedPhone.length === 11 && sanitizedPhone.startsWith('419')) {
-      sanitizedPhone = '55' + sanitizedPhone
-    }
-
-    const curitibaRegex = /^55419[0-9]{8}$/
-    if (!curitibaRegex.test(sanitizedPhone)) {
-      console.warn(`[WhatsApp Webhook] Telefone fora do padrão de Curitiba (${maskPhone(sanitizedPhone)}). Descartando silenciosamente.`)
+    const sanitizedPhone = normalizeCuritibaPhone(message.from)
+    if (!sanitizedPhone) {
+      console.warn(`[WhatsApp Webhook] Telefone fora do padrão de Curitiba (${maskPhone(message.from)}). Descartando silenciosamente.`)
       return NextResponse.json({ success: true, message: 'Telefone fora do padrão descartado silenciosamente' }, { status: 200 })
     }
 

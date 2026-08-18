@@ -74,7 +74,7 @@ function logSection(title) {
 // Import dependencies using jiti
 const jiti = require('jiti')(__filename, {
   alias: {
-    '@': path.resolve(__dirname, '../src'),
+    '@': path.resolve(__dirname, '../apps/web/src'),
     'next/headers': path.resolve(__dirname, './mock-headers.js'),
     'next/server': path.resolve(__dirname, './mock-server.js'),
     'next/cache': path.resolve(__dirname, './mock-cache.js')
@@ -84,14 +84,14 @@ const jiti = require('jiti')(__filename, {
 const mockHeaders = require('./mock-headers');
 const mockServer = require('./mock-server');
 
-const { middleware } = jiti('../middleware.ts');
+const { proxy: middleware } = jiti('../apps/web/proxy.ts');
 const {
   listarUsuariosAdmin,
   atualizarPerfilUsuario,
   testarGoogleCalendar,
   obterEstatisticasMensagens,
   obterLogsAuditoria
-} = jiti('../src/app/actions/admin.ts');
+} = jiti('../apps/web/src/app/actions/admin.ts');
 
 // Helper to update mock cookies for server actions
 function setSessionCookies(session) {

@@ -191,6 +191,21 @@ describe('Telegram webhook security', () => {
     warnSpy.mockRestore()
   })
 
+  it('rejects an unset webhook secret outside local/test mode before parsing the request body', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => {
+      if (key === 'TELEGRAM_WEBHOOK_SECRET_TOKEN') return null
+      return 'bot-token'
+    })
+    const request = makeRejectingBodyRequest('any-secret')
+
+    const response = await POST(request)
+
+    expect(response.status).toBe(401)
+    expect(request.json).not.toHaveBeenCalled()
+    vi.unstubAllEnvs()
+  })
+
   it('derives scoped idempotency keys for equal message ids in different chats', async () => {
     expect(deriveTelegramMessageKey(1001, 7)).toBe('telegram:1001:7')
     expect(deriveTelegramMessageKey(2002, 7)).toBe('telegram:2002:7')

@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
@@ -9,7 +9,7 @@ const INACTIVITY_TIMEOUT = 15 * 60 * 1000 // 15 minutes in milliseconds
 export default function InactivityLogout() {
   const router = useRouter()
   const timerRef = useRef<NodeJS.Timeout | null>(null)
-  const supabase = createClient()
+  const [supabase] = useState(createClient)
 
   useEffect(() => {
     const handleLogout = async () => {
@@ -19,7 +19,7 @@ export default function InactivityLogout() {
       } catch (err) {
         console.error('Erro ao deslogar por inatividade:', err)
         // Fallback redirect
-        window.location.href = '/login'
+        router.replace('/login')
       }
     }
 
@@ -48,7 +48,7 @@ export default function InactivityLogout() {
         window.removeEventListener(event, resetTimer)
       })
     }
-  }, [router, supabase.auth])
+  }, [router, supabase])
 
   return null
 }

@@ -1,15 +1,18 @@
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
+import { safeInternalRedirect } from '@/lib/auth/safe-redirect'
+import { getSupabaseServerUrl } from '@/lib/supabase/url'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const code = searchParams.get('code')
+  const next = safeInternalRedirect(searchParams.get('next'), '')
 
   if (code) {
     const cookieStore = await cookies()
     const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      getSupabaseServerUrl(),
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
         cookies: {
@@ -30,7 +33,9 @@ export async function GET(request: Request) {
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || request.url
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     if (!error) {
-      return NextResponse.redirect(new URL('/verificar-email?sucesso=true', appUrl))
+      const redirectUrl = new URL('/verificar-email?sucesso=true', appUrl)
+      if (next) redirectUrl.searchParams.set('next', next)
+      return NextResponse.redirect(redirectUrl)
     }
   }
 

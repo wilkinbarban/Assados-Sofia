@@ -2,7 +2,9 @@
 
 import React from 'react'
 import Link from 'next/link'
-import { Flame, CheckCircle2, XCircle, Mail, ArrowRight } from 'lucide-react'
+import { CheckCircle2, XCircle, Mail, ArrowRight } from 'lucide-react'
+import { BrandLogo } from '@/components/ui/BrandLogo'
+import { safeInternalRedirect } from '@/lib/auth/safe-redirect'
 
 interface VerificarEmailClientProps {
   sucesso: string | null
@@ -10,7 +12,7 @@ interface VerificarEmailClientProps {
 }
 
 export default function VerificarEmailClient({ sucesso, next }: VerificarEmailClientProps) {
-  const redirectTo = next ?? '/cliente/chat'
+  const redirectTo = safeInternalRedirect(next, '/cliente/chat')
 
   return (
     <main className="min-h-screen w-full flex items-center justify-center bg-zinc-950 p-4 relative overflow-hidden font-sans">
@@ -20,13 +22,11 @@ export default function VerificarEmailClient({ sucesso, next }: VerificarEmailCl
 
       <div className="w-full max-w-md z-10">
         {/* Brand header */}
-        <div className="flex flex-col items-center mb-8">
-          <div className="h-12 w-12 rounded-2xl bg-amber-500 flex items-center justify-center shadow-lg shadow-amber-500/20 mb-3">
-            <Flame className="h-6 w-6 text-zinc-950" />
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight text-zinc-100">
-            Asados Sofía
-          </h1>
+        <div className="flex flex-col items-center mb-8 text-center">
+          <BrandLogo size="xl" showSubtitle={false} className="flex-col !gap-3" />
+          <p className="text-xs text-amber-500 font-bold tracking-widest uppercase mt-1">
+            Tradição em Assados de Domingo • Umbará
+          </p>
         </div>
 
         {/* Verification Card */}

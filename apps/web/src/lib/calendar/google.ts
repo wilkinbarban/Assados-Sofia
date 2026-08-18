@@ -2,6 +2,7 @@ import { google } from 'googleapis'
 import { createClient } from '@/lib/supabase/server'
 import crypto from 'crypto'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
+import { allowsIntegrationMock } from '@/lib/runtime/environment'
 
 /**
  * Agenda um pedido confirmado no Google Calendar.
@@ -22,6 +23,11 @@ export async function agendarPedidoNoCalendario(pedidoId: string, supabaseClient
       calendarId.includes('placeholder')
 
     if (isMockMode) {
+      if (!allowsIntegrationMock()) {
+        console.error('[Google Calendar] Credenciais ausentes ou inválidas para este ambiente.')
+        return null
+      }
+
       console.warn('[Google Calendar] Servidor rodando em modo MOCK. Credenciais de calendário ausentes ou placeholders.')
       // Simula latência de rede conforme requisito (200ms)
       await new Promise((resolve) => setTimeout(resolve, 200))
@@ -165,6 +171,11 @@ export async function atualizarPedidoNoCalendarioComoPago(
       calendarId.includes('placeholder')
 
     if (isMockMode) {
+      if (!allowsIntegrationMock()) {
+        console.error('[Google Calendar] Credenciais ausentes ou inválidas para este ambiente.')
+        return false
+      }
+
       console.warn('[Google Calendar] Servidor rodando em modo MOCK. Credenciais ausentes para atualizar evento.')
       // Simula latência de rede conforme requisito (200ms)
       await new Promise((resolve) => setTimeout(resolve, 200))
@@ -209,4 +220,3 @@ export async function atualizarPedidoNoCalendarioComoPago(
     return false
   }
 }
-

@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export type WhatsAppSofiaChannel = 'whatsapp'
-export type SofiaSleepReason = 'manual' | 'handoff_phrase'
+export type SofiaSleepReason = 'manual' | 'handoff_phrase' | 'cooldown_operador' | 'opt_out'
 export type SofiaSleepSource = 'operator' | 'meta_webhook' | 'evolution_webhook'
 
 export interface WhatsAppSofiaState {
@@ -13,6 +13,7 @@ export interface WhatsAppSofiaState {
   reason: SofiaSleepReason | null
   source: SofiaSleepSource | null
   actorUserId: string | null
+  silenciadaAte?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -24,6 +25,7 @@ export interface SetWhatsAppSofiaSleepInput {
   reason: SofiaSleepReason
   source: SofiaSleepSource
   actorUserId?: string | null
+  silenciadaAte?: string | null
 }
 
 export interface GetWhatsAppSofiaStateInput {
@@ -75,6 +77,7 @@ type WhatsAppSofiaStateRow = {
   motivo: SofiaSleepReason | null
   origem: SofiaSleepSource | null
   alterado_por: string | null
+  silenciada_ate?: string | null
   data_criacao: string
   data_atualizacao: string
 }
@@ -89,14 +92,24 @@ function getSupabaseClient(supabase?: SupabaseClient): SupabaseClient {
 }
 
 function mapState(row: WhatsAppSofiaStateRow): WhatsAppSofiaState {
+  let isSleeping = row.sofia_dormindo
+
+  // Verificar se cooldown expirou
+  if (isSleeping && row.silenciada_ate) {
+    if (new Date(row.silenciada_ate) <= new Date()) {
+      isSleeping = false
+    }
+  }
+
   return {
     id: row.id,
     clienteId: row.cliente_id,
     canal: row.canal,
-    sleeping: row.sofia_dormindo,
+    sleeping: isSleeping,
     reason: row.motivo,
     source: row.origem,
     actorUserId: row.alterado_por,
+    silenciadaAte: row.silenciada_ate || null,
     createdAt: row.data_criacao,
     updatedAt: row.data_atualizacao,
   }
@@ -124,7 +137,7 @@ export async function getWhatsAppSofiaState(
 
   const { data, error } = await supabase
     .from('whatsapp_sofia_states')
-    .select('id, cliente_id, canal, sofia_dormindo, motivo, origem, alterado_por, data_criacao, data_atualizacao')
+    .select('id, cliente_id, canal, sofia_dormindo, motivo, origem, alterado_por, silenciada_ate, data_criacao, data_atualizacao')
     .eq('cliente_id', input.clienteId)
     .eq('canal', WHATSAPP_CHANNEL)
     .maybeSingle()
@@ -151,10 +164,11 @@ export async function setWhatsAppSofiaSleep(
         motivo: input.reason,
         origem: input.source,
         alterado_por: input.actorUserId ?? null,
+        silenciada_ate: input.silenciadaAte ?? null,
       },
       { onConflict: 'cliente_id,canal' }
     )
-    .select('id, cliente_id, canal, sofia_dormindo, motivo, origem, alterado_por, data_criacao, data_atualizacao')
+    .select('id, cliente_id, canal, sofia_dormindo, motivo, origem, alterado_por, silenciada_ate, data_criacao, data_atualizacao')
     .single()
 
   if (error) {

@@ -39,6 +39,15 @@ vi.mock('@/app/actions/chat', () => ({
   processarIaChat: vi.fn().mockResolvedValue({ success: true }),
 }))
 
+// Mock Carrinho Server Actions
+vi.mock('@/app/actions/carrinho', () => ({
+  actionObterCarrinhoAtivo: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
+  actionAdicionarItemAoCarrinho: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
+  actionAtualizarQuantidadeItem: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
+  actionRemoverItemDoCarrinho: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
+  actionLimparCarrinho: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
+}))
+
 const baseConversa = {
   id: 'conversa-123',
   cliente_id: 'cliente-123',
@@ -56,7 +65,7 @@ describe('Chat PDF Validation Tests (Tasks 2.3 & 2.4)', () => {
     get result() {
       return mockFileReaderResult
     }
-    readAsArrayBuffer(blob: Blob) {
+    readAsArrayBuffer() {
       if (this.onloadend) {
         this.onloadend()
       }

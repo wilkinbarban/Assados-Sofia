@@ -73,15 +73,15 @@ function logSection(title) {
 // Setup jiti to compile and import Server Actions and Route Handlers on the fly
 const jiti = require('jiti')(__filename, {
   alias: {
-    '@': path.resolve(__dirname, '../src'),
+    '@': path.resolve(__dirname, '../apps/web/src'),
     'next/headers': path.resolve(__dirname, './mock-headers.js'),
     'next/cache': path.resolve(__dirname, './mock-cache.js')
   }
 });
 
 const mockHeaders = require('./mock-headers');
-const { gerarPreferenciaPagamento } = jiti('../src/app/actions/pedidos');
-const { POST: webhookPOST } = jiti('../src/app/api/webhooks/mercadopago/route');
+const { gerarPreferenciaPagamento } = jiti('../apps/web/src/app/actions/pedidos');
+const { POST: webhookPOST } = jiti('../apps/web/src/app/api/webhooks/mercadopago/route');
 
 // Helper to update the mock headers cookie with user session
 function setSessionCookies(session) {

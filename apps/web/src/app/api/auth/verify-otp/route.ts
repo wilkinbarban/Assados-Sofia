@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { z } from 'zod'
+import { normalizeCuritibaPhone } from '@/lib/auth/phone'
 
 const verifyOtpSchema = z.object({
   telefone: z.string().min(1, 'Telefone é obrigatório'),
@@ -33,19 +34,23 @@ export async function POST(request: Request) {
     }
 
     // 3. Sanitizar o número de telefone (Curitiba: 55419XXXXXXXX)
-    let sanitized = parsed.data.telefone.replace(/\D/g, '')
-    if (sanitized.length === 11 && sanitized.startsWith('419')) {
-      sanitized = '55' + sanitized
+    const sanitized = normalizeCuritibaPhone(parsed.data.telefone)
+    if (!sanitized) {
+      return NextResponse.json(
+        { error: 'Telefone inválido para a região de Curitiba.' },
+        { status: 400 }
+      )
     }
 
     // 4. Buscar o código ativo correspondente no banco (usando admin client)
     const supabaseAdmin = createAdminClient()
 
+    // Segurança (HS-03): Filtrar obrigatoriamente por usuario_id = user.id
     const { data: codigos, error: selectError } = await supabaseAdmin
       .from('codigos_verificacao')
       .select('*')
       .eq('telefone', sanitized)
-      .eq('codigo', parsed.data.codigo)
+      .eq('usuario_id', user.id)
       .eq('verificado', false)
       .order('data_criacao', { ascending: false })
 
@@ -66,12 +71,42 @@ export async function POST(request: Request) {
 
     const latestOtp = codigos[0]
 
+    // 4.1. Limitar número de tentativas falhas (HD-01 / Throttling)
+    if (latestOtp.tentativas >= 3) {
+      return NextResponse.json(
+        { error: 'Número máximo de tentativas de verificação excedido. Solicite um novo código.' },
+        { status: 429 }
+      )
+    }
+
     // 5. Validar tempo de expiração do código (10 minutos de validade)
     const agora = new Date()
     const expiraEm = new Date(latestOtp.expira_em)
     if (agora > expiraEm) {
       return NextResponse.json(
         { error: 'O código de verificação expirou. Solicite um novo.' },
+        { status: 400 }
+      )
+    }
+
+    // 5.1. Verificar o código digitado
+    if (latestOtp.codigo !== parsed.data.codigo) {
+      // Incrementar tentativas de forma atômica no banco de dados para evitar condições de corrida (race conditions)
+      const { error: attemptError } = await supabaseAdmin.rpc('incrementar_tentativas_otp', {
+        p_otp_id: latestOtp.id
+      })
+
+      if (attemptError) {
+        console.error('Erro ao incrementar tentativas de OTP:', attemptError)
+      }
+
+      const tentativasRestantes = 3 - (latestOtp.tentativas + 1)
+      const msgRestantes = tentativasRestantes > 0
+        ? ` Você tem mais ${tentativasRestantes} tentativa(s).`
+        : ' O código foi bloqueado.'
+
+      return NextResponse.json(
+        { error: `Código de verificação incorreto.${msgRestantes}` },
         { status: 400 }
       )
     }

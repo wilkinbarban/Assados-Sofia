@@ -11,28 +11,28 @@ export default function ClienteNav() {
   const isPerfilActive = pathname?.startsWith('/cliente/perfil') || false
 
   return (
-    <nav className="flex space-x-1" id="cliente-nav-tabs">
+    <nav className="flex space-x-1.5" id="cliente-nav-tabs">
       <Link
         href="/cliente/chat"
-        className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+        className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
           isChatActive
-            ? 'bg-zinc-900 text-white border border-zinc-800'
-            : 'text-zinc-400 hover:text-zinc-200'
+            ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm shadow-amber-500/10'
+            : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'
         }`}
       >
-        <MessageSquare className="h-4 w-4" />
-        <span>Chat</span>
+        <MessageSquare className="h-3.5 w-3.5" />
+        <span>Chat com Sofía</span>
       </Link>
       <Link
         href="/cliente/perfil"
-        className={`flex items-center space-x-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+        className={`flex items-center space-x-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
           isPerfilActive
-            ? 'bg-zinc-900 text-white border border-zinc-800'
-            : 'text-zinc-400 hover:text-zinc-200'
+            ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30 shadow-sm shadow-amber-500/10'
+            : 'text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200'
         }`}
       >
-        <User className="h-4 w-4" />
-        <span>Perfil</span>
+        <User className="h-3.5 w-3.5" />
+        <span>Meu Perfil</span>
       </Link>
     </nav>
   )

@@ -1,29 +1,49 @@
 services:
   web:
+    image: ${ASADOS_WEB_IMAGE:-asados-web:latest}
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+        - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
     container_name: asados-web
     restart: always
     ports:
-      - "3020:3000"
+      - "127.0.0.1:3020:3000"
     env_file:
       - .env
     environment:
       - PORT=3000
       - NODE_ENV=production
+      - NEXT_PUBLIC_APP_URL=https://casadeasados.duckdns.org
+      - NEXT_PUBLIC_SUPABASE_URL=https://casadeasados.duckdns.org
+      - SUPABASE_INTERNAL_URL=http://api-gw:8000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    labels:
+      com.asados.health.liveness: "http://127.0.0.1:3000/api/health/live"
+      com.asados.health.readiness: "http://127.0.0.1:3000/api/health/ready"
+    networks:
+      - app-private
+      - supabase-private
 
   evolution-api:
     image: evoapicloud/evolution-api:v2.3.7
     container_name: asados-evolution-api
     restart: always
     ports:
-      - "8086:8080"
+      - "127.0.0.1:8086:8080"
     environment:
       - SERVER_PORT=8080
       - NPM_CONFIG_UPDATE_NOTIFIER=false
-      - SERVER_URL=https://casadeasados.duckdns.org/evolution
-      - CORS_ORIGIN=*
+      - PRISMA_HIDE_UPDATE_MESSAGE=true
+      - SERVER_URL=http://evolution-api:8080
+      - CORS_ORIGIN=https://casadeasados.duckdns.org
       - CORS_METHODS=GET,POST,PUT,DELETE,OPTIONS
       - CORS_CREDENTIALS=true
       - AUTHENTICATION_TYPE=apikey
@@ -51,11 +71,22 @@ services:
       - WEBHOOK_RETRY_MAX_ATTEMPTS=5
     depends_on:
       evolution-db:
-        condition: service_started
+        condition: service_healthy
       evolution-redis:
         condition: service_healthy
     volumes:
       - evolution_store:/evolution/store
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/',{headers:{Origin:'https://casadeasados.duckdns.org'}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    labels:
+      com.asados.health.liveness: "http://127.0.0.1:8080/"
+      com.asados.health.readiness: "http://127.0.0.1:8080/"
+    networks:
+      - app-private
 
   evolution-redis:
     image: redis:7-alpine
@@ -70,6 +101,8 @@ services:
     volumes:
       - evolution_redis_data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+    networks:
+      - app-private
 
   evolution-db:
     image: postgres:16-alpine
@@ -79,11 +112,24 @@ services:
       - POSTGRES_USER=evolution
       - POSTGRES_PASSWORD=${EVOLUTION_DB_PASSWORD:?set EVOLUTION_DB_PASSWORD}
       - POSTGRES_DB=evolution
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution -d evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     volumes:
       - evolution_db_data:/var/lib/postgresql/data
+    networks:
+      - app-private
 
 volumes:
   evolution_store:
   evolution_db_data:
   evolution_redis_data:
-# Add auto-activation environment to evolution-api
+
+networks:
+  app-private:
+    name: asados-app-private
+  supabase-private:
+    name: asados-supabase-private
+    external: true

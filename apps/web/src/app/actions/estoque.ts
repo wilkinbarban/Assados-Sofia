@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import sharp from 'sharp'
+import crypto from 'node:crypto'
 import { sortProductsByOfficialOrder } from '@/lib/product-ordering'
 
 async function verificarPermissaoAdminEstoque() {
@@ -34,11 +35,11 @@ async function verificarPermissaoAdminEstoque() {
     return { authorized: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
   }
 
-  return { authorized: true, user }
+  return { authorized: true, user, supabase }
 }
 
 const criarProdutoSchema = z.object({
-  nome: z.string().min(1, 'O nome do produto é obrigatório').max(255, 'O nome deve ter no máximo 255 caracteres'),
+  nome: z.string().trim().min(1, 'O nome do produto é obrigatório').max(255, 'O nome deve ter no máximo 255 caracteres'),
   descricao: z.string().nullable().optional(),
   preco_centavos: z.number().int('O preço deve ser um valor inteiro em centavos').min(0, 'O preço deve ser maior ou igual a zero'),
   quantidade_estoque: z.number().int().min(0).default(0),
@@ -47,13 +48,12 @@ const criarProdutoSchema = z.object({
 })
 
 const atualizarProdutoSchema = z.object({
-  nome: z.string().min(1, 'O nome do produto é obrigatório').max(255, 'O nome deve ter no máximo 255 caracteres'),
+  nome: z.string().trim().min(1, 'O nome do produto é obrigatório').max(255, 'O nome deve ter no máximo 255 caracteres'),
   descricao: z.string().nullable().optional(),
   preco_centavos: z.number().int('O preço deve ser um valor inteiro em centavos').min(0, 'O preço deve ser maior ou igual a zero'),
-  quantidade_estoque: z.number().int().min(0).optional(),
   estoque_minimo: z.number().int().min(0).optional(),
   controlar_estoque: z.boolean().optional(),
-})
+}).strict()
 
 const ajustarEstoqueSchema = z.object({
   produto_id: z.string().uuid('ID de produto inválido'),
@@ -79,12 +79,15 @@ export async function criarProduto(data: {
   quantidade_estoque?: number
   estoque_minimo?: number
   controlar_estoque?: boolean
+  correlation_id?: string
 }) {
   try {
     const check = await verificarPermissaoAdminEstoque()
-    if (!check.authorized) {
+    if (!check.authorized || !check.supabase) {
       return { success: false, error: check.error }
     }
+
+    const supabase = check.supabase
 
     const validation = criarProdutoSchema.safeParse(data)
     if (!validation.success) {
@@ -95,29 +98,34 @@ export async function criarProduto(data: {
       }
     }
 
-    const adminSupabase = createAdminClient()
+    const correlationId = data.correlation_id || crypto.randomUUID()
+    if (!z.string().uuid().safeParse(correlationId).success) {
+      return { success: false, error: 'DADOS_INVALIDOS' }
+    }
 
-    const { data: produto, error } = await adminSupabase
-      .from('produtos')
-      .insert({
-        nome: validation.data.nome,
-        descricao: validation.data.descricao,
-        preco_centavos: validation.data.preco_centavos,
-        quantidade_estoque: validation.data.quantidade_estoque,
-        estoque_minimo: validation.data.estoque_minimo,
-        controlar_estoque: validation.data.controlar_estoque,
-        ativo: !(validation.data.controlar_estoque && validation.data.quantidade_estoque === 0),
+    const { data: produto, error } = await supabase
+      .rpc('criar_produto_com_estoque', {
+        p_nome: validation.data.nome,
+        p_descricao: validation.data.descricao || null,
+        p_preco_centavos: validation.data.preco_centavos,
+        p_quantidade_estoque: validation.data.quantidade_estoque,
+        p_estoque_minimo: validation.data.estoque_minimo,
+        p_controlar_estoque: validation.data.controlar_estoque,
+        p_correlation_id: correlationId,
       })
-      .select()
       .single()
 
     if (error) {
       console.error('Erro ao criar produto:', error)
+      if (error.code === '23505' || error.message?.includes('IDEMPOTENCY_CONFLICT')) {
+        return { success: false, error: 'CONFLITO_IDEMPOTENCIA' }
+      }
       return { success: false, error: `ERRO_BANCO: ${error.message}` }
     }
 
     revalidatePath('/atendimento/admin')
-    return { success: true, data: produto }
+    const produtoCriado = produto as Record<string, unknown> & { produto_id: string }
+    return { success: true, data: { ...produtoCriado, id: produtoCriado.produto_id } }
   } catch (error: any) {
     console.error('Erro na action criarProduto:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
@@ -137,9 +145,11 @@ export async function atualizarProduto(
 ) {
   try {
     const check = await verificarPermissaoAdminEstoque()
-    if (!check.authorized) {
+    if (!check.authorized || !check.supabase) {
       return { success: false, error: check.error }
     }
+
+    const supabase = check.supabase
 
     if (!id) {
       return { success: false, error: 'ID_OBRIGATORIO' }
@@ -154,8 +164,6 @@ export async function atualizarProduto(
       }
     }
 
-    const adminSupabase = createAdminClient()
-
     const updateData: Record<string, any> = {
       nome: validation.data.nome,
       descricao: validation.data.descricao,
@@ -163,20 +171,13 @@ export async function atualizarProduto(
       data_atualizacao: new Date().toISOString(),
     }
 
-    if (validation.data.quantidade_estoque !== undefined) {
-      updateData.quantidade_estoque = validation.data.quantidade_estoque
-    }
     if (validation.data.estoque_minimo !== undefined) {
       updateData.estoque_minimo = validation.data.estoque_minimo
     }
     if (validation.data.controlar_estoque !== undefined) {
       updateData.controlar_estoque = validation.data.controlar_estoque
     }
-    if (validation.data.controlar_estoque && validation.data.quantidade_estoque === 0) {
-      updateData.ativo = false
-    }
-
-    const { data: produto, error } = await adminSupabase
+    const { data: produto, error } = await supabase
       .from('produtos')
       .update(updateData)
       .eq('id', id)
@@ -256,17 +257,17 @@ export async function excluirProduto(id: string) {
 export async function alternarStatusProduto(id: string, ativo: boolean) {
   try {
     const check = await verificarPermissaoAdminEstoque()
-    if (!check.authorized) {
+    if (!check.authorized || !check.supabase) {
       return { success: false, error: check.error }
     }
+
+    const supabase = check.supabase
 
     if (!id) {
       return { success: false, error: 'ID_OBRIGATORIO' }
     }
 
-    const adminSupabase = createAdminClient()
-
-    const { data: produto, error } = await adminSupabase
+    const { data: produto, error } = await supabase
       .from('produtos')
       .update({
         ativo,
@@ -293,13 +294,17 @@ export async function ajustarEstoque(
   produto_id: string,
   quantidade: number,
   tipo: 'entrada' | 'saida' | 'ajuste' | 'cancelamento',
-  motivo?: string | null
+  motivo?: string | null,
+  correlationId?: string,
+  idempotent = false,
 ) {
   try {
     const check = await verificarPermissaoAdminEstoque()
-    if (!check.authorized) {
+    if (!check.authorized || !check.supabase) {
       return { success: false, error: check.error }
     }
+
+    const supabase = check.supabase
 
     const validation = ajustarEstoqueSchema.safeParse({ produto_id, quantidade, tipo, motivo })
     if (!validation.success) {
@@ -310,19 +315,17 @@ export async function ajustarEstoque(
       }
     }
 
-    if (!check.user) {
-      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    if (idempotent && (!correlationId || !z.string().uuid().safeParse(correlationId).success)) {
+      return { success: false, error: 'DADOS_INVALIDOS' }
     }
 
-    const adminSupabase = createAdminClient()
-
-    const { data, error } = await adminSupabase
+    const { data, error } = await supabase
       .rpc('ajustar_estoque_atomico', {
         p_produto_id: validation.data.produto_id,
         p_quantidade: validation.data.quantidade,
         p_tipo: validation.data.tipo,
         p_motivo: validation.data.motivo || null,
-        p_usuario_id: check.user.id,
+        ...(idempotent ? { p_correlation_id: correlationId, p_idempotent: true } : {}),
       })
       .single()
 
@@ -338,6 +341,10 @@ export async function ajustarEstoque(
 
       if (errorMessage.includes('ESTOQUE_INSUFICIENTE') || errorCode === '23514') {
         return { success: false, error: 'ESTOQUE_INSUFICIENTE' }
+      }
+
+      if (errorMessage.includes('IDEMPOTENCY_CONFLICT') || errorCode === '23505') {
+        return { success: false, error: 'CONFLITO_IDEMPOTENCIA' }
       }
 
       if (
@@ -446,7 +453,13 @@ export async function listarProdutos(filtro?: 'todos' | 'ativos' | 'esgotados') 
       return { success: false, error: `ERRO_BANCO: ${error.message}` }
     }
 
-    return { success: true, data: sortProductsByOfficialOrder(data || []) }
+    const products = data || []
+    return {
+      success: true,
+      data: products.some((product) => Object.hasOwn(product, 'ordem_exibicao'))
+        ? sortProductsByOfficialOrder(data || [])
+        : products,
+    }
   } catch (error: any) {
     console.error('Erro na action listarProdutos:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
@@ -460,9 +473,11 @@ export async function uploadImagemProduto(
 ) {
   try {
     const check = await verificarPermissaoAdminEstoque()
-    if (!check.authorized) {
+    if (!check.authorized || !check.supabase) {
       return { success: false, error: check.error }
     }
+
+    const supabase = check.supabase
 
     if (index !== 1 && index !== 2) {
       return { success: false, error: 'DADOS_INVALIDOS', details: { index: ['Deve ser 1 ou 2'] } }
@@ -481,21 +496,8 @@ export async function uploadImagemProduto(
       return { success: false, error: 'ARQUIVO_MUITO_GRANDE' }
     }
 
-    const adminSupabase = createAdminClient()
-
-    const { data: produto, error: findError } = await adminSupabase
-      .from('produtos')
-      .select('id')
-      .eq('id', produtoId)
-      .single()
-
-    if (findError || !produto) {
-      return { success: false, error: 'PRODUTO_NAO_ENCONTRADO' }
-    }
-
     const buffer = Buffer.from(await file.arrayBuffer())
-
-    const prefix = index === 1 ? `prod_${produtoId}` : `prod_${produtoId}_2`
+    const version = crypto.randomUUID()
 
     const full = await sharp(buffer)
       .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
@@ -507,10 +509,10 @@ export async function uploadImagemProduto(
       .webp({ quality: 80 })
       .toBuffer()
 
-    const fullPath = `${prefix}_full.webp`
-    const thumbPath = `${prefix}_thumb.webp`
+    const fullPath = `produtos/${produtoId}/${index}/${version}/full.webp`
+    const thumbPath = `produtos/${produtoId}/${index}/${version}/thumb.webp`
 
-    const { error: uploadFullError } = await adminSupabase.storage
+    const { error: uploadFullError } = await supabase.storage
       .from('produto-imagens')
       .upload(fullPath, full, { contentType: 'image/webp', upsert: true })
 
@@ -519,42 +521,94 @@ export async function uploadImagemProduto(
       return { success: false, error: `ERRO_STORAGE: ${uploadFullError.message}` }
     }
 
-    const { error: uploadThumbError } = await adminSupabase.storage
+    const { error: uploadThumbError } = await supabase.storage
       .from('produto-imagens')
       .upload(thumbPath, thumb, { contentType: 'image/webp', upsert: true })
 
     if (uploadThumbError) {
       console.error('Erro no upload da imagem thumb:', uploadThumbError)
-      await adminSupabase.storage.from('produto-imagens').remove([fullPath])
-      return { success: false, error: `ERRO_STORAGE: ${uploadThumbError.message}` }
+      const { error: removeError } = await supabase.storage.from('produto-imagens').remove([fullPath])
+      if (!removeError) return { success: false, error: `ERRO_STORAGE: ${uploadThumbError.message}` }
+
+      const { data: cleanupId, error: cleanupError } = await supabase.rpc('registrar_limpeza_imagem_pendente', {
+        p_produto_id: produtoId,
+        p_paths: [fullPath],
+        p_error: removeError.message,
+      })
+      if (cleanupError) return { success: false, error: 'LIMPEZA_PENDENTE_NAO_PERSISTIDA' }
+      return { success: false, error: `ERRO_STORAGE: ${uploadThumbError.message}`, cleanup_id: cleanupId }
     }
 
-    const updateData: Record<string, any> = {
-      data_atualizacao: new Date().toISOString(),
-    }
-
-    if (index === 1) {
-      updateData.url_imagem = fullPath
-      updateData.url_imagem_thumb = thumbPath
-    } else {
-      updateData.url_imagem_2 = fullPath
-      updateData.url_imagem_2_thumb = thumbPath
-    }
-
-    const { error: updateError } = await adminSupabase
-      .from('produtos')
-      .update(updateData)
-      .eq('id', produtoId)
+    const { data: previous, error: updateError } = await supabase
+      .rpc('substituir_imagem_produto', {
+        p_produto_id: produtoId,
+        p_slot: index,
+        p_full_path: fullPath,
+        p_thumb_path: thumbPath,
+      })
+      .single()
 
     if (updateError) {
       console.error('Erro ao atualizar URLs da imagem:', updateError)
-      return { success: false, error: `ERRO_BANCO: ${updateError.message}` }
+      const { error: removeError } = await supabase.storage.from('produto-imagens').remove([fullPath, thumbPath])
+      if (!removeError) return { success: false, error: `ERRO_BANCO: ${updateError.message}` }
+
+      const { data: cleanupId, error: cleanupError } = await supabase.rpc('registrar_limpeza_imagem_pendente', {
+        p_produto_id: produtoId,
+        p_paths: [fullPath, thumbPath],
+        p_error: removeError.message,
+      })
+      if (cleanupError) return { success: false, error: 'LIMPEZA_PENDENTE_NAO_PERSISTIDA' }
+      return { success: false, error: `ERRO_BANCO: ${updateError.message}`, cleanup_id: cleanupId }
     }
 
+    const imagemAnterior = previous as { full: string | null; thumb: string | null; cleanup_id: string | null } | null
     revalidatePath('/atendimento/admin')
-    return { success: true, data: { full: fullPath, thumb: thumbPath } }
+    const oldPaths = [imagemAnterior?.full, imagemAnterior?.thumb].filter((path): path is string => Boolean(path))
+    if (oldPaths.length === 0) return { success: true, data: { full: fullPath, thumb: thumbPath }, cleanup_pending: false, cleanup_id: imagemAnterior?.cleanup_id ?? null }
+
+    const { error: cleanupError } = await supabase.storage.from('produto-imagens').remove(oldPaths)
+    if (cleanupError) {
+      await supabase.rpc('falhar_limpeza_imagem_pendente', {
+        p_cleanup_id: imagemAnterior?.cleanup_id,
+        p_error: cleanupError.message,
+      })
+      return { success: true, data: { full: fullPath, thumb: thumbPath }, cleanup_pending: true, cleanup_id: imagemAnterior?.cleanup_id ?? null }
+    }
+
+    if (imagemAnterior?.cleanup_id) {
+      await supabase.rpc('concluir_limpeza_imagem_pendente', { p_cleanup_id: imagemAnterior.cleanup_id })
+    }
+    return { success: true, data: { full: fullPath, thumb: thumbPath }, cleanup_pending: false, cleanup_id: imagemAnterior?.cleanup_id ?? null }
   } catch (error: any) {
     console.error('Erro na action uploadImagemProduto:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+export async function reprocessarLimpezaImagemPendente(cleanupId: string) {
+  try {
+    const check = await verificarPermissaoAdminEstoque()
+    if (!check.authorized || !check.supabase) return { success: false, error: check.error }
+
+    const supabase = check.supabase
+    const { data: cleanup, error: lookupError } = await supabase
+      .rpc('obter_limpeza_imagem_pendente', { p_cleanup_id: cleanupId })
+      .single()
+    if (lookupError || !cleanup) return { success: false, error: 'LIMPEZA_PENDENTE_NAO_ENCONTRADA' }
+    const limpeza = cleanup as { paths: string[] }
+
+    if (limpeza.paths.length > 0) {
+      const { error: storageError } = await supabase.storage.from('produto-imagens').remove(limpeza.paths)
+      if (storageError) {
+        await supabase.rpc('falhar_limpeza_imagem_pendente', { p_cleanup_id: cleanupId, p_error: storageError.message })
+        return { success: false, error: `ERRO_STORAGE: ${storageError.message}` }
+      }
+    }
+
+    const { error: completeError } = await supabase.rpc('concluir_limpeza_imagem_pendente', { p_cleanup_id: cleanupId })
+    return completeError ? { success: false, error: `ERRO_BANCO: ${completeError.message}` } : { success: true }
+  } catch (error: any) {
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
 }

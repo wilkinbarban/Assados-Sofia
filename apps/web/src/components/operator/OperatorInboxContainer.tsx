@@ -9,6 +9,7 @@ import ConversationsQueue, { Conversa, Mensagem, Cliente, WhatsAppSofiaState } f
 import OperatorChatConsole from './OperatorChatConsole'
 import ClientCrmPanel from './ClientCrmPanel'
 import SofiaGlobalStatusBar from './SofiaGlobalStatusBar'
+import { notificationSound } from '@/lib/audio/notification-sound'
 
 interface OperatorInboxContainerProps {
   conversasIniciais: Conversa[]
@@ -160,7 +161,10 @@ export default function OperatorInboxContainer({
     conversasIniciais.forEach((c) => {
       buscarEAtualizarConversaCompleta(c.id)
     })
-  }, [conversasIniciais, buscarEAtualizarConversaCompleta])
+    if (!initialSofiaStatus) {
+      refreshSofiaStatus()
+    }
+  }, [conversasIniciais, buscarEAtualizarConversaCompleta, initialSofiaStatus, refreshSofiaStatus])
 
   // Configuração da escuta em Tempo Real (Supabase Realtime)
   useEffect(() => {
@@ -174,6 +178,15 @@ export default function OperatorInboxContainer({
         { event: 'INSERT', schema: 'public', table: 'mensagens' },
         async (payload) => {
           const novaMsg = payload.new as Mensagem
+          
+          if (novaMsg.remetente === 'cliente') {
+            if (typeof window !== 'undefined') {
+              const somSalvo = localStorage.getItem('asados_notificacoes_som') !== 'false'
+              if (somSalvo) {
+                notificationSound.playChime()
+              }
+            }
+          }
           
           setConversas((prevConversas) => {
             const conversaExiste = prevConversas.some((c) => c.id === novaMsg.conversa_id)

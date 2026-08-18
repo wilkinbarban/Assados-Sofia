@@ -1,48 +1,38 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildVisibleProductOrderPayload,
+  buildGlobalProductOrderPayload,
   isProductReorderingDisabled,
-  reorderProductsByVisibleDrop,
-  type Produto,
-} from '@/components/operator/ProductCRUD'
+  moveProduct,
+} from '@/lib/product-ordering'
 
-const products: Produto[] = [
-  { id: 'hidden-before', nome: 'Hidden before', descricao: null, preco_centavos: 100, ativo: false, url_imagem: null, ordem_exibicao: 1 },
-  { id: 'visible-a', nome: 'Visible A', descricao: null, preco_centavos: 100, ativo: true, url_imagem: null, ordem_exibicao: 2 },
-  { id: 'visible-b', nome: 'Visible B', descricao: null, preco_centavos: 100, ativo: true, url_imagem: null, ordem_exibicao: 3 },
-  { id: 'hidden-after', nome: 'Hidden after', descricao: null, preco_centavos: 100, ativo: false, url_imagem: null, ordem_exibicao: 4 },
+const products = [
+  { id: 'a', nome: 'A' },
+  { id: 'b', nome: 'B' },
+  { id: 'c', nome: 'C' },
 ]
 
-describe('product visible ordering helpers', () => {
-  it('reorders only products from the visible slice and preserves hidden positions', () => {
-    const result = reorderProductsByVisibleDrop(products, ['visible-a', 'visible-b'], 'visible-b', 'visible-a')
+describe('global product ordering', () => {
+  it('moves a product across the complete collection', () => {
+    expect(moveProduct(products, 'c', 'a').map(({ id }) => id)).toEqual(['c', 'a', 'b'])
+    expect(moveProduct(products, 'a', 'c').map(({ id }) => id)).toEqual(['b', 'c', 'a'])
+  })
 
-    expect(result.map((product) => product.id)).toEqual([
-      'hidden-before',
-      'visible-b',
-      'visible-a',
-      'hidden-after',
+  it('keeps the original collection when either product is unknown', () => {
+    expect(moveProduct(products, 'missing', 'a')).toBe(products)
+    expect(moveProduct(products, 'a', 'missing')).toBe(products)
+  })
+
+  it('builds one sequential payload entry for every global product', () => {
+    expect(buildGlobalProductOrderPayload(products)).toEqual([
+      { id: 'a', ordem_exibicao: 1 },
+      { id: 'b', ordem_exibicao: 2 },
+      { id: 'c', ordem_exibicao: 3 },
     ])
   })
 
-  it('returns the original sequence when the drop target is outside the visible slice', () => {
-    const result = reorderProductsByVisibleDrop(products, ['visible-a', 'visible-b'], 'visible-b', 'hidden-after')
-
-    expect(result).toBe(products)
-  })
-
-  it('builds a one-based payload from visible products only', () => {
-    const result = buildVisibleProductOrderPayload([products[2], products[1]])
-
-    expect(result).toEqual([
-      { id: 'visible-b', ordem_exibicao: 1 },
-      { id: 'visible-a', ordem_exibicao: 2 },
-    ])
-  })
-
-  it('disables reordering while search or status filters are active', () => {
+  it('disables ordering for trimmed search text or any status filter', () => {
     expect(isProductReorderingDisabled('', 'todos')).toBe(false)
-    expect(isProductReorderingDisabled('picanha', 'todos')).toBe(true)
+    expect(isProductReorderingDisabled(' picanha ', 'todos')).toBe(true)
     expect(isProductReorderingDisabled('', 'ativos')).toBe(true)
   })
 })

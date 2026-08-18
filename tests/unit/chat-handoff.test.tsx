@@ -53,15 +53,13 @@ describe('Chat Handoff & PDF Upload Database Interactions (Tasks 2.5 & 2.6)', ()
     get result() {
       return mockFileReaderResult
     }
-    readAsArrayBuffer(blob: Blob) {
+    readAsArrayBuffer() {
       if (this.onloadend) {
         this.onloadend()
       }
     }
   }
 
-  let mockInsert: any
-  let mockUpdate: any
   let insertedMessages: any[]
   let insertedComprovantes: any[]
   let updatedConversas: any[]

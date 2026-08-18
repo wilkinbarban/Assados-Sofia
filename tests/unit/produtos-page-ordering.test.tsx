@@ -62,20 +62,15 @@ function makeAuthorizedSupabaseClient() {
 }
 
 describe('ProdutosPage admin ordering query', () => {
-  it('selects ordem_exibicao and orders admin products by manual order before name', async () => {
+  it('redirects to the authoritative inventory tab without querying duplicate product data', async () => {
     const client = makeAuthorizedSupabaseClient()
     mocks.createClient.mockResolvedValue(client)
     const { default: ProdutosPage } = await import('@/app/atendimento/produtos/page')
 
-    await ProdutosPage()
+    await expect(ProdutosPage()).rejects.toThrow('redirect:/atendimento/admin?tab=estoque')
 
-    expect(client.productQuery.select).toHaveBeenCalledWith(
-      'id, nome, descricao, preco_centavos, ativo, url_imagem, ordem_exibicao, data_criacao, data_atualizacao'
-    )
-    expect(client.productQuery.order).toHaveBeenNthCalledWith(1, 'ordem_exibicao', {
-      ascending: true,
-      nullsFirst: false,
-    })
-    expect(client.productQuery.order).toHaveBeenNthCalledWith(2, 'nome', { ascending: true })
+    expect(mocks.redirect).toHaveBeenCalledWith('/atendimento/admin?tab=estoque')
+    expect(client.productQuery.select).not.toHaveBeenCalled()
+    expect(client.productQuery.order).not.toHaveBeenCalled()
   })
 })

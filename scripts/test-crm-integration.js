@@ -62,16 +62,16 @@ function logSection(title) {
 // Import actions using jiti compiled on the fly
 const jiti = require('jiti')(__filename, {
   alias: {
-    '@': path.resolve(__dirname, '../src'),
+    '@': path.resolve(__dirname, '../apps/web/src'),
     'next/headers': path.resolve(__dirname, './mock-headers.js'),
     'next/cache': path.resolve(__dirname, './mock-cache.js')
   }
 });
 
 const mockHeaders = require('./mock-headers');
-const { atualizarClienteCrm } = jiti('../src/app/actions/clientes');
-const { criarProduto } = jiti('../src/app/actions/produtos');
-const { criarPedidoOperador, confirmarPedidoOperador } = jiti('../src/app/actions/pedidos');
+const { atualizarClienteCrm } = jiti('../apps/web/src/app/actions/clientes');
+const { criarProduto } = jiti('../apps/web/src/app/actions/produtos');
+const { criarPedidoOperador, confirmarPedidoOperador } = jiti('../apps/web/src/app/actions/pedidos');
 
 // Helper to update the mock headers cookie with user session
 function setSessionCookies(session) {

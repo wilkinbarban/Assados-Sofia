@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+set +x
+readonly ROOT=/var/lib/asados/slice2
+count=0
+for directory in "$ROOT/receipts" "$ROOT/locks"; do
+  [[ -d "$directory" && ! -L "$directory" ]] || continue
+  while IFS= read -r -d '' path; do rm -f -- "$path"; count=$((count + 1)); done < <(find "$directory" -xdev -type f ! -type l -mtime +30 -print0)
+done
+logger -t asados-slice2-retention "category=retention-pruned count=$count"

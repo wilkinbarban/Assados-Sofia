@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+set +x
+
+readonly ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fail() { printf '%s\n' "$1" >&2; exit 1; }
+[[ $# -eq 0 ]] || fail invalid-wrapper-invocation
+[[ -n "${CREDENTIALS_DIRECTORY:-}" && -d "$CREDENTIALS_DIRECTORY" ]] || fail invalid-credential-handle
+credential() {
+  local path=$1
+  [[ -f "$path" && ! -L "$path" ]] || return 1
+  [[ "$(stat -c %u "$path")" == 0 && "$(stat -c %a "$path")" =~ ^[46]00$ ]] || return 1
+}
+credential "$CREDENTIALS_DIRECTORY/staging-secret" || fail invalid-credential-handle
+credential "$CREDENTIALS_DIRECTORY/staging-publishable" || fail invalid-credential-handle
+exec "$ROOT/scripts/validate-slice2-hosted-receipt.sh" --authorized-flow

@@ -1,6 +1,7 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import {
   Package,
   Plus,
@@ -14,7 +15,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   X,
-  Search
+  Search,
+  GripVertical
 } from 'lucide-react'
 import {
   listarProdutos,
@@ -27,6 +29,7 @@ import {
   uploadImagemProduto,
   removerImagemProduto
 } from '@/app/actions/estoque'
+import { reordenarProdutosVisiveis } from '@/app/actions/produtos'
 import { sortProductsByOfficialOrder } from '@/lib/product-ordering'
 
 interface Produto {
@@ -62,6 +65,11 @@ interface Movimentacao {
 type FilterType = 'todos' | 'ativos' | 'esgotados'
 const PRODUCT_FORM_ID = 'inventory-product-form'
 
+interface InventoryManagerProps {
+  perfilFuncao?: string
+  perfilAtivo?: boolean
+}
+
 function formatarPreco(centavos: number): string {
   return new Intl.NumberFormat('pt-BR', {
     style: 'currency',
@@ -82,6 +90,9 @@ function centavosParaBrl(centavos: number): string {
 
 function getSupabaseImageUrl(path: string | null): string | null {
   if (!path) return null
+  if (path.startsWith('/') || path.startsWith('http://') || path.startsWith('https://')) {
+    return path
+  }
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   if (!supabaseUrl) return null
   return `${supabaseUrl}/storage/v1/object/public/produto-imagens/${path}`
@@ -93,7 +104,8 @@ function revokeObjectUrl(url: string | null) {
   }
 }
 
-export default function InventoryManager() {
+export default function InventoryManager({ perfilFuncao, perfilAtivo }: InventoryManagerProps) {
+  const canManageInventory = perfilAtivo === true && ['admin', 'supervisor'].includes(perfilFuncao || '')
   const [produtos, setProdutos] = useState<Produto[]>([])
   const [filter, setFilter] = useState<FilterType>('todos')
   const [searchQuery, setSearchQuery] = useState('')
@@ -128,29 +140,48 @@ export default function InventoryManager() {
 
   const [isPending, setIsPending] = useState(false)
   const [adjustingProduct, setAdjustingProduct] = useState<string | null>(null)
+  const [draggedProductId, setDraggedProductId] = useState<string | null>(null)
+  const [keyboardOrderingId, setKeyboardOrderingId] = useState<string | null>(null)
+  const [isReordering, setIsReordering] = useState(false)
+  const [orderStatus, setOrderStatus] = useState('')
+  const productsRef = useRef<Produto[]>([])
+  const latestProductFetchRef = useRef(0)
+  const successMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const keyboardOrderingIdRef = useRef<string | null>(null)
+  const keyboardOriginalProductsRef = useRef<Produto[] | null>(null)
+  const keyboardCurrentProductsRef = useRef<Produto[] | null>(null)
+  const creationCorrelationIdRef = useRef<string | null>(null)
+  const adjustmentCorrelationIdsRef = useRef(new Map<string, string>())
 
   const fetchProdutos = async () => {
-    setLoading(true)
+    const fetchId = latestProductFetchRef.current + 1
+    latestProductFetchRef.current = fetchId
+    if (productsRef.current.length === 0) setLoading(true)
     setError(null)
     try {
       const res = await listarProdutos(filter === 'todos' ? undefined : filter === 'ativos' ? 'ativos' : 'esgotados')
+      if (fetchId !== latestProductFetchRef.current) return
       if (res.success && res.data) {
-        setProdutos(sortProductsByOfficialOrder(res.data))
+        const sorted = sortProductsByOfficialOrder(res.data)
+        productsRef.current = sorted
+        setProdutos(sorted)
       } else {
         setError(res.error || 'Erro ao carregar produtos')
       }
     } catch (err: unknown) {
+      if (fetchId !== latestProductFetchRef.current) return
       setError(err instanceof Error ? err.message : 'Erro inesperado')
     } finally {
-      setLoading(false)
+      if (fetchId === latestProductFetchRef.current) setLoading(false)
     }
   }
 
   useEffect(() => {
-     
+    if (!canManageInventory) return
+
     fetchProdutos()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter])
+  }, [canManageInventory, filter])
 
   useEffect(() => {
     return () => revokeObjectUrl(imagePreview1)
@@ -159,6 +190,12 @@ export default function InventoryManager() {
   useEffect(() => {
     return () => revokeObjectUrl(imagePreview2)
   }, [imagePreview2])
+
+  useEffect(() => {
+    return () => {
+      if (successMessageTimeoutRef.current) clearTimeout(successMessageTimeoutRef.current)
+    }
+  }, [])
 
   const fetchMovements = async (produtoId: string) => {
     setLoadingMovements(true)
@@ -184,6 +221,111 @@ export default function InventoryManager() {
     }
   }
 
+  const orderingEnabled = filter === 'todos' && searchQuery.trim() === ''
+
+  const moveProduct = (items: Produto[], sourceId: string, targetId: string) => {
+    const sourceIndex = items.findIndex((item) => item.id === sourceId)
+    const targetIndex = items.findIndex((item) => item.id === targetId)
+    if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return items
+
+    const next = [...items]
+    const [moved] = next.splice(sourceIndex, 1)
+    next.splice(targetIndex, 0, moved)
+    return next
+  }
+
+  const persistOrder = async (next: Produto[], previous: Produto[], moved: Produto) => {
+    setIsReordering(true)
+    productsRef.current = next
+    setProdutos(next)
+    const payload = next.map((item, index) => ({ id: item.id, ordem_exibicao: index + 1 }))
+
+    try {
+      const result = await reordenarProdutosVisiveis(payload)
+      if (!result.success) {
+        productsRef.current = previous
+        setProdutos(previous)
+        setError(result.error || 'Erro ao salvar ordem')
+        return
+      }
+
+      setOrderStatus(`${moved.nome} movido para a posição ${next.findIndex((item) => item.id === moved.id) + 1}`)
+    } catch (err: unknown) {
+      productsRef.current = previous
+      setProdutos(previous)
+      setError(err instanceof Error ? err.message : 'Erro ao salvar ordem')
+    } finally {
+      setIsReordering(false)
+    }
+  }
+
+  const handleDropProduct = (target: Produto) => {
+    if (!draggedProductId || !orderingEnabled || isReordering) return
+
+    const previous = productsRef.current
+    const moved = previous.find((item) => item.id === draggedProductId)
+    setDraggedProductId(null)
+    if (!moved) return
+
+    const next = moveProduct(previous, moved.id, target.id)
+    if (next !== previous) void persistOrder(next, previous, moved)
+  }
+
+  const handleOrderingKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, produto: Produto) => {
+    if (!orderingEnabled || isReordering) return
+
+    const activeOrderingId = keyboardOrderingIdRef.current
+    if ((event.key === 'Enter' || event.key === ' ') && activeOrderingId !== produto.id) {
+      event.preventDefault()
+      keyboardOriginalProductsRef.current = productsRef.current
+      keyboardCurrentProductsRef.current = productsRef.current
+      keyboardOrderingIdRef.current = produto.id
+      setKeyboardOrderingId(produto.id)
+      return
+    }
+
+    if (!activeOrderingId || activeOrderingId !== produto.id) return
+
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      if (keyboardOriginalProductsRef.current) {
+        productsRef.current = keyboardOriginalProductsRef.current
+        setProdutos(keyboardOriginalProductsRef.current)
+      }
+      keyboardOriginalProductsRef.current = null
+      keyboardCurrentProductsRef.current = null
+      keyboardOrderingIdRef.current = null
+      setKeyboardOrderingId(null)
+      setOrderStatus(`Movimento de ${produto.nome} cancelado`)
+      return
+    }
+
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault()
+      const current = keyboardCurrentProductsRef.current || productsRef.current
+      const index = current.findIndex((item) => item.id === produto.id)
+      const target = current[index + (event.key === 'ArrowUp' ? -1 : 1)]
+      if (target) {
+        const next = moveProduct(current, produto.id, target.id)
+        keyboardCurrentProductsRef.current = next
+        productsRef.current = next
+        flushSync(() => setProdutos(next))
+      }
+      return
+    }
+
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      const previous = keyboardOriginalProductsRef.current || productsRef.current
+      const next = keyboardCurrentProductsRef.current || productsRef.current
+      keyboardOriginalProductsRef.current = null
+      keyboardCurrentProductsRef.current = null
+      keyboardOrderingIdRef.current = null
+      setKeyboardOrderingId(null)
+      void persistOrder(next, previous, produto)
+    }
+  }
+
   const resetForm = () => {
     setNome('')
     setDescricao('')
@@ -201,7 +343,14 @@ export default function InventoryManager() {
 
   const handleNewProduct = () => {
     resetForm()
+    creationCorrelationIdRef.current = null
     setModalOpen(true)
+  }
+
+  const showSuccessMessage = (message: string) => {
+    if (successMessageTimeoutRef.current) clearTimeout(successMessageTimeoutRef.current)
+    setSuccessMsg(message)
+    successMessageTimeoutRef.current = setTimeout(() => setSuccessMsg(null), 3000)
   }
 
   const handleCloseModal = () => {
@@ -218,8 +367,8 @@ export default function InventoryManager() {
     setQuantidadeInicial(produto.quantidade_estoque)
     setEstoqueMinimo(produto.estoque_minimo)
     setControlarEstoque(produto.controlar_estoque)
-    setImagePreview1(getSupabaseImageUrl(produto.url_imagem_thumb))
-    setImagePreview2(getSupabaseImageUrl(produto.url_imagem_2_thumb))
+    setImagePreview1(getSupabaseImageUrl(produto.url_imagem_thumb || produto.url_imagem))
+    setImagePreview2(getSupabaseImageUrl(produto.url_imagem_2_thumb || produto.url_imagem_2))
     setModalOpen(true)
   }
 
@@ -227,6 +376,7 @@ export default function InventoryManager() {
     e.preventDefault()
     setError(null)
     setUploadError(null)
+    const wasEditing = editProduct !== null
 
     const precoCentavos = brlParaCentavos(precoBrl)
     if (!nome.trim()) {
@@ -244,7 +394,6 @@ export default function InventoryManager() {
         nome: nome.trim(),
         descricao: descricao.trim() || null,
         preco_centavos: precoCentavos,
-        quantidade_estoque: quantidadeInicial,
         estoque_minimo: estoqueMinimo,
         controlar_estoque: controlarEstoque,
       }
@@ -253,10 +402,13 @@ export default function InventoryManager() {
       if (editProduct) {
         res = await atualizarProduto(editProduct.id, payload)
       } else {
-        res = await criarProduto(payload)
+        const correlationId = creationCorrelationIdRef.current || crypto.randomUUID()
+        creationCorrelationIdRef.current = correlationId
+        res = await criarProduto({ ...payload, quantidade_estoque: quantidadeInicial, correlation_id: correlationId })
       }
 
       if (res.success) {
+        creationCorrelationIdRef.current = null
         // Se criou produto novo e tem imagens pendentes, fazer upload agora
         if (!editProduct && res.data?.id) {
           const novoId = res.data.id
@@ -278,8 +430,7 @@ export default function InventoryManager() {
 
         setModalOpen(false)
         resetForm()
-        setSuccessMsg(editProduct ? 'Produto atualizado com sucesso!' : 'Produto criado com sucesso!')
-        setTimeout(() => setSuccessMsg(null), 3000)
+        showSuccessMessage(wasEditing ? 'Produto atualizado com sucesso!' : 'Produto criado com sucesso!')
         fetchProdutos()
       } else {
         setError(res.error || 'Erro ao salvar produto')
@@ -298,8 +449,7 @@ export default function InventoryManager() {
       const res = await excluirProduto(deleteConfirm.id)
       if (res.success) {
         setDeleteConfirm(null)
-        setSuccessMsg('Produto excluído com sucesso!')
-        setTimeout(() => setSuccessMsg(null), 3000)
+        showSuccessMessage('Produto excluído com sucesso!')
         fetchProdutos()
       } else {
         setError(res.error || 'Erro ao excluir produto')
@@ -323,9 +473,13 @@ export default function InventoryManager() {
 
   const handleAdjustStock = async (produto: Produto, tipo: 'entrada' | 'saida', quantidade: number) => {
     setAdjustingProduct(produto.id)
+    const adjustmentKey = `${produto.id}:${tipo}`
+    const correlationId = adjustmentCorrelationIdsRef.current.get(adjustmentKey) || crypto.randomUUID()
+    adjustmentCorrelationIdsRef.current.set(adjustmentKey, correlationId)
     try {
-      const res = await ajustarEstoque(produto.id, quantidade, tipo, 'Ajuste rápido via dashboard')
+      const res = await ajustarEstoque(produto.id, quantidade, tipo, 'Ajuste rápido via dashboard', correlationId, true)
       if (res.success) {
+        adjustmentCorrelationIdsRef.current.delete(adjustmentKey)
         setProdutos(prev =>
           prev.map(p =>
             p.id === produto.id
@@ -334,6 +488,7 @@ export default function InventoryManager() {
           )
         )
       } else {
+        if (res.error?.includes('COMMITADA')) adjustmentCorrelationIdsRef.current.delete(adjustmentKey)
         setError(res.error || 'Erro ao ajustar estoque')
       }
     } catch (err: unknown) {
@@ -442,6 +597,14 @@ export default function InventoryManager() {
     return 'text-emerald-400'
   }
 
+  if (!canManageInventory) {
+    return (
+      <div role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">
+        Acesso não autorizado
+      </div>
+    )
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-full py-20">
@@ -473,7 +636,7 @@ export default function InventoryManager() {
       </div>
 
       {error && (
-        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2.5 text-xs text-red-400 shrink-0">
+          <div role="alert" className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg flex items-center gap-2.5 text-xs text-red-400 shrink-0">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
           <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-300 cursor-pointer">✕</button>
@@ -486,6 +649,8 @@ export default function InventoryManager() {
           <span>{successMsg}</span>
         </div>
       )}
+
+      <div role="status" className="sr-only" aria-live="polite">{orderStatus}</div>
 
       <div className="flex flex-col sm:flex-row items-center gap-4 shrink-0">
         <div className="relative w-full sm:w-72">
@@ -523,21 +688,26 @@ export default function InventoryManager() {
           <p className="text-xs text-zinc-500 mt-1">Crie um novo produto ou altere os filtros.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-3">
+        <div role="list" aria-label="Grade responsiva de produtos, até seis colunas" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-6 gap-3">
           {filteredProdutos.map((produto) => {
             const stockBadge = getStockBadge(produto)
             const stockColor = getStockColor(produto)
             const isExpanded = expandedProduct === produto.id
             const isAdjusting = adjustingProduct === produto.id
-            const imgUrl = getSupabaseImageUrl(produto.url_imagem_thumb)
+            const imgUrl = getSupabaseImageUrl(produto.url_imagem_thumb || produto.url_imagem)
 
             return (
               <React.Fragment key={produto.id}>
                 <div
+                  role="listitem"
                   className={`group relative bg-zinc-900/40 border rounded-xl overflow-hidden transition-all duration-300 cursor-pointer hover:-translate-y-0.5 hover:shadow-lg hover:shadow-amber-500/5 flex flex-col ${
                     isExpanded ? 'border-amber-500/40 shadow-lg shadow-amber-500/5' : 'border-zinc-800 hover:border-zinc-700'
                   }`}
                   onClick={() => handleToggleExpand(produto.id)}
+                  onDragOver={(event) => {
+                    if (orderingEnabled && draggedProductId) event.preventDefault()
+                  }}
+                  onDrop={() => handleDropProduct(produto)}
                 >
                   {/* Imagem do produto */}
                   <div className="relative h-28 bg-zinc-950 overflow-hidden">
@@ -567,6 +737,7 @@ export default function InventoryManager() {
                             : 'bg-zinc-800/80 border-zinc-700/50 text-zinc-500 hover:bg-zinc-700'
                         }`}
                         title="Alternar status"
+                        aria-label={`${produto.ativo ? 'Desativar' : 'Ativar'} ${produto.nome}`}
                       >
                         <span className={`h-1.5 w-1.5 rounded-full ${produto.ativo ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-500'}`} />
                         {produto.ativo ? 'Ativo' : 'Inativo'}
@@ -596,6 +767,7 @@ export default function InventoryManager() {
                             onClick={(e) => { e.stopPropagation(); handleAdjustStock(produto, 'saida', 1) }}
                             disabled={isAdjusting || produto.quantidade_estoque <= 0}
                             className="p-0.5 hover:bg-rose-500/10 text-zinc-500 hover:text-rose-400 rounded transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                            aria-label={`Diminuir estoque de ${produto.nome}`}
                           >
                             <Minus className="h-3 w-3" />
                           </button>
@@ -608,6 +780,7 @@ export default function InventoryManager() {
                             onClick={(e) => { e.stopPropagation(); handleAdjustStock(produto, 'entrada', 1) }}
                             disabled={isAdjusting}
                             className="p-0.5 hover:bg-emerald-500/10 text-zinc-500 hover:text-emerald-400 rounded transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                            aria-label={`Aumentar estoque de ${produto.nome}`}
                           >
                             <PlusIcon className="h-3 w-3" />
                           </button>
@@ -624,9 +797,27 @@ export default function InventoryManager() {
                     {/* Actions */}
                     <div className="flex items-center justify-end gap-1 pt-1.5 border-t border-zinc-800/50">
                       <button
+                        type="button"
+                        draggable={orderingEnabled && !isReordering}
+                        onDragStart={(event) => {
+                          event.stopPropagation()
+                          setDraggedProductId(produto.id)
+                        }}
+                        onDragEnd={() => setDraggedProductId(null)}
+                        onClick={(event) => event.stopPropagation()}
+                        onKeyDown={(event) => handleOrderingKeyDown(event, produto)}
+                        disabled={!orderingEnabled || isReordering}
+                        aria-label={`Reordenar ${produto.nome}`}
+                        aria-pressed={keyboardOrderingId === produto.id}
+                        className="p-1 hover:bg-zinc-800 hover:text-amber-500 rounded-md text-zinc-400 transition-all cursor-grab disabled:opacity-30 disabled:cursor-not-allowed"
+                      >
+                        <GripVertical className="h-3.5 w-3.5" />
+                      </button>
+                      <button
                         onClick={(e) => { e.stopPropagation(); handleEditProduct(produto) }}
                         className="p-1 hover:bg-zinc-800 hover:text-amber-500 rounded-md text-zinc-400 transition-all cursor-pointer"
                         title="Editar"
+                        aria-label={`Editar ${produto.nome}`}
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </button>
@@ -634,6 +825,7 @@ export default function InventoryManager() {
                         onClick={(e) => { e.stopPropagation(); setDeleteConfirm(produto) }}
                         className="p-1 hover:bg-rose-500/10 hover:text-rose-400 rounded-md text-zinc-400 transition-all cursor-pointer"
                         title="Excluir"
+                        aria-label={`Excluir ${produto.nome}`}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>

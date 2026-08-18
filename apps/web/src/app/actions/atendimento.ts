@@ -287,6 +287,31 @@ export async function alternarSofiaWhatsApp(clienteId: string, dormir: boolean, 
       actorUserId: check.user.id,
     })
 
+    const restaurarEstadoSofia = async () => {
+      if (estadoAnterior) {
+        await adminSupabase
+          .from('whatsapp_sofia_states')
+          .upsert(
+            {
+              cliente_id: clienteId,
+              canal: 'whatsapp',
+              sofia_dormindo: estadoAnterior.sleeping,
+              motivo: estadoAnterior.reason,
+              origem: estadoAnterior.source,
+              alterado_por: estadoAnterior.actorUserId,
+            },
+            { onConflict: 'cliente_id,canal' }
+          )
+        return
+      }
+
+      await adminSupabase
+        .from('whatsapp_sofia_states')
+        .delete()
+        .eq('cliente_id', clienteId)
+        .eq('canal', 'whatsapp')
+    }
+
     if (dormir && conversaId) {
       const { error: conversaUpdateError } = await adminSupabase
         .from('conversas')
@@ -298,6 +323,7 @@ export async function alternarSofiaWhatsApp(clienteId: string, dormir: boolean, 
         .eq('id', conversaId)
 
       if (conversaUpdateError) {
+        await restaurarEstadoSofia()
         return { success: false, error: `ERRO_ATUALIZACAO_CONVERSA: ${conversaUpdateError.message}` }
       }
     }
@@ -319,27 +345,7 @@ export async function alternarSofiaWhatsApp(clienteId: string, dormir: boolean, 
       })
 
     if (logError) {
-      if (estadoAnterior) {
-        await adminSupabase
-          .from('whatsapp_sofia_states')
-          .upsert(
-            {
-              cliente_id: clienteId,
-              canal: 'whatsapp',
-              sofia_dormindo: estadoAnterior.sleeping,
-              motivo: estadoAnterior.reason,
-              origem: estadoAnterior.source,
-              alterado_por: estadoAnterior.actorUserId,
-            },
-            { onConflict: 'cliente_id,canal' }
-          )
-      } else {
-        await adminSupabase
-          .from('whatsapp_sofia_states')
-          .delete()
-          .eq('cliente_id', clienteId)
-          .eq('canal', 'whatsapp')
-      }
+      await restaurarEstadoSofia()
 
       if (dormir && conversaId && conversaAnterior) {
         await adminSupabase
@@ -436,11 +442,30 @@ export async function enviarMensagemOperador(conversaId: string, texto: string) 
       try {
         await enviarMensagemWhatsapp(conversaId, { texto, remetente: 'operador' })
         
-        // Atualiza a data de atualização da conversa
+        // Atualiza a data de atualização e desativa IA para o operador assumir
         await supabase
           .from('conversas')
-          .update({ data_atualizacao: new Date().toISOString() })
+          .update({
+            data_atualizacao: new Date().toISOString(),
+            ia_ativa: false,
+            status: 'aberta',
+          })
           .eq('id', conversaId)
+
+        // Ativar cooldown de 30 minutos para Sofía no cliente
+        const adminSupabase = createAdminClient()
+        if ((conversa as any).cliente_id) {
+          try {
+            await adminSupabase.rpc('silenciar_sofia_cliente', {
+              p_cliente_id: (conversa as any).cliente_id,
+              p_minutos: 30,
+              p_motivo: 'cooldown_operador',
+              p_usuario_id: user.id,
+            })
+          } catch (e: any) {
+            console.warn('[Atendimento Action] Aviso ao silenciar Sofia:', e)
+          }
+        }
 
         return { success: true }
       } catch (err: any) {
@@ -470,11 +495,30 @@ export async function enviarMensagemOperador(conversaId: string, texto: string) 
         return { success: false, error: `ERRO_INSERT_MENSAGEM: ${insertError.message}` }
       }
 
-      // Atualiza data de atualização da conversa
+      // Atualiza data de atualização da conversa e desativa IA
       await supabase
         .from('conversas')
-        .update({ data_atualizacao: new Date().toISOString() })
+        .update({
+          data_atualizacao: new Date().toISOString(),
+          ia_ativa: false,
+          status: 'aberta',
+        })
         .eq('id', conversaId)
+
+      // Ativar cooldown de 30 minutos para Sofía no cliente
+      const adminSupabase = createAdminClient()
+      if ((conversa as any).cliente_id) {
+        try {
+          await adminSupabase.rpc('silenciar_sofia_cliente', {
+            p_cliente_id: (conversa as any).cliente_id,
+            p_minutos: 30,
+            p_motivo: 'cooldown_operador',
+            p_usuario_id: user.id,
+          })
+        } catch (e: any) {
+          console.warn('[Atendimento Action] Aviso ao silenciar Sofia:', e)
+        }
+      }
 
       return { success: true, mensagem: novaMensagem }
     }

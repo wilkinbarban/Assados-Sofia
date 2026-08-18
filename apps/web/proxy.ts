@@ -5,17 +5,17 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
   request.headers.set('x-pathname', pathname)
 
-  // First, call updateSession to refresh session and cookies
-  const { supabase, user, response } = await updateSession(request)
-
-  // Skip static assets, media, next internals, and API routes
+  // Health and API routes must not depend on an authentication refresh.
   if (
     pathname.startsWith('/_next') ||
     pathname.startsWith('/api') ||
     pathname.includes('.')
   ) {
-    return response
+    return NextResponse.next({ request })
   }
+
+  // Refresh sessions only for page requests.
+  const { supabase, user, response } = await updateSession(request)
 
   // 1. If user is logged in, check active status first
   if (user) {
@@ -43,7 +43,7 @@ export async function proxy(request: NextRequest) {
     // 2. Validate role-based routes
     const isAdminRoute = pathname.startsWith('/admin')
     const isAtendimentoAdminRoute = pathname === '/atendimento/admin' || pathname.startsWith('/atendimento/admin/')
-    const isAtendimentoRoute = pathname.startsWith('/atendimento')
+    const isAtendimentoRoute = pathname === '/atendimento' || pathname.startsWith('/atendimento/')
     const isDashboardRoute = pathname.startsWith('/dashboard')
     const isClienteRoute = pathname.startsWith('/cliente')
 
@@ -90,7 +90,9 @@ export async function proxy(request: NextRequest) {
       pathname.startsWith('/cliente')
 
     if (isProtected) {
-      return NextResponse.redirect(new URL('/login', request.url))
+      const redirectUrl = new URL('/login', request.url)
+      redirectUrl.searchParams.set('next', `${request.nextUrl.pathname}${request.nextUrl.search}`)
+      return NextResponse.redirect(redirectUrl)
     }
   }
 

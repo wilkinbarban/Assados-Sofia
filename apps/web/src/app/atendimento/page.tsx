@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import OperatorInboxContainer from '@/components/operator/OperatorInboxContainer'
 import { OperatorLogoutButton } from '@/components/operator/OperatorLogoutButton'
+import { BrandLogo } from '@/components/ui/BrandLogo'
 import { obterStatusSofiaAtendimento } from '@/app/actions/atendimento'
 import type { SofiaAtendimentoStatus } from '@/app/actions/atendimento'
 import type { Cliente, Conversa, Mensagem } from '@/components/operator/ConversationsQueue'
@@ -126,39 +127,64 @@ export default async function AtendimentoPage() {
   return (
     <div className="flex h-screen w-full flex-col bg-zinc-950 text-zinc-50 overflow-hidden font-sans">
       {/* Cabeçalho do Operador */}
-      <header className="flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-6 shrink-0 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-amber-500 font-bold text-zinc-950 shadow-md shadow-amber-500/10 select-none">
-            A
+      <header className="flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-900/60 px-6 shrink-0 backdrop-blur-md">
+        <div className="flex items-center gap-6">
+          <BrandLogo size="md" href="/atendimento" />
+          
+          <div className="hidden md:flex items-center gap-1 border-l border-zinc-800 pl-6">
+            <span className="text-xs font-semibold uppercase tracking-wider text-amber-500/90 bg-amber-500/10 px-2.5 py-1 rounded-md border border-amber-500/20">
+              Console de Atendimento
+            </span>
           </div>
-          <span className="font-semibold text-zinc-100 tracking-tight">Console de Atendimento Asados</span>
         </div>
+
         <div className="flex items-center gap-3">
           {['admin', 'supervisor'].includes(perfil.funcao) && (
             <Link
               href="/atendimento/admin"
-              className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-zinc-950 rounded-lg text-xs font-bold transition-all cursor-pointer select-none"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 rounded-lg text-xs font-bold shadow-md shadow-amber-500/10 transition-all cursor-pointer select-none active:scale-95"
             >
-              Painel Administrativo
+              <span>Painel Administrativo</span>
             </Link>
           )}
 
           <Link
+            href="/atendimento/pedidos"
+            className="inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
+          >
+            Pedidos
+          </Link>
+
+          <Link
+            href="/atendimento/produtos"
+            className="hidden sm:inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
+          >
+            Estoque
+          </Link>
+
+          <Link
+            href="/atendimento/conhecimento"
+            className="hidden sm:inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
+          >
+            Base RAG
+          </Link>
+
+          <Link
             href="/atendimento/perfil"
-            className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-700 transition-all cursor-pointer select-none"
+            className="px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
           >
             Meu Perfil
           </Link>
 
           <OperatorLogoutButton />
 
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
+          <div className="flex items-center gap-2 pl-2 border-l border-zinc-800">
+            <span className="relative flex h-2.5 w-2.5">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
             </span>
-            <span className="text-xs text-zinc-400 font-medium capitalize">
-              Operador: {perfil.funcao}
+            <span className="text-xs text-zinc-300 font-medium capitalize">
+              {perfil.funcao === 'admin' ? 'Administrador' : perfil.funcao === 'supervisor' ? 'Supervisor' : 'Atendente'}
             </span>
           </div>
         </div>

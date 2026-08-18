@@ -449,3 +449,179 @@ export async function cancelarPedido(pedidoId: string, correlationId = pedidoId)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
 }
+
+/**
+ * Lista pedidos com filtros para o console de atendimento e painel de pedidos.
+ */
+export async function actionListarPedidos(filtros?: {
+  status?: 'novo' | 'confirmado' | 'entregue' | 'cancelado' | 'todos'
+  clienteId?: string
+  limite?: number
+}) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized) {
+      return { success: false, error: check.error }
+    }
+
+    const { supabase } = check
+    let query = supabase
+      .from('pedidos')
+      .select(`
+        id,
+        status,
+        tipo_entrega,
+        endereco_entrega,
+        taxa_entrega_centavos,
+        total_produtos_centavos,
+        total_pedido_centavos,
+        status_pagamento,
+        meio_pagamento,
+        mercado_pago_preferencia_id,
+        google_event_id,
+        data_criacao,
+        data_atualizacao,
+        cliente_id,
+        conversa_id,
+        clientes:cliente_id (
+          id,
+          nome,
+          telefone,
+          email
+        ),
+        itens:itens_pedido (
+          id,
+          quantidade,
+          preco_unitario_centavos,
+          produtos:produto_id (
+            id,
+            nome,
+            url_imagem,
+            url_imagem_thumb
+          )
+        )
+      `)
+      .order('data_criacao', { ascending: false })
+
+    if (filtros?.status && filtros.status !== 'todos') {
+      query = query.eq('status', filtros.status)
+    }
+
+    if (filtros?.clienteId) {
+      query = query.eq('cliente_id', filtros.clienteId)
+    }
+
+    if (filtros?.limite) {
+      query = query.limit(filtros.limite)
+    } else {
+      query = query.limit(100)
+    }
+
+    const { data, error } = await query
+    if (error) {
+      console.error('[actionListarPedidos] Erro na consulta:', error)
+      return { success: false, error: error.message }
+    }
+
+    const mapped = (data || []).map((pedido: any) => ({
+      ...pedido,
+      itens: (pedido.itens || []).map((item: any) => ({
+        ...item,
+        preco_total_centavos: item.preco_total_centavos ?? ((item.preco_unitario_centavos || 0) * (item.quantidade || 1)),
+      })),
+    }))
+
+    return { success: true, data: mapped }
+  } catch (error: any) {
+    console.error('Erro na action actionListarPedidos:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Atualiza o status de um pedido (ex: confirmado -> entregue ou cancelado).
+ */
+export async function actionAtualizarStatusPedido(params: {
+  pedidoId: string
+  novoStatus: 'novo' | 'confirmado' | 'entregue' | 'cancelado'
+}) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized) {
+      return { success: false, error: check.error }
+    }
+
+    const { supabase } = check
+    const { pedidoId, novoStatus } = params
+
+    if (novoStatus === 'cancelado') {
+      const res = await cancelarPedido(pedidoId)
+      if (res.success) {
+        revalidatePath('/atendimento')
+        revalidatePath('/atendimento/pedidos')
+      }
+      return res
+    }
+
+    const updatePayload: Record<string, any> = { status: novoStatus }
+    if (novoStatus === 'entregue') {
+      updatePayload.status_pagamento = 'aprovado'
+    }
+
+    const { data, error } = await supabase
+      .from('pedidos')
+      .update(updatePayload)
+      .eq('id', pedidoId)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('[actionAtualizarStatusPedido] Erro ao atualizar status:', error)
+      return { success: false, error: error.message }
+    }
+
+    revalidatePath('/atendimento')
+    revalidatePath('/atendimento/pedidos')
+    return { success: true, data }
+  } catch (error: any) {
+    console.error('Erro na action actionAtualizarStatusPedido:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Atualiza o status do pagamento do pedido (ex: aprovado para pagamento em dinheiro ou PIX conferido).
+ */
+export async function actionAtualizarStatusPagamento(params: {
+  pedidoId: string
+  statusPagamento: 'pendente' | 'aprovado' | 'rejeitado' | 'reembolsado'
+}) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized) {
+      return { success: false, error: check.error }
+    }
+
+    const { supabase } = check
+    const { pedidoId, statusPagamento } = params
+
+    const { data, error } = await supabase
+      .from('pedidos')
+      .update({ status_pagamento: statusPagamento })
+      .eq('id', pedidoId)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('[actionAtualizarStatusPagamento] Erro ao atualizar pagamento:', error)
+      return { success: false, error: error.message }
+    }
+
+    revalidatePath('/atendimento')
+    revalidatePath('/atendimento/pedidos')
+    return { success: true, data }
+  } catch (error: any) {
+    console.error('Erro na action actionAtualizarStatusPagamento:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}

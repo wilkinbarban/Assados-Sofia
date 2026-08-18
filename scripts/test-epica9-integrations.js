@@ -57,7 +57,7 @@ function logSection(title) {
 // Import dependencies using jiti
 const jiti = require('jiti')(__filename, {
   alias: {
-    '@': path.resolve(__dirname, '../src'),
+    '@': path.resolve(__dirname, '../apps/web/src'),
     'next/headers': path.resolve(__dirname, './mock-headers.js'),
     'next/server': path.resolve(__dirname, './mock-server.js'),
     'next/cache': path.resolve(__dirname, './mock-cache.js'),
@@ -69,9 +69,9 @@ const mockHeaders = require('./mock-headers');
 const mockAdmin = require('./mock-admin');
 
 // Import the items under test
-const { obterConfiguracaoSistema } = jiti('../src/lib/config/sistema.ts');
-const { enviarMensagemWhatsapp } = jiti('../src/lib/whatsapp/send.ts');
-const { testarConexaoEvolution, obterQrCodeEvolution, testarConexaoMercadoPago } = jiti('../src/app/actions/admin.ts');
+const { obterConfiguracaoSistema } = jiti('../apps/web/src/lib/config/sistema.ts');
+const { enviarMensagemWhatsapp } = jiti('../apps/web/src/lib/whatsapp/send.ts');
+const { testarConexaoEvolution, obterQrCodeEvolution, testarConexaoMercadoPago } = jiti('../apps/web/src/app/actions/admin.ts');
 
 function setSessionCookies(session) {
   if (!session) {

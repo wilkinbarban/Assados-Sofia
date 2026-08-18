@@ -123,6 +123,17 @@ export default function SofiaGlobalStatusBar({
   onToggleChannel,
   onRefresh,
 }: SofiaGlobalStatusBarProps) {
+  if (!status) {
+    return (
+      <section className="border-b border-zinc-800 bg-zinc-950/95 px-4 py-3 shadow-sm shadow-black/20">
+        <div className="flex items-center gap-2 text-zinc-400">
+          <Loader2 className="h-4.5 w-4.5 animate-spin text-amber-500" />
+          <span className="text-xs font-semibold">Carregando status de atendimento da Sofia...</span>
+        </div>
+      </section>
+    )
+  }
+
   const canToggle = status.permissions.canToggleGlobalSofia
   const credits = status.credits
   const creditIsCurrent = credits.state === 'fresh' && credits.balanceUsd != null

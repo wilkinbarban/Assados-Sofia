@@ -27,7 +27,7 @@ describe('official product ordering contract', () => {
   })
 
   it('keeps the inventory selector on official positions and deterministic fallbacks', () => {
-    const inventoryAction = readFileSync('src/app/actions/estoque.ts', 'utf8')
+    const inventoryAction = readFileSync('apps/web/src/app/actions/estoque.ts', 'utf8')
 
     expect(inventoryAction).toMatch(/order\('ordem_exibicao',[\s\S]*order\('nome',[\s\S]*order\('id'/)
     expect(inventoryAction).toMatch(/sortProductsByOfficialOrder\(data \|\| \[\]\)/)

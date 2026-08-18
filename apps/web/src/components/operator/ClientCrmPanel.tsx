@@ -1,9 +1,11 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-import { User, Tag, FileText, MapPin, Plus, X, Save, Loader2, Star } from 'lucide-react'
+import { User, Tag, FileText, MapPin, Plus, X, Save, Loader2, Star, ShoppingCart, Package } from 'lucide-react'
 import { atualizarClienteCrm } from '@/app/actions/clientes'
 import { Cliente } from './ConversationsQueue'
+import OperatorCartPanel from './OperatorCartPanel'
+import OperatorClientOrdersList from './OperatorClientOrdersList'
 
 interface ClientCrmPanelProps {
   cliente: Cliente | null
@@ -14,6 +16,7 @@ export default function ClientCrmPanel({
   cliente,
   onClienteUpdated
 }: ClientCrmPanelProps) {
+  const [activeTab, setActiveTab] = useState<'carrinho' | 'pedidos' | 'crm'>('carrinho')
   const [endereco, setEndereco] = useState('')
   const [notas, setNotas] = useState('')
   const [score, setScore] = useState(0)
@@ -95,17 +98,71 @@ export default function ClientCrmPanel({
   }
 
   return (
-    <div className="w-80 shrink-0 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col">
-      {/* Cabeçalho */}
-      <div className="flex h-16 items-center border-b border-zinc-800 bg-zinc-900/40 px-6 shrink-0">
-        <span className="font-semibold text-zinc-100 flex items-center gap-2 text-sm uppercase tracking-wider">
-          <User className="h-4 w-4 text-amber-500" />
-          CRM do Cliente
-        </span>
+    <div className="w-80 md:w-96 shrink-0 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden">
+      {/* Barra de Abas Superiores */}
+      <div className="flex h-14 border-b border-zinc-800 bg-zinc-900/60 p-1.5 shrink-0 gap-1">
+        <button
+          type="button"
+          onClick={() => setActiveTab('carrinho')}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+            activeTab === 'carrinho'
+              ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+          }`}
+          title="Carrinho aberto e seleção de itens"
+        >
+          <ShoppingCart className="h-3.5 w-3.5" />
+          <span>Carrinho</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('pedidos')}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+            activeTab === 'pedidos'
+              ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+          }`}
+          title="Histórico de pedidos confirmados deste cliente"
+        >
+          <Package className="h-3.5 w-3.5" />
+          <span>Pedidos</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('crm')}
+          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+            activeTab === 'crm'
+              ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
+              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+          }`}
+          title="Informações de cadastro e notas do cliente"
+        >
+          <User className="h-3.5 w-3.5" />
+          <span>CRM</span>
+        </button>
       </div>
 
-      {/* Conteúdo */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+      {/* Conteúdo da Aba Selecionada */}
+      {activeTab === 'carrinho' ? (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <OperatorCartPanel
+            clienteId={cliente.id}
+            clienteNome={cliente.nome}
+          />
+        </div>
+      ) : activeTab === 'pedidos' ? (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <OperatorClientOrdersList
+            clienteId={cliente.id}
+            clienteNome={cliente.nome}
+          />
+        </div>
+      ) : (
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+          {/* Conteúdo do CRM */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-6">
         {/* Informações Básicas */}
         <div>
           <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Dados Gerais</h3>
@@ -261,6 +318,8 @@ export default function ClientCrmPanel({
           Salvar Alterações
         </button>
       </div>
+        </div>
+      )}
     </div>
   )
 }

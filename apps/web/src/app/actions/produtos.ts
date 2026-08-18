@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
@@ -34,7 +35,7 @@ const produtoSchema = z.object({
     .min(0, 'O preço deve ser maior ou igual a zero'),
   ativo: z.boolean().default(true),
   url_imagem: z.string().nullable().optional(),
-})
+}).strict()
 
 /**
  * Helper para validar se o usuário atual está autenticado, ativo
@@ -227,9 +228,7 @@ export async function alternarStatusProduto(id: string, ativo: boolean) {
 }
 
 
-/**
- * Reordena apenas os produtos visíveis enviados pela UI administrativa.
- */
+/** Reordena a coleção administrativa global completa. */
 export async function reordenarProdutosVisiveis(itens: Array<{ id: string; ordem_exibicao: number }>) {
   try {
     const check = await verificarPermissaoOperador()
@@ -237,17 +236,16 @@ export async function reordenarProdutosVisiveis(itens: Array<{ id: string; ordem
       return { success: false, error: check.error }
     }
 
-    const { supabase } = check
     const validation = reordenarProdutosVisiveisSchema.safeParse(itens)
     if (!validation.success || !hasUniqueIds(validation.data) || !hasSequentialPositions(validation.data)) {
       return { success: false, error: 'DADOS_INVALIDOS' }
     }
 
     const ids = validation.data.map((item) => item.id)
-    const { data: produtosExistentes, error: selectError } = await supabase
+    const adminSupabase = createAdminClient()
+    const { data: produtosExistentes, error: selectError } = await adminSupabase
       .from('produtos')
-      .select('id, ordem_exibicao')
-      .in('id', ids)
+      .select('id, nome, preco_centavos')
 
     if (selectError) {
       console.error('Erro ao validar produtos para reordenação:', selectError)
@@ -256,54 +254,18 @@ export async function reordenarProdutosVisiveis(itens: Array<{ id: string; ordem
 
     const idsExistentes = new Set((produtosExistentes || []).map((produto: { id: string }) => produto.id))
     if (idsExistentes.size !== ids.length || ids.some((id) => !idsExistentes.has(id))) {
-      return { success: false, error: 'PRODUTO_NAO_ENCONTRADO' }
+      return { success: false, error: 'ORDEM_GLOBAL_INCOMPLETA' }
     }
 
-    const ordemOriginalPorId = new Map(
-      (produtosExistentes || []).map((produto: { id: string; ordem_exibicao: number | null }) => [
-        produto.id,
-        produto.ordem_exibicao,
-      ])
-    )
-    const produtosAtualizados: Array<{ id: string; ordem_exibicao: number | null }> = []
-    const dataAtualizacao = new Date().toISOString()
+    const { error } = await adminSupabase.rpc('reordenar_produtos_atomico', {
+      p_itens: validation.data,
+    })
 
-    for (const item of validation.data) {
-      const { error } = await supabase
-        .from('produtos')
-        .update({
-          ordem_exibicao: item.ordem_exibicao,
-          data_atualizacao: dataAtualizacao,
-        })
-        .eq('id', item.id)
-
-      if (error) {
-        console.error('Erro ao reordenar produto:', error)
-        for (const produtoAtualizado of produtosAtualizados.reverse()) {
-          const { error: rollbackError } = await supabase
-            .from('produtos')
-            .update({
-              ordem_exibicao: produtoAtualizado.ordem_exibicao,
-              data_atualizacao: new Date().toISOString(),
-            })
-            .eq('id', produtoAtualizado.id)
-
-          if (rollbackError) {
-            console.error('Erro ao reverter reordenação de produto:', rollbackError)
-            return { success: false, error: `ERRO_BANCO_ROLLBACK: ${rollbackError.message}` }
-          }
-        }
-
-        return { success: false, error: `ERRO_BANCO: ${error.message}` }
-      }
-
-      produtosAtualizados.push({
-        id: item.id,
-        ordem_exibicao: ordemOriginalPorId.get(item.id) ?? null,
-      })
+    if (error) {
+      console.error('Erro ao reordenar produtos:', error)
+      return { success: false, error: `ERRO_BANCO: ${error.message}` }
     }
 
-    revalidatePath('/atendimento/produtos')
     return { success: true }
   } catch (error: any) {
     console.error('Erro na action reordenarProdutosVisiveis:', error)

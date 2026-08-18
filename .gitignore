@@ -15,12 +15,11 @@
 /test-results/
 /playwright-report/
 
-# next.js
-/.next/
-/out/
-
-# production
-/build
+# next.js & build output
+.next/
+out/
+dist/
+build/
 
 # misc
 .DS_Store
@@ -36,6 +35,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.local.example
 
 # local and host runtime state
 /data/
@@ -43,11 +43,21 @@ yarn-error.log*
 /uploads/
 /storage/
 /scratch/
+/scripts/scratch/
 /tmp/
 /supabase/.temp/
 /supabase/.branches/
+/ops/supabase/.env
+/ops/supabase/.env.old
+/ops/supabase/volumes/db/data/
+/ops/supabase/volumes/storage/
+/ops/backups/
 /.codex/
 /.atl/
+.omo/
+.playwright-cli/
+.playwright-mcp/
+test-results-user/
 
 # vercel
 .vercel
@@ -55,3 +65,7 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+/run-slice2-hosted-receipt.local.sh
+/scripts/run-slice2-hosted-receipt.local.sh
+# Local AI runtime state
+.atl/

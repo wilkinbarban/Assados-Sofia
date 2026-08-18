@@ -1,0 +1,11 @@
+[Unit]
+Description=Schedule the Asados Supabase backup
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+RandomizedDelaySec=20m
+Persistent=true
+Unit=asados-supabase-backup.service
+
+[Install]
+WantedBy=timers.target

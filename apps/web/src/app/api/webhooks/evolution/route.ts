@@ -4,16 +4,10 @@ import { obterConfiguracaoSistema, obterSofiaGlobalChannelConfig } from '@/lib/c
 import { processarRagPipeline } from '@/lib/ai/openrouter'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { resolveWhatsAppInboundConversation } from '@/lib/whatsapp/sofia-control'
-
-/**
- * Mask phone number for LGPD compliance in production logs
- */
-function maskPhone(phone: string): string {
-  if (!phone) return ''
-  const clean = phone.replace(/\D/g, '')
-  if (clean.length <= 8) return '********'
-  return clean.slice(0, 5) + '****' + clean.slice(-4)
-}
+import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
+import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
+import { normalizarMensagemEvolution } from '@/lib/whatsapp/inbound-normalizer'
+import { processarAcaoInterativaWhatsApp } from '@/lib/whatsapp/action-router'
 
 /**
  * Mask customer name for LGPD compliance in production logs
@@ -69,7 +63,8 @@ async function sendEvolutionScheduleMessage(phone: string, message: string): Pro
     method: 'POST',
     headers: {
       'apikey': evolutionApiKey,
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'Origin': process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org'
     },
     body: JSON.stringify({
       number: phone,
@@ -89,7 +84,8 @@ export async function POST(request: Request) {
     const evolutionApiKey = await obterConfiguracaoSistema('EVOLUTION_API_KEY')
     const webhookSecret = await obterConfiguracaoSistema('EVOLUTION_WEBHOOK_SECRET')
     const requestApiKey = request.headers.get('apikey') || request.headers.get('apiKey')
-    const requestSecret = new URL(request.url).searchParams.get('webhook_secret')
+    const requestUrl = new URL(request.url)
+    const requestSecret = request.headers.get('x-webhook-secret') || requestUrl.searchParams.get('webhook_secret')
 
     const isApiKeyAuthorized = Boolean(evolutionApiKey && requestApiKey === evolutionApiKey)
     const isWebhookSecretAuthorized = Boolean(webhookSecret && requestSecret === webhookSecret)
@@ -153,18 +149,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Mensagem de grupo/status ignorada' }, { status: 200 })
     }
 
-    let sanitizedPhone = remoteJid.split('@')[0].replace(/\D/g, '')
-    if (sanitizedPhone.length === 11 && sanitizedPhone.startsWith('419')) {
-      sanitizedPhone = '55' + sanitizedPhone
-    }
-    if (sanitizedPhone.length === 12 && sanitizedPhone.startsWith('5541')) {
-      // Número sem o prefixo 9 — adiciona o 9 após DDD
-      sanitizedPhone = sanitizedPhone.slice(0, 4) + '9' + sanitizedPhone.slice(4)
-    }
-
-    const curitibaRegex = /^55419[0-9]{8}$/
-    if (!curitibaRegex.test(sanitizedPhone)) {
-      console.log(`[Evolution Webhook] Telefone fora do padrão de Curitiba (${maskPhone(sanitizedPhone)}). Descartando silenciosamente.`)
+    const sanitizedPhone = normalizeCuritibaPhone(remoteJid.split('@')[0])
+    if (!sanitizedPhone) {
+      console.log(`[Evolution Webhook] Telefone fora do padrão de Curitiba (${maskPhone(remoteJid.split('@')[0])}). Descartando silenciosamente.`)
       return NextResponse.json({ success: true, message: 'Telefone fora do padrão descartado silenciosamente' }, { status: 200 })
     }
 
@@ -271,6 +258,61 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Erro ao salvar mensagem' }, { status: 500 })
     }
 
+    // 10. Processar Governança de Contatos (Opt-In / Opt-Out / Candidatos / Timestamps)
+    const statusContato = await processarStatusContatoInbound(supabaseAdmin, clienteId, textBody || caption || null)
+
+    if (statusContato.suprimirSofia) {
+      console.log(`[Evolution Webhook] Sofia suprimida por solicitação de opt-out para cliente ${clienteId}.`)
+      if (statusContato.mensagemRespostaCurta) {
+        try {
+          await sendEvolutionScheduleMessage(sanitizedPhone, statusContato.mensagemRespostaCurta)
+          await supabaseAdmin.from('mensagens').insert({
+            conversa_id: conversaId,
+            remetente: 'ia',
+            conteudo: statusContato.mensagemRespostaCurta,
+          })
+        } catch (err) {
+          console.error('[Evolution Webhook] Erro ao enviar resposta curta de opt-out:', err)
+        }
+      }
+      return NextResponse.json({
+        success: true,
+        message: 'Opt-out processado com sucesso',
+        data: novaMensagem,
+      }, { status: 200 })
+    }
+
+    // 10.1 Interceptar Ações Interativas (Cliques em botões de carrinho, combos, etc)
+    const norm = normalizarMensagemEvolution(body)
+    if (norm?.interactiveId) {
+      console.log(`[Evolution Webhook] Ação interativa detectada: ${norm.interactiveId} para cliente ${clienteId}`)
+      const acaoRes = await processarAcaoInterativaWhatsApp({
+        clienteId,
+        telefone: sanitizedPhone,
+        interactiveId: norm.interactiveId,
+        supabaseClient: supabaseAdmin,
+      })
+
+      if (acaoRes.handled && acaoRes.respostaTexto) {
+        try {
+          await sendEvolutionScheduleMessage(sanitizedPhone, acaoRes.respostaTexto)
+          await supabaseAdmin.from('mensagens').insert({
+            conversa_id: conversaId,
+            remetente: 'ia',
+            conteudo: acaoRes.respostaTexto,
+          })
+        } catch (sendErr) {
+          console.error('[Evolution Webhook] Erro ao enviar resposta da ação interativa:', sendErr)
+        }
+
+        return NextResponse.json({
+          success: true,
+          message: 'Ação interativa processada com sucesso',
+          data: novaMensagem,
+        }, { status: 200 })
+      }
+    }
+
     if (!sofiaGlobalWhatsApp.enabled) {
       console.log('[Evolution Webhook] Sofia globally disabled for WhatsApp. Inbound persisted without automation.')
       return NextResponse.json({ success: true, message: 'Sofia globalmente desativada para WhatsApp', data: novaMensagem }, { status: 200 })
@@ -287,7 +329,49 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Fora do horário de atendimento', data: novaMensagem }, { status: 200 })
     }
 
-    // 11. Disparar o pipeline RAG se iaAtiva for verdadeira
+    // 11. Se for anexo/comprovante (documento ou imagem de pagamento), registrar em comprovantes e responder
+    const isComprovante = mediaType === 'document' || 
+      (conteudo && (conteudo.toLowerCase().includes('comprovante') || conteudo.toLowerCase().includes('pix') || conteudo.toLowerCase().includes('pagamento')))
+
+    if (mediaType && isComprovante) {
+      console.log(`[Evolution Webhook] Comprovante/anexo detectado para cliente ${clienteId}. Registrando em comprovantes.`)
+      const urlArquivo = messageContent?.documentMessage?.url || messageContent?.imageMessage?.url || `whatsapp_media_${messageId}`
+      const nomeArquivo = messageContent?.documentMessage?.fileName || (mediaType === 'document' ? 'comprovante_whatsapp.pdf' : 'comprovante_whatsapp.jpg')
+      const tamanhoBytes = Number(messageContent?.documentMessage?.fileLength || messageContent?.imageMessage?.fileLength || 0)
+
+      try {
+        await supabaseAdmin
+          .from('comprovantes')
+          .insert({
+            cliente_id: clienteId,
+            url_arquivo: urlArquivo,
+            nome_arquivo: nomeArquivo,
+            tamanho_bytes: tamanhoBytes,
+          })
+      } catch (e: any) {
+        console.warn('[Evolution Webhook] Aviso ao salvar comprovante:', e)
+      }
+
+      const autoReplyComprovante = 'Recebemos seu comprovante de pagamento. Ele será analisado por um atendente humano em breve. Muito obrigado!'
+      try {
+        await sendEvolutionScheduleMessage(sanitizedPhone, autoReplyComprovante)
+        await supabaseAdmin.from('mensagens').insert({
+          conversa_id: conversaId,
+          remetente: 'ia',
+          conteudo: autoReplyComprovante,
+        })
+      } catch (err) {
+        console.error('[Evolution Webhook] Erro ao enviar confirmação de comprovante:', err)
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: 'Comprovante recebido e registrado com sucesso',
+        data: novaMensagem,
+      }, { status: 200 })
+    }
+
+    // 12. Disparar o pipeline RAG se iaAtiva for verdadeira
     if (iaAtiva && conteudo) {
       console.log(`[Evolution Webhook] IA ativa na conversa. Disparando processarRagPipeline em background para conversaId: ${conversaId}`)
       processarRagPipeline(conversaId, conteudo, 'whatsapp').catch((err) => {

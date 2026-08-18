@@ -1,0 +1,19 @@
+[Unit]
+Description=Prune Asados Slice 2 receipt state after 30 days
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/local/lib/asados/prune-slice2-receipts
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/var/lib/asados/slice2/receipts /var/lib/asados/slice2/locks /var/lib/asados/slice2/state

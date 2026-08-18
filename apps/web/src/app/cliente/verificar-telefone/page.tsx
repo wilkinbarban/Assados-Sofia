@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { z } from 'zod'
-import { Flame, Loader2, Smartphone, KeyRound, MessageSquare, ArrowLeft, RefreshCw, CheckCircle } from 'lucide-react'
+import { Loader2, Smartphone, KeyRound, MessageSquare, ArrowLeft, RefreshCw, CheckCircle } from 'lucide-react'
+import { BrandLogo } from '@/components/ui/BrandLogo'
 
 // Phone validation regex for Curitiba DDD 41, prefix 9, and 8 digits (e.g. 55419XXXXXXXX)
 // On client, sanitized phone format will be validated
@@ -225,15 +226,13 @@ export default function VerificarTelefonePage() {
 
       <div className="w-full max-w-md z-10 transition-all duration-300">
         {/* Brand header */}
-        <div className="flex flex-col items-center mb-8">
-          <div className="h-12 w-12 rounded-2xl bg-linear-to-tr from-red-600 to-amber-500 flex items-center justify-center shadow-lg shadow-red-500/20 mb-3">
-            <Flame className="h-6 w-6 text-white" />
-          </div>
-          <h1 className="text-3xl font-bold tracking-tight bg-linear-to-r from-white via-zinc-200 to-zinc-400 bg-clip-text text-transparent">
-            Asados Sofía
-          </h1>
+        <div className="flex flex-col items-center mb-8 text-center">
+          <BrandLogo size="xl" showSubtitle={false} className="flex-col !gap-3" />
+          <p className="text-xs text-amber-500 font-bold tracking-widest uppercase mt-1">
+            Tradição em Assados de Domingo • Umbará
+          </p>
           <p className="text-sm text-zinc-400 mt-2 text-center">
-            Validação de segurança do WhatsApp
+            Validação de segurança de celular para clientes de Curitiba
           </p>
         </div>
 
@@ -392,7 +391,7 @@ export default function VerificarTelefonePage() {
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">{canalEnvio === 'telegram' ? 'Telegram' : 'WhatsApp'} Verificado!</h2>
             <p className="text-zinc-300 max-w-[280px]">
-              Seu telefone foi vinculado com sucesso à sua conta do Asados Sofía.
+              Seu telefone foi vinculado com sucesso à sua conta da Casa de Assados Sofia.
             </p>
             <p className="text-xs text-zinc-500 mt-6">
               Carregando suas configurações de cliente...

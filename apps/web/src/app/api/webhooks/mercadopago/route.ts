@@ -1,6 +1,66 @@
 import { NextResponse } from 'next/server'
+import crypto from 'node:crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { agendarPedidoNoCalendario, atualizarPedidoNoCalendarioComoPago } from '@/lib/calendar/google'
+import { obterConfiguracaoSistema } from '@/lib/config/sistema'
+import { allowsIntegrationMock } from '@/lib/runtime/environment'
+
+const MERCADO_PAGO_MAX_SIGNATURE_AGE_MS = 5 * 60 * 1000
+
+function parseMercadoPagoSignature(header: string | null): { timestamp: string; signature: string } | null {
+  if (!header) return null
+
+  const entries = new Map(
+    header.split(',').map((entry) => {
+      const [key, value] = entry.trim().split('=', 2)
+      return [key, value]
+    })
+  )
+  const timestamp = entries.get('ts')
+  const signature = entries.get('v1')
+
+  return timestamp && signature ? { timestamp, signature } : null
+}
+
+function isMercadoPagoSignatureTimestampFresh(timestamp: string): boolean {
+  if (!/^\d{10}$|^\d{13}$/.test(timestamp)) return false
+
+  const timestampMs = timestamp.length === 10 ? Number(timestamp) * 1000 : Number(timestamp)
+  if (!Number.isSafeInteger(timestampMs)) return false
+
+  const receivedAtMs = Date.now()
+  return timestampMs <= receivedAtMs && receivedAtMs - timestampMs <= MERCADO_PAGO_MAX_SIGNATURE_AGE_MS
+}
+
+export function isMercadoPagoWebhookSignatureValid(
+  xSignature: string | null,
+  xRequestId: string | null,
+  dataId: string | null,
+  secret: string | null,
+): boolean {
+  if (!xRequestId || !dataId || !secret) return false
+
+  const parsed = parseMercadoPagoSignature(xSignature)
+  if (!parsed || !isMercadoPagoSignatureTimestampFresh(parsed.timestamp) || !/^[a-f0-9]{64}$/i.test(parsed.signature)) return false
+
+  const manifest = `id:${dataId};request-id:${xRequestId};ts:${parsed.timestamp};`
+  const expected = crypto.createHmac('sha256', secret).update(manifest).digest('hex')
+  const received = Buffer.from(parsed.signature, 'hex')
+  const expectedBuffer = Buffer.from(expected, 'hex')
+
+  return received.length === expectedBuffer.length && crypto.timingSafeEqual(received, expectedBuffer)
+}
+
+export function isMercadoPagoAccessTokenConfigured(token: string | undefined): boolean {
+  if (!token) return false
+
+  return ![
+    'placeholder',
+    'insert_here',
+    'seu_access_token_mercado_pago_aqui',
+    'your_access_token',
+  ].some((placeholder) => token.toLowerCase().includes(placeholder))
+}
 
 /**
  * Auxiliar para obter um ID ofuscado para logs seguros.
@@ -21,16 +81,17 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
     console.log(`[MercadoPago Webhook] [BG] Iniciando processamento do pagamento ${paymentIdLog}`)
 
     const token = process.env.MERCADO_PAGO_ACCESS_TOKEN
-    const isPlaceholder = !token || 
-      token.includes('placeholder') || 
-      token.includes('insert_here') || 
-      token.includes('seu_access_token_mercado_pago_aqui') ||
-      token.includes('your_access_token')
+    const isPlaceholder = !isMercadoPagoAccessTokenConfigured(token)
 
     let status: string | null = null
     let pedidoId: string | null = null
 
     if (isPlaceholder) {
+      if (!allowsIntegrationMock()) {
+        console.error(`[MercadoPago Webhook] [BG] Credenciais indisponíveis para processar ${paymentIdLog}.`)
+        return
+      }
+
       // MOCK MODE
       console.log(`[MercadoPago Webhook] [BG] Rodando em modo MOCK devido a token ausente ou placeholder.`)
       
@@ -99,7 +160,8 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
 
     // Preparar payload de atualizacao
     const updatePayload: any = {
-      status_pagamento: statusPagamentoBanco
+      status_pagamento: statusPagamentoBanco,
+      mercado_pago_pagamento_id: paymentId,
     }
     if (statusPedidoBanco) {
       updatePayload.status = statusPedidoBanco
@@ -110,11 +172,17 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
       .from('pedidos')
       .update(updatePayload)
       .eq('id', pedidoId)
+      .is('mercado_pago_pagamento_id', null)
       .select('id, google_event_id')
-      .single()
+      .maybeSingle()
 
-    if (updateError || !pedido) {
+    if (updateError) {
       console.error(`[MercadoPago Webhook] [BG] Erro ao atualizar pedido ${pedidoIdLog} no banco: ${updateError?.message || 'Pedido nao encontrado'}`)
+      return
+    }
+
+    if (!pedido) {
+      console.info(`[MercadoPago Webhook] [BG] Notificação duplicada ou pagamento já associado ao pedido ${pedidoIdLog}.`)
       return
     }
 
@@ -166,10 +234,26 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
 export async function POST(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
+    const dataId = searchParams.get('data.id')
+    const requestId = request.headers.get('x-request-id')
+    const webhookSecret = await obterConfiguracaoSistema('MERCADO_PAGO_WEBHOOK_SECRET')
+
+    if (!isMercadoPagoWebhookSignatureValid(
+      request.headers.get('x-signature'),
+      requestId,
+      dataId,
+      webhookSecret,
+    )) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+
+    if (!allowsIntegrationMock() && !isMercadoPagoAccessTokenConfigured(process.env.MERCADO_PAGO_ACCESS_TOKEN)) {
+      return NextResponse.json({ error: 'payment_processing_unavailable' }, { status: 503 })
+    }
     
     // Ler do Query Params
     let topic = searchParams.get('topic') || searchParams.get('type')
-    let paymentId = searchParams.get('id') || searchParams.get('data.id')
+    let paymentId = searchParams.get('id') || dataId
     let pedidoIdMock = searchParams.get('pedidoId') || searchParams.get('pedido_id') || searchParams.get('external_reference')
 
     // Ler do Body
@@ -196,6 +280,28 @@ export async function POST(request: Request) {
     const isPaymentTopic = !topic || topic === 'payment' || topic === 'payment.created'
 
     if (paymentIdStr && isPaymentTopic) {
+      if (!requestId) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+
+      let admission: { data: boolean | null; error: { message: string } | null }
+      try {
+        admission = await createAdminClient().rpc('admitir_webhook_mercado_pago', {
+          p_request_id: requestId,
+          p_payment_id: paymentIdStr,
+        })
+      } catch {
+        return NextResponse.json({ error: 'payment_delivery_unavailable' }, { status: 503 })
+      }
+
+      if (admission.error || admission.data === null) {
+        return NextResponse.json({ error: 'payment_delivery_unavailable' }, { status: 503 })
+      }
+
+      if (!admission.data) {
+        return NextResponse.json({ status: 'duplicate' }, { status: 200 })
+      }
+
       // 2.4 Iniciar uma Promise de execucao em background assincrona nao-bloqueante
       processarPagamentoBackground(paymentIdStr, pedidoIdMock).catch((err) => {
         console.error(`[MercadoPago Webhook] [POST] Falha ao disparar background task:`, err)

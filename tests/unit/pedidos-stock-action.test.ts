@@ -34,7 +34,7 @@ describe('order stock actions', () => {
     expect(await confirmarPedidoOperador('11111111-1111-4111-8111-111111111111')).toEqual({ success: false, error: 'CONFLITO_IDEMPOTENCIA' })
     const legacy = client({ code: '23514', message: 'EFEITOS_ESTOQUE_INDISPONIVEIS' }); mocks.createClient.mockResolvedValue(legacy.value)
     expect(await confirmarPedidoOperador('11111111-1111-4111-8111-111111111111')).toEqual({ success: false, error: 'EFEITOS_ESTOQUE_INDISPONIVEIS' })
-    const source = readFileSync('src/app/actions/pedidos.ts', 'utf8')
+    const source = readFileSync('apps/web/src/app/actions/pedidos.ts', 'utf8')
     expect(source).not.toMatch(/from\('produtos'\)[\s\S]{0,500}update\(/)
     expect(source).not.toMatch(/from\('movimentacoes_estoque'\)[\s\S]{0,300}insert\(/)
   })

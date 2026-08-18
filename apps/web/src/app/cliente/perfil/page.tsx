@@ -31,8 +31,8 @@ const telefoneSchema = z.string().refine(
 )
 
 export default function PerfilPage() {
-  const router = useRouter()
-  const supabase = createClient()
+  const { push } = useRouter()
+  const [supabase] = useState(createClient)
 
   // Session & User State
   const [userId, setUserId] = useState<string | null>(null)
@@ -103,7 +103,7 @@ export default function PerfilPage() {
         const { data: { user }, error: userError } = await supabase.auth.getUser()
 
         if (userError || !user) {
-          router.push('/login?erro=nao-autorizado')
+          push('/login?erro=nao-autorizado')
           return
         }
 
@@ -135,7 +135,7 @@ export default function PerfilPage() {
           setEndereco(cliente.endereco || '')
         } else {
           // If no client record exists, redirect to verify phone page
-          router.push('/cliente/verificar-telefone')
+          push('/cliente/verificar-telefone')
         }
       } catch (err) {
         console.error('Erro ao buscar dados do cliente:', err)
@@ -146,7 +146,7 @@ export default function PerfilPage() {
     }
 
     fetchUserData()
-  }, [])
+  }, [push, supabase])
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setTelefone(formatPhone(e.target.value))
