@@ -43,7 +43,7 @@ async function verificarPermissaoOperador() {
     return { authorized: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE', supabase }
   }
 
-  return { authorized: true, user, supabase }
+  return { authorized: true, user, perfil, supabase }
 }
 
 /**
@@ -76,11 +76,17 @@ export async function listarUsuariosAdmin() {
       return { success: false, error: `ERRO_PERFIS: ${perfisError?.message || 'Falha ao buscar perfis'}` }
     }
 
+    const { data: clientes } = await adminSupabase
+      .from('clientes')
+      .select('id, telefone')
+
     const consolidated = perfis.map((perfil) => {
       const authUser = authData.users.find((u) => u.id === perfil.id)
+      const cliente = clientes?.find((c) => c.id === perfil.id)
       return {
         ...perfil,
         email: authUser?.email || null,
+        telefone: authUser?.phone || cliente?.telefone || null,
       }
     })
 
@@ -112,6 +118,225 @@ export async function atualizarPerfilUsuario(usuarioAlvoId: string, funcao: stri
     return { success: true }
   } catch (error: any) {
     console.error('Erro na action atualizarPerfilUsuario:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Server Action: criarUsuarioAdmin
+ * Cria um novo usuário/operador no Supabase Auth e registra seu perfil na tabela perfis.
+ */
+export async function criarUsuarioAdmin(dados: {
+  nome: string
+  email: string
+  senha: string
+  funcao: 'admin' | 'supervisor' | 'vendedor' | 'cliente'
+  telefone?: string
+}) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized || !check.user || check.perfil?.funcao !== 'admin') {
+      return { success: false, error: 'ACESSO_NEGADO_APENAS_ADMINISTRADORES' }
+    }
+
+    const { nome, email, senha, funcao, telefone } = dados
+    if (!nome || !email || !senha) {
+      return { success: false, error: 'DADOS_OBRIGATORIOS_AUSENTES' }
+    }
+    if (senha.length < 6) {
+      return { success: false, error: 'SENHA_MINIMA_6_CARACTERES' }
+    }
+
+    const adminSupabase = createAdminClient()
+
+    // 1. Criar no Supabase Auth
+    const { data: authData, error: authError } = await adminSupabase.auth.admin.createUser({
+      email: email.trim().toLowerCase(),
+      password: senha,
+      email_confirm: true,
+      user_metadata: { nome: nome.trim() }
+    })
+
+    if (authError || !authData?.user) {
+      return { success: false, error: `ERRO_AUTH_CRIAR: ${authError?.message || 'Falha ao criar autenticação'}` }
+    }
+
+    const novoId = authData.user.id
+
+    // 2. Criar ou upsert no public.perfis
+    const { error: perfilError } = await adminSupabase
+      .from('perfis')
+      .upsert({
+        id: novoId,
+        nome: nome.trim(),
+        funcao: funcao || 'vendedor',
+        ativo: true
+      })
+
+    if (perfilError) {
+      return { success: false, error: `ERRO_PERFIL_CRIAR: ${perfilError.message}` }
+    }
+
+    // 3. Se for cliente e tiver telefone, registrar na tabela clientes
+    if (funcao === 'cliente' && telefone) {
+      await adminSupabase.from('clientes').upsert({
+        id: novoId,
+        nome: nome.trim(),
+        telefone: telefone.trim(),
+        email: email.trim().toLowerCase()
+      })
+    }
+
+    // 4. Log de auditoria
+    await adminSupabase.from('logs_auditoria').insert({
+      usuario_id: check.user.id,
+      acao: 'criar_usuario',
+      detalhes: {
+        usuario_criado_id: novoId,
+        nome: nome.trim(),
+        email: email.trim().toLowerCase(),
+        funcao: funcao
+      }
+    })
+
+    revalidatePath('/atendimento/admin')
+    return {
+      success: true,
+      usuario: {
+        id: novoId,
+        nome: nome.trim(),
+        email: email.trim().toLowerCase(),
+        funcao,
+        ativo: true
+      }
+    }
+  } catch (error: any) {
+    console.error('Erro na action criarUsuarioAdmin:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Server Action: editarUsuarioAdmin
+ * Permite ao Administrador atualizar todos os dados cadastrais (nome, email, telefone, função, status e redefinição de senha).
+ */
+export async function editarUsuarioAdmin(
+  usuarioAlvoId: string,
+  dados: {
+    nome: string
+    email?: string
+    telefone?: string
+    funcao?: string
+    ativo?: boolean
+    novaSenha?: string
+  }
+) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized || !check.user || check.perfil?.funcao !== 'admin') {
+      return { success: false, error: 'ACESSO_NEGADO_APENAS_ADMINISTRADORES' }
+    }
+
+    const adminSupabase = createAdminClient()
+
+    // Buscar dados atuais do alvo
+    const { data: perfilAlvo, error: getPerfilErr } = await adminSupabase
+      .from('perfis')
+      .select('*')
+      .eq('id', usuarioAlvoId)
+      .single()
+
+    if (getPerfilErr || !perfilAlvo) {
+      return { success: false, error: 'USUARIO_NAO_ENCONTRADO' }
+    }
+
+    // Proteção anti-lockout caso esteja alterando o próprio usuário ou o último admin
+    const isSelf = usuarioAlvoId === check.user.id
+    const targetRole = dados.funcao || perfilAlvo.funcao
+    const targetActive = dados.ativo !== undefined ? dados.ativo : perfilAlvo.ativo
+
+    if (isSelf && (!targetActive || targetRole !== 'admin')) {
+      return { success: false, error: 'ANTI_LOCKOUT' }
+    }
+
+    if (perfilAlvo.funcao === 'admin' && (targetRole !== 'admin' || !targetActive)) {
+      const { count: activeAdminsCount, error: countErr } = await adminSupabase
+        .from('perfis')
+        .select('*', { count: 'exact', head: true })
+        .eq('funcao', 'admin')
+        .eq('ativo', true)
+
+      if (!countErr && (activeAdminsCount || 0) <= 1) {
+        return { success: false, error: 'MINIMO_UM_ADMIN_ATIVO' }
+      }
+    }
+
+    // 1. Atualizar public.perfis
+    const nomeFinal = dados.nome?.trim() || perfilAlvo.nome
+    const { error: updPerfilErr } = await adminSupabase
+      .from('perfis')
+      .update({
+        nome: nomeFinal,
+        funcao: targetRole,
+        ativo: targetActive,
+        data_atualizacao: new Date().toISOString()
+      })
+      .eq('id', usuarioAlvoId)
+
+    if (updPerfilErr) {
+      return { success: false, error: `ERRO_ATUALIZAR_PERFIL: ${updPerfilErr.message}` }
+    }
+
+    // 2. Atualizar auth.users se email ou senha foram fornecidos
+    const authUpdates: Record<string, any> = {
+      user_metadata: { nome: nomeFinal }
+    }
+    if (dados.email && dados.email.trim() !== '') {
+      authUpdates.email = dados.email.trim().toLowerCase()
+    }
+    if (dados.novaSenha && dados.novaSenha.trim() !== '') {
+      if (dados.novaSenha.trim().length < 6) {
+        return { success: false, error: 'SENHA_MINIMA_6_CARACTERES' }
+      }
+      authUpdates.password = dados.novaSenha.trim()
+    }
+
+    const { error: authUpdErr } = await adminSupabase.auth.admin.updateUserById(usuarioAlvoId, authUpdates)
+    if (authUpdErr) {
+      console.warn('Aviso ao atualizar auth do usuário:', authUpdErr.message)
+    }
+
+    // 3. Atualizar tabela clientes se existir vínculo
+    if (dados.telefone !== undefined) {
+      await adminSupabase
+        .from('clientes')
+        .update({
+          nome: nomeFinal,
+          telefone: dados.telefone?.trim() || null,
+          email: dados.email?.trim().toLowerCase() || null
+        })
+        .eq('id', usuarioAlvoId)
+    }
+
+    // 4. Log de auditoria
+    await adminSupabase.from('logs_auditoria').insert({
+      usuario_id: check.user.id,
+      acao: 'editar_usuario',
+      detalhes: {
+        usuario_alvo_id: usuarioAlvoId,
+        nome: nomeFinal,
+        funcao_anterior: perfilAlvo.funcao,
+        funcao_nova: targetRole,
+        ativo_anterior: perfilAlvo.ativo,
+        ativo_novo: targetActive,
+        senha_redefinida: !!(dados.novaSenha && dados.novaSenha.trim() !== '')
+      }
+    })
+
+    revalidatePath('/atendimento/admin')
+    return { success: true }
+  } catch (error: any) {
+    console.error('Erro na action editarUsuarioAdmin:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
 }

@@ -23,6 +23,11 @@ import {
   LogOut,
   Trash2,
   User,
+  UserPlus,
+  Edit3,
+  Lock,
+  Mail,
+  Phone,
   Clock,
   Package,
   FileText,
@@ -38,6 +43,8 @@ import { BrandLogo } from '@/components/ui/BrandLogo'
 import { createClient } from '@/lib/supabase/client'
 import {
   atualizarPerfilUsuario,
+  criarUsuarioAdmin,
+  editarUsuarioAdmin,
   obterEstatisticasMensagens,
   obterLogsAuditoria,
   deletarUsuarioAdmin,
@@ -70,6 +77,7 @@ interface Usuario {
   funcao: string
   ativo: boolean
   email: string | null
+  telefone?: string | null
   data_criacao?: string
 }
 
@@ -176,6 +184,48 @@ export default function AdminDashboard({
   
   const [updating, setUpdating] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
+
+  // States para Modais de Edição e Criação de Usuários
+  const [editUserModal, setEditUserModal] = useState<{
+    isOpen: boolean
+    userId: string
+    nome: string
+    email: string
+    telefone: string
+    funcao: string
+    ativo: boolean
+    novaSenha: string
+  }>({
+    isOpen: false,
+    userId: '',
+    nome: '',
+    email: '',
+    telefone: '',
+    funcao: 'vendedor',
+    ativo: true,
+    novaSenha: '',
+  })
+  const [savingEditUser, setSavingEditUser] = useState(false)
+  const [editUserError, setEditUserError] = useState<string | null>(null)
+
+  const [createUserModal, setCreateUserModal] = useState<{
+    isOpen: boolean
+    nome: string
+    email: string
+    senha: string
+    funcao: 'admin' | 'supervisor' | 'vendedor' | 'cliente'
+    telefone: string
+  }>({
+    isOpen: false,
+    nome: '',
+    email: '',
+    senha: '',
+    funcao: 'vendedor',
+    telefone: '',
+  })
+  const [creatingUser, setCreatingUser] = useState(false)
+  const [createUserError, setCreateUserError] = useState<string | null>(null)
+
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   // States para Métricas
@@ -460,7 +510,130 @@ export default function AdminDashboard({
     }
   }
 
+  const handleEditUserClick = (user: Usuario) => {
+    setEditUserError(null)
+    setEditUserModal({
+      isOpen: true,
+      userId: user.id,
+      nome: user.nome || '',
+      email: user.email || '',
+      telefone: user.telefone || '',
+      funcao: user.funcao || 'vendedor',
+      ativo: user.ativo ?? true,
+      novaSenha: '',
+    })
+  }
 
+  const handleSaveEditUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSavingEditUser(true)
+    setEditUserError(null)
+    try {
+      if (!editUserModal.nome.trim()) {
+        setEditUserError('O nome do usuário é obrigatório.')
+        setSavingEditUser(false)
+        return
+      }
+
+      if (editUserModal.novaSenha && editUserModal.novaSenha.trim().length < 6) {
+        setEditUserError('A nova senha deve possuir ao menos 6 caracteres.')
+        setSavingEditUser(false)
+        return
+      }
+
+      const res = await editarUsuarioAdmin(editUserModal.userId, {
+        nome: editUserModal.nome,
+        email: editUserModal.email || undefined,
+        telefone: editUserModal.telefone || undefined,
+        funcao: editUserModal.funcao,
+        ativo: editUserModal.ativo,
+        novaSenha: editUserModal.novaSenha || undefined,
+      })
+
+      if (res.success) {
+        setUsuarios(prev =>
+          prev.map(u =>
+            u.id === editUserModal.userId
+              ? {
+                  ...u,
+                  nome: editUserModal.nome.trim(),
+                  email: editUserModal.email ? editUserModal.email.trim().toLowerCase() : u.email,
+                  telefone: editUserModal.telefone ? editUserModal.telefone.trim() : u.telefone,
+                  funcao: editUserModal.funcao,
+                  ativo: editUserModal.ativo,
+                }
+              : u
+          )
+        )
+        showToast('success', `Dados do usuário "${editUserModal.nome}" atualizados com sucesso!`)
+        setEditUserModal(prev => ({ ...prev, isOpen: false }))
+        handleRefreshLogsSilent()
+      } else {
+        let msg = 'Erro ao atualizar dados do usuário.'
+        if (res.error === 'ANTI_LOCKOUT') {
+          msg = 'Ação bloqueada: Não é permitido desativar ou rebaixar a sua própria conta de Administrador logada.'
+        } else if (res.error === 'MINIMO_UM_ADMIN_ATIVO') {
+          msg = 'Alteração rejeitada: O sistema exige a permanência de ao menos um Administrador ativo.'
+        } else if (res.error === 'SENHA_MINIMA_6_CARACTERES') {
+          msg = 'A nova senha deve ter no mínimo 6 caracteres.'
+        } else {
+          msg = res.error || msg
+        }
+        setEditUserError(msg)
+      }
+    } catch (err: any) {
+      setEditUserError(err.message || 'Erro inesperado ao salvar alterações do usuário.')
+    } finally {
+      setSavingEditUser(false)
+    }
+  }
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setCreatingUser(true)
+    setCreateUserError(null)
+    try {
+      if (!createUserModal.nome.trim() || !createUserModal.email.trim() || !createUserModal.senha.trim()) {
+        setCreateUserError('Preencha os campos obrigatórios (Nome, E-mail e Senha).')
+        setCreatingUser(false)
+        return
+      }
+
+      if (createUserModal.senha.length < 6) {
+        setCreateUserError('A senha provisória deve conter no mínimo 6 caracteres.')
+        setCreatingUser(false)
+        return
+      }
+
+      const res = await criarUsuarioAdmin({
+        nome: createUserModal.nome,
+        email: createUserModal.email,
+        senha: createUserModal.senha,
+        funcao: createUserModal.funcao,
+        telefone: createUserModal.telefone || undefined,
+      })
+
+      if (res.success && res.usuario) {
+        setUsuarios(prev => [res.usuario, ...prev])
+        showToast('success', `Membro "${createUserModal.nome}" cadastrado com sucesso!`)
+        setCreateUserModal({
+          isOpen: false,
+          nome: '',
+          email: '',
+          senha: '',
+          funcao: 'vendedor',
+          telefone: '',
+        })
+        handleRefreshLogsSilent()
+      } else {
+        setCreateUserError(res.error || 'Erro ao cadastrar novo membro.')
+      }
+    } catch (err: any) {
+      setCreateUserError(err.message || 'Erro inesperado ao cadastrar usuário.')
+    } finally {
+      setCreatingUser(false)
+    }
+  }
 
   // --- Ações de Métricas ---
 
@@ -764,6 +937,264 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
         </div>
       )}
 
+      {/* Edit User Modal */}
+      {editUserModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900/95 p-6 shadow-2xl animate-scale-up backdrop-blur-md">
+            <div className="flex items-center justify-between mb-5 border-b border-zinc-800/80 pb-4">
+              <div className="flex items-center gap-2.5 text-amber-500">
+                <Edit3 className="h-5 w-5" />
+                <h3 className="text-base font-bold text-zinc-100 tracking-tight">Editar Dados do Usuário</h3>
+              </div>
+              <button
+                onClick={() => setEditUserModal(prev => ({ ...prev, isOpen: false }))}
+                className="text-zinc-500 hover:text-zinc-300 p-1.5 rounded-lg hover:bg-zinc-800/40 transition-all"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditUser} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5 text-amber-400" />
+                  Nome Completo
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editUserModal.nome}
+                  onChange={e => setEditUserModal(prev => ({ ...prev, nome: e.target.value }))}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+                  placeholder="Nome do operador"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                    <Mail className="h-3.5 w-3.5 text-zinc-400" />
+                    E-mail
+                  </label>
+                  <input
+                    type="email"
+                    value={editUserModal.email}
+                    onChange={e => setEditUserModal(prev => ({ ...prev, email: e.target.value }))}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+                    placeholder="email@exemplo.com"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                    <Phone className="h-3.5 w-3.5 text-zinc-400" />
+                    Telefone / WhatsApp
+                  </label>
+                  <input
+                    type="text"
+                    value={editUserModal.telefone}
+                    onChange={e => setEditUserModal(prev => ({ ...prev, telefone: e.target.value }))}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none font-mono"
+                    placeholder="55419XXXXXXXX"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-zinc-300">Função no Sistema</label>
+                  <select
+                    value={editUserModal.funcao}
+                    onChange={e => setEditUserModal(prev => ({ ...prev, funcao: e.target.value }))}
+                    disabled={editUserModal.userId === usuarioLogado.id}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none capitalize disabled:opacity-50"
+                  >
+                    <option value="admin">Administrador</option>
+                    <option value="supervisor">Supervisor</option>
+                    <option value="vendedor">Vendedor</option>
+                    <option value="cliente">Cliente</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-zinc-300">Status da Conta</label>
+                  <select
+                    value={editUserModal.ativo ? 'true' : 'false'}
+                    onChange={e => setEditUserModal(prev => ({ ...prev, ativo: e.target.value === 'true' }))}
+                    disabled={editUserModal.userId === usuarioLogado.id}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none disabled:opacity-50"
+                  >
+                    <option value="true">Ativo</option>
+                    <option value="false">Inativo (Bloqueado)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 pt-2 border-t border-zinc-800/60">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                  <Lock className="h-3.5 w-3.5 text-amber-400" />
+                  Redefinir Senha de Acesso
+                </label>
+                <input
+                  type="password"
+                  value={editUserModal.novaSenha}
+                  onChange={e => setEditUserModal(prev => ({ ...prev, novaSenha: e.target.value }))}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+                  placeholder="Deixe em branco para manter a senha atual"
+                />
+                <p className="text-[11px] text-zinc-500">Mínimo de 6 caracteres caso queira alterar a senha do usuário.</p>
+              </div>
+
+              {editUserError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-3 text-xs text-rose-400 font-medium">
+                  {editUserError}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800/40">
+                <button
+                  type="button"
+                  onClick={() => setEditUserModal(prev => ({ ...prev, isOpen: false }))}
+                  disabled={savingEditUser}
+                  className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-2.5 text-xs font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors cursor-pointer disabled:opacity-50 active:scale-95"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingEditUser}
+                  className="flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-zinc-950 px-5 py-2.5 text-xs font-bold shadow-lg shadow-amber-500/10 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {savingEditUser && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-950" />}
+                  Salvar Alterações
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Create User Modal */}
+      {createUserModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in">
+          <div className="w-full max-w-lg rounded-2xl border border-zinc-800 bg-zinc-900/95 p-6 shadow-2xl animate-scale-up backdrop-blur-md">
+            <div className="flex items-center justify-between mb-5 border-b border-zinc-800/80 pb-4">
+              <div className="flex items-center gap-2.5 text-amber-500">
+                <UserPlus className="h-5 w-5" />
+                <h3 className="text-base font-bold text-zinc-100 tracking-tight">Cadastrar Novo Membro da Equipe</h3>
+              </div>
+              <button
+                onClick={() => setCreateUserModal(prev => ({ ...prev, isOpen: false }))}
+                className="text-zinc-500 hover:text-zinc-300 p-1.5 rounded-lg hover:bg-zinc-800/40 transition-all"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateUser} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                  <User className="h-3.5 w-3.5 text-amber-400" />
+                  Nome Completo *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={createUserModal.nome}
+                  onChange={e => setCreateUserModal(prev => ({ ...prev, nome: e.target.value }))}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+                  placeholder="Ex: Carlos Oliveira"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                  <Mail className="h-3.5 w-3.5 text-zinc-400" />
+                  E-mail de Acesso *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={createUserModal.email}
+                  onChange={e => setCreateUserModal(prev => ({ ...prev, email: e.target.value }))}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+                  placeholder="carlos@casadeasados.com.br"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                    <Lock className="h-3.5 w-3.5 text-amber-400" />
+                    Senha Provisória *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={createUserModal.senha}
+                    onChange={e => setCreateUserModal(prev => ({ ...prev, senha: e.target.value }))}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none"
+                    placeholder="Mínimo 6 dígitos"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-zinc-300">Função</label>
+                  <select
+                    value={createUserModal.funcao}
+                    onChange={e => setCreateUserModal(prev => ({ ...prev, funcao: e.target.value as any }))}
+                    className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 focus:border-amber-500 focus:outline-none capitalize"
+                  >
+                    <option value="vendedor">Vendedor (Atendente)</option>
+                    <option value="supervisor">Supervisor</option>
+                    <option value="admin">Administrador</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                  <Phone className="h-3.5 w-3.5 text-zinc-400" />
+                  Telefone / WhatsApp (Opcional)
+                </label>
+                <input
+                  type="text"
+                  value={createUserModal.telefone}
+                  onChange={e => setCreateUserModal(prev => ({ ...prev, telefone: e.target.value }))}
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-amber-500 focus:outline-none font-mono"
+                  placeholder="55419XXXXXXXX"
+                />
+              </div>
+
+              {createUserError && (
+                <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-3 text-xs text-rose-400 font-medium">
+                  {createUserError}
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 pt-3 border-t border-zinc-800/40">
+                <button
+                  type="button"
+                  onClick={() => setCreateUserModal(prev => ({ ...prev, isOpen: false }))}
+                  disabled={creatingUser}
+                  className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-2.5 text-xs font-semibold text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors cursor-pointer disabled:opacity-50 active:scale-95"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={creatingUser}
+                  className="flex items-center gap-1.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-zinc-950 px-5 py-2.5 text-xs font-bold shadow-lg shadow-amber-500/10 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {creatingUser && <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-950" />}
+                  Cadastrar Membro
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Sidebar Navigation */}
       <aside className="w-72 shrink-0 border-r border-zinc-800/80 bg-zinc-950/80 p-5 flex flex-col justify-between backdrop-blur-md overflow-y-auto">
         <div className="space-y-6">
@@ -996,15 +1427,35 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                   Gerencie funções, permissões e status de acesso dos atendentes, supervisores e clientes.
                 </p>
               </div>
-              <div className="relative w-full sm:w-72">
-                <Search className="absolute left-3.5 top-3 h-4 w-4 text-zinc-500" />
-                <input
-                  type="text"
-                  placeholder="Buscar por nome ou e-mail..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 bg-zinc-900/40 border border-zinc-800 focus:border-amber-500/80 rounded-xl text-sm text-zinc-200 placeholder-zinc-500 outline-none transition-all"
-                />
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateUserError(null)
+                    setCreateUserModal({
+                      isOpen: true,
+                      nome: '',
+                      email: '',
+                      senha: '',
+                      funcao: 'vendedor',
+                      telefone: '',
+                    })
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 font-bold text-zinc-950 text-xs rounded-xl shadow-md shadow-amber-500/10 transition-all cursor-pointer shrink-0 active:scale-95"
+                >
+                  <UserPlus className="h-4 w-4" />
+                  <span>Novo Membro</span>
+                </button>
+                <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-3.5 top-3 h-4 w-4 text-zinc-500" />
+                  <input
+                    type="text"
+                    placeholder="Buscar por nome ou e-mail..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2.5 bg-zinc-900/40 border border-zinc-800 focus:border-amber-500/80 rounded-xl text-sm text-zinc-200 placeholder-zinc-500 outline-none transition-all"
+                  />
+                </div>
               </div>
             </div>
 
@@ -1048,7 +1499,7 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                   <thead>
                     <tr className="border-b border-zinc-800 bg-zinc-900/30 text-xs font-bold text-zinc-400 uppercase tracking-wider">
                       <th className="px-6 py-4">Nome</th>
-                      <th className="px-6 py-4">E-mail</th>
+                      <th className="px-6 py-4">E-mail / Telefone</th>
                       <th className="px-6 py-4">Função</th>
                       <th className="px-6 py-4 text-center">Status</th>
                       <th className="px-6 py-4 text-center">Ações</th>
@@ -1076,8 +1527,17 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                               </div>
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-zinc-400 font-mono text-xs">
-                            {user.email || 'Não cadastrado'}
+                          <td className="px-6 py-4">
+                            <div className="space-y-0.5">
+                              <div className="text-zinc-300 font-mono text-xs">
+                                {user.email || 'Sem e-mail'}
+                              </div>
+                              {user.telefone && (
+                                <div className="text-zinc-500 font-mono text-[11px] flex items-center gap-1">
+                                  <span>{user.telefone}</span>
+                                </div>
+                              )}
+                            </div>
                           </td>
                           <td className="px-6 py-4">
                             <select
@@ -1102,7 +1562,15 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                             </div>
                           </td>
                           <td className="px-6 py-4 text-center">
-                            <div className="flex justify-center">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleEditUserClick(user)}
+                                className="p-2 text-zinc-400 hover:text-amber-400 hover:bg-amber-500/10 rounded-lg transition-all cursor-pointer"
+                                title="Editar dados cadastrais e redefinir senha"
+                              >
+                                <Edit3 className="h-4 w-4" />
+                              </button>
                               <button
                                 type="button"
                                 onClick={() => handleDeleteUserClick(user)}
