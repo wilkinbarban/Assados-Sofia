@@ -7,6 +7,8 @@ import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
 import { normalizeCuritibaPhone, isCuritibaPhone } from '@/lib/auth/phone'
 import { formatarCardapioResumido } from '@/lib/cardapio/formatar'
 import { gerarCatalogoCardsCompleto, obterCartaoCombo } from '@/lib/cardapio/cards'
+import { classifySofiaRequestTier } from '@/lib/ai/router'
+import { isOmniRouteEnabled, chamarOmniRouteGateway, isLegacyFallbackEnabled } from '@/lib/ai/omniroute'
 
 /**
  * Verifica se as chaves da API do OpenRouter não estão configuradas ou possuem valores de placeholder
@@ -214,6 +216,7 @@ export async function processarRagPipeline(
 
   // 5.1 Buscar contexto do carrinho ativo do cliente
   let contextoCarrinho = ''
+  let cartAtivo: any = null
   try {
     const cartRes = await supabase
       ?.from?.('carrinhos')
@@ -221,7 +224,7 @@ export async function processarRagPipeline(
       ?.eq?.('cliente_id', (conversa as any).cliente_id)
       ?.eq?.('status', 'aberto')
       ?.maybeSingle?.()
-    const cartAtivo = cartRes?.data
+    cartAtivo = cartRes?.data
 
     if (cartAtivo && cartAtivo.itens_carrinho && cartAtivo.itens_carrinho.length > 0) {
       const itensTxt = cartAtivo.itens_carrinho
@@ -289,10 +292,40 @@ ${historicoMensagens || 'Sem histórico anterior.'}
 ${regraIdiomaRodape}`
 
   let respostaIa = ''
+
+  // 6.1 Classificação de Negócio em 3 Níveis (Sofia Business Router)
+  const classification = classifySofiaRequestTier({
+    mensagemCliente,
+    valorCarrinhoCentavos: cartAtivo?.total_centavos || 0,
+    itensCarrinhoCount: cartAtivo?.itens_carrinho?.length || 0,
+  })
+  console.info(`[RAG Pipeline] Tier de Negócio classificado: ${classification.tier} (${classification.modelAlias}) - Motivo: ${classification.motivo}`)
+
+  // 6.2 Tentativa primária via OmniRoute Gateway (quando habilitado via Feature Flag)
+  if (isOmniRouteEnabled()) {
+    console.info(`[RAG Pipeline] Invocando OmniRoute Gateway com modelo: ${classification.modelAlias}`)
+    const omniResult = await chamarOmniRouteGateway({
+      model: classification.modelAlias,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `[LEMBRETE DO SISTEMA: Você deve responder APENAS em PORTUGUÊS DO BRASIL. Não importa o idioma da mensagem abaixo, sua resposta DEVE ser em português.]\n\nMensagem do cliente:\n${mensagemCliente}` }
+      ],
+      temperature: 0.1
+    })
+
+    if (omniResult.success && omniResult.content) {
+      respostaIa = omniResult.content
+      console.info(`[RAG Pipeline] OmniRoute respondeu com sucesso em ${omniResult.latenciaMs}ms (modelo: ${omniResult.modelResoluvel})`)
+    } else {
+      console.warn(`[RAG Pipeline] Falha no OmniRoute Gateway (${omniResult.error}). Verificando fallback...`)
+    }
+  }
+
+  // 6.3 Fallback Legacy (OpenRouter / DeepSeek direto) se OmniRoute não foi executado ou falhou
   const apiKey = await obterConfiguracaoSistema('OPENROUTER_API_KEY')
   let usarMock = isOpenRouterMockMode(apiKey)
 
-  if (!usarMock && apiKey) {
+  if (!respostaIa && !usarMock && apiKey && isLegacyFallbackEnabled()) {
     try {
       const isDeepSeek = !apiKey.includes('sk-or-') && apiKey.startsWith('sk-')
 
@@ -338,12 +371,12 @@ ${regraIdiomaRodape}`
         throw new Error('OpenRouter retornou resposta vazia.')
       }
     } catch (err) {
-      console.warn('[RAG Pipeline] Falha ao chamar OpenRouter. Ativando Modo Mock de contingência. Erro:', err)
+      console.warn('[RAG Pipeline] Falha ao chamar OpenRouter legacy. Ativando Modo Mock de contingência. Erro:', err)
       usarMock = true
     }
   }
 
-  if (usarMock) {
+  if (!respostaIa && (usarMock || !apiKey)) {
     if (!allowsIntegrationMock()) {
       console.error('[RAG Pipeline] Provedor de IA indisponível para este ambiente.')
       return { sucesso: false, error: 'IA_INDISPONIVEL' }

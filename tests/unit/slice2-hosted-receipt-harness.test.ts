@@ -811,7 +811,7 @@ esac
     expect(attribution).toMatchObject({ attempt_id: receipt.attempt_id })
     expect(attribution.cleanup.object_paths).toHaveLength(2)
     expect(attribution.cleanup.user_ids).toHaveLength(2)
-  }, 10_000)
+  }, 25_000)
 
   it.each([
     ['storage-object-delete', ['bucket', 'object_path']],

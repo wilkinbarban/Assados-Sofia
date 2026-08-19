@@ -31,6 +31,7 @@ services:
     networks:
       - app-private
       - supabase-private
+      - portafolio-net
 
   evolution-api:
     image: evoapicloud/evolution-api:v2.3.7
@@ -133,3 +134,7 @@ networks:
   supabase-private:
     name: asados-supabase-private
     external: true
+  portafolio-net:
+    name: portafolio_default
+    external: true
+
