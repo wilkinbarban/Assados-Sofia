@@ -49,7 +49,7 @@ describe('Integrações do Sistema', () => {
     render(<AdminDashboard {...props} />)
     expect(await screen.findByRole('heading', { name: 'Integrações do Sistema' })).toBeInTheDocument()
     const options = screen.getAllByRole('article').map(option => option.getAttribute('aria-label'))
-    expect(options).toEqual(['WhatsApp', 'Telegram', 'OpenRouter', 'Google Calendar', 'Mercado Pago'])
+    expect(options).toEqual(['WhatsApp', 'OmniRoute AI Gateway', 'Telegram', 'Google Calendar', 'Mercado Pago'])
     expect(screen.getAllByRole('article').every(option => !option.hasAttribute('draggable'))).toBe(true)
   })
 

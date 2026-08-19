@@ -1143,8 +1143,10 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                   onProvedorChange={setProvedorAtivo}
                 />
               </article>
+              <article aria-label="OmniRoute AI Gateway" className="lg:col-span-2">
+                <LlmApiCard initialConfigs={systemConfigs} showToast={showToast} />
+              </article>
               <article aria-label="Telegram"><TelegramBotCard initialConfigs={systemConfigs} showToast={showToast} /></article>
-              <article aria-label="OpenRouter"><LlmApiCard initialConfigs={systemConfigs} showToast={showToast} /></article>
               <article aria-label="Google Calendar">
                 <GoogleCalendarCard initialConfigs={systemConfigs} showToast={showToast} calendarConfig={calendarConfig} />
               </article>

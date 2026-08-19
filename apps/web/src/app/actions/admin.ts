@@ -691,6 +691,147 @@ export async function testarConexaoLLM(apiKey: string, model: string) {
 }
 
 /**
+ * Server Action: testarConexaoOmniRoute
+ * Testa a conexão e resolução do OmniRoute Gateway com um combo/tier específico.
+ */
+export async function testarConexaoOmniRoute(baseUrl: string, apiKey: string, modelOrTier: string) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized || !check.user) {
+      return { success: false, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    const host = (baseUrl && baseUrl.trim()) || process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128'
+    const key = (apiKey && apiKey.trim()) || process.env.OMNIROUTE_API_KEY || ''
+    const targetModel = modelOrTier || 'business-economy'
+
+    if (!key || key.toLowerCase().includes('placeholder')) {
+      return { success: false, error: 'API Key do OmniRoute não informada ou inválida.' }
+    }
+
+    const url = `${host.replace(/\/+$/, '')}/v1/chat/completions`
+    const inicio = Date.now()
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: targetModel,
+        messages: [
+          { role: 'system', content: 'Você é a Sofía da Casa de Assados.' },
+          { role: 'user', content: 'responda apenas com a palavra OK' }
+        ],
+        max_tokens: 10,
+        temperature: 0.1
+      }),
+      signal: AbortSignal.timeout(10000)
+    })
+
+    const latenciaMs = Date.now() - inicio
+
+    if (!response.ok) {
+      const text = await response.text()
+      throw new Error(`HTTP ${response.status} - ${text || response.statusText}`)
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim() || ''
+    const modelResolved = data.model || targetModel
+
+    const adminSupabase = createAdminClient()
+    const keyMasked = key.length > 8 ? key.substring(0, 8) + '***' : '***'
+    await adminSupabase.from('logs_auditoria').insert({
+      usuario_id: check.user.id,
+      acao: 'teste_omniroute',
+      detalhes: {
+        tier_solicitado: targetModel,
+        modelo_resolvido: modelResolved,
+        chave: keyMasked,
+        latencia_ms: latenciaMs,
+        resposta: content
+      }
+    })
+
+    return {
+      success: true,
+      response: content,
+      modelResolved,
+      latencyMs: latenciaMs
+    }
+  } catch (error: any) {
+    console.error('Erro na action testarConexaoOmniRoute:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Server Action: obterCombosOmniRoute
+ * Busca a lista de modelos e combos disponíveis no OmniRoute Gateway.
+ */
+export async function obterCombosOmniRoute(baseUrl: string, apiKey: string) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized || !check.user) {
+      return { success: false, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    const host = (baseUrl && baseUrl.trim()) || process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128'
+    const key = (apiKey && apiKey.trim()) || process.env.OMNIROUTE_API_KEY || ''
+
+    if (!key || key.toLowerCase().includes('placeholder')) {
+      return {
+        success: true,
+        combos: [
+          { id: 'business-economy', name: '🟢 business-economy (FAQs & Cardápio)' },
+          { id: 'business-smart', name: '🟡 business-smart (Consultivo & Objeções)' },
+          { id: 'business-frontier', name: '🔴 business-frontier (Eventos & Corporativo)' }
+        ]
+      }
+    }
+
+    const url = `${host.replace(/\/+$/, '')}/v1/models`
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      signal: AbortSignal.timeout(5000)
+    })
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
+    const json = await response.json()
+    const allModels: string[] = Array.isArray(json.data) ? json.data.map((m: any) => m.id) : []
+
+    return {
+      success: true,
+      combos: [
+        { id: 'business-economy', name: '🟢 business-economy (FAQs & Cardápio)' },
+        { id: 'business-smart', name: '🟡 business-smart (Consultivo & Objeções)' },
+        { id: 'business-frontier', name: '🔴 business-frontier (Eventos & Corporativo)' }
+      ],
+      totalModels: allModels.length
+    }
+  } catch (error: any) {
+    console.error('Erro na action obterCombosOmniRoute:', error)
+    return {
+      success: true,
+      combos: [
+        { id: 'business-economy', name: '🟢 business-economy (FAQs & Cardápio)' },
+        { id: 'business-smart', name: '🟡 business-smart (Consultivo & Objeções)' },
+        { id: 'business-frontier', name: '🔴 business-frontier (Eventos & Corporativo)' }
+      ]
+    }
+  }
+}
+
+/**
  * Server Action: testarConexaoMeta
  * Verifica a validade do Token de Acesso e do Phone Number ID chamando a Graph API da Meta.
  */
