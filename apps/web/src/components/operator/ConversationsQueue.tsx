@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useState, useEffect, useMemo } from 'react'
-import { MessageSquare, Bot, UserCheck, Inbox, PauseCircle, PlayCircle, Loader2, Clock, Volume2, VolumeX } from 'lucide-react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { MessageSquare, Bot, UserCheck, Inbox, PauseCircle, PlayCircle, Loader2, Clock, Volume2, VolumeX, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { notificationSound } from '@/lib/audio/notification-sound'
 
 export interface Cliente {
@@ -185,6 +185,112 @@ export default function ConversationsQueue({
     return { iaTotal, iaNaoLidas, humanoTotal, humanoNaoLidas, fechadaTotal }
   }, [conversas, selectedConversaId])
 
+  // Detecção de solicitação de alteração ou cancelamento de pedido pelo cliente e se já foi atendida/resolvida
+  const detectarSolicitacaoPrioritaria = useCallback((conversa: Conversa): {
+    isPrioritaria: boolean
+    tipo: 'alteracao' | 'cancelamento' | 'comprovante' | null
+    status: 'pendente' | 'resolvido' | null
+  } => {
+    const msgs = conversa.mensagens || []
+    if (msgs.length === 0) return { isPrioritaria: false, tipo: null, status: null }
+
+    let indexSolicitacao = -1
+    let tipoDetectado: 'alteracao' | 'cancelamento' | 'comprovante' | null = null
+
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i]
+      if (m.remetente === 'cliente' && m.conteudo) {
+        const txt = m.conteudo.toLowerCase()
+        if (
+          txt.includes('cancelar') ||
+          txt.includes('cancelamento') ||
+          txt.includes('cancela') ||
+          txt.includes('queria cancelar')
+        ) {
+          indexSolicitacao = i
+          tipoDetectado = 'cancelamento'
+          break
+        }
+        if (
+          txt.includes('comprovante') ||
+          txt.includes('comprovante de pagamento') ||
+          txt.includes('comprovante pix') ||
+          m.url_anexo
+        ) {
+          indexSolicitacao = i
+          tipoDetectado = 'comprovante'
+          break
+        }
+        if (
+          txt.includes('alterar pedido') ||
+          txt.includes('modificar pedido') ||
+          txt.includes('mudar pedido') ||
+          txt.includes('mudar horário') ||
+          txt.includes('mudar horario') ||
+          txt.includes('trocar item') ||
+          txt.includes('trocar pedido') ||
+          txt.includes('alterar item') ||
+          txt.includes('remover item') ||
+          txt.includes('adicionar item') ||
+          txt.includes('queria mudar')
+        ) {
+          indexSolicitacao = i
+          tipoDetectado = 'alteracao'
+          break
+        }
+      }
+    }
+
+    if (!tipoDetectado && (conversa.whatsapp_sofia_state as any)?.motivo === 'solicitacao_cliente_alteracao_cancelamento') {
+      tipoDetectado = 'alteracao'
+      indexSolicitacao = msgs.length - 1
+    }
+
+    if (!tipoDetectado || indexSolicitacao === -1) {
+      return { isPrioritaria: false, tipo: null, status: null }
+    }
+
+    // Verifica se há resposta do operador ou confirmação de sistema após a solicitação do cliente
+    let resolvido = false
+    for (let j = indexSolicitacao + 1; j < msgs.length; j++) {
+      const mPosterior = msgs[j]
+      if (mPosterior.remetente === 'operador') {
+        resolvido = true
+        break
+      }
+      if (mPosterior.conteudo) {
+        const cLower = mPosterior.conteudo.toLowerCase()
+        if (
+          cLower.includes('atualizado no balcão') ||
+          cLower.includes('pedido confirmado') ||
+          cLower.includes('pedido cancelado') ||
+          cLower.includes('cancelado pelo atendimento') ||
+          cLower.includes('conforme combinado') ||
+          cLower.includes('pagamento aprovado') ||
+          cLower.includes('comprovante validado') ||
+          cLower.includes('pagamento confirmado')
+        ) {
+          resolvido = true
+          break
+        }
+      }
+    }
+
+    return {
+      isPrioritaria: true,
+      tipo: tipoDetectado,
+      status: resolvido ? 'resolvido' : 'pendente',
+    }
+  }, [])
+
+  const prioridadesHumanoCount = useMemo(() => {
+    return conversas.filter((c) => {
+      if (c.ia_ativa || c.status !== 'aberta') return false
+      const prio = detectarSolicitacaoPrioritaria(c)
+      return prio.isPrioritaria && prio.status === 'pendente'
+    }).length
+  }, [conversas, detectarSolicitacaoPrioritaria])
+
   const isWhatsAppCustomer = (conversa: Conversa) => {
     const telefone = conversa.clientes?.telefone
     return typeof telefone === 'string' && /^55419[0-9]{8}$/.test(telefone)
@@ -201,8 +307,17 @@ export default function ConversationsQueue({
     }
   })
 
-  // Ordena de forma decrescente pela última atualização
+  // Ordena de forma decrescente pela última atualização, priorizando solicitações pendentes no topo
   const conversasOrdenadas = [...conversasFiltradas].sort((a, b) => {
+    if (activeTab === 'humano') {
+      const prioA = detectarSolicitacaoPrioritaria(a)
+      const prioB = detectarSolicitacaoPrioritaria(b)
+      const pesoA = prioA.isPrioritaria && prioA.status === 'pendente' ? 2 : prioA.isPrioritaria && prioA.status === 'resolvido' ? 1 : 0
+      const pesoB = prioB.isPrioritaria && prioB.status === 'pendente' ? 2 : prioB.isPrioritaria && prioB.status === 'resolvido' ? 1 : 0
+      if (pesoA !== pesoB) {
+        return pesoB - pesoA
+      }
+    }
     const dateA = new Date(a.data_atualizacao || a.data_criacao).getTime()
     const dateB = new Date(b.data_atualizacao || b.data_criacao).getTime()
     return dateB - dateA
@@ -273,15 +388,19 @@ export default function ConversationsQueue({
           <UserCheck className="h-3.5 w-3.5 shrink-0" />
           <span>Humana</span>
           <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
-            statsPorAba.humanoNaoLidas > 0 
+            prioridadesHumanoCount > 0
+              ? 'bg-red-500 text-white animate-pulse shadow-sm shadow-red-500/50'
+              : statsPorAba.humanoNaoLidas > 0 
               ? 'bg-rose-500 text-white animate-pulse' 
               : activeTab === 'humano' ? 'bg-amber-500/20 text-amber-300' : 'bg-zinc-800 text-zinc-400'
           }`}>
             {statsPorAba.humanoTotal}
           </span>
-          {statsPorAba.humanoNaoLidas > 0 && (
+          {prioridadesHumanoCount > 0 ? (
+            <span className="h-2.5 w-2.5 rounded-full bg-red-500 animate-ping absolute top-1 right-1" title="Solicitações prioritárias pendentes" />
+          ) : statsPorAba.humanoNaoLidas > 0 ? (
             <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping absolute top-1 right-1" />
-          )}
+          ) : null}
         </button>
 
         <button
@@ -313,13 +432,22 @@ export default function ConversationsQueue({
             const naoLidas = obterNaoLidasCount(conversa)
             const ultimaMsg = obterUltimaMensagem(conversa)
             const tempoEspera = obterTempoEsperaMinutos(conversa)
+            const prio = detectarSolicitacaoPrioritaria(conversa)
 
             return (
               <div
                 key={conversa.id}
                 onClick={() => onSelectConversa(conversa.id)}
                 className={`relative flex flex-col p-3.5 rounded-xl border transition-all duration-200 cursor-pointer ${
-                  isSelected
+                  prio.isPrioritaria && prio.status === 'pendente'
+                    ? isSelected
+                      ? 'bg-zinc-900 border-red-500/80 shadow-lg shadow-red-950/30 ring-2 ring-red-500/40'
+                      : 'bg-zinc-900/60 border-red-500/40 hover:bg-zinc-900 hover:border-red-500/60 shadow-md ring-1 ring-red-500/20'
+                    : prio.isPrioritaria && prio.status === 'resolvido'
+                    ? isSelected
+                      ? 'bg-zinc-900 border-emerald-500/80 shadow-lg shadow-emerald-950/30 ring-2 ring-emerald-500/40'
+                      : 'bg-zinc-900/60 border-emerald-500/40 hover:bg-zinc-900 hover:border-emerald-500/60 shadow-md ring-1 ring-emerald-500/20'
+                    : isSelected
                     ? 'bg-zinc-900 border-amber-500/60 shadow-lg shadow-amber-500/5 ring-1 ring-amber-500/20'
                     : 'bg-zinc-900/40 border-zinc-800/80 hover:bg-zinc-900/80 hover:border-zinc-700/80'
                 }`}
@@ -340,6 +468,39 @@ export default function ConversationsQueue({
                     {formatarTelefone(conversa.clientes.telefone)}
                   </span>
                 )}
+
+                {/* Badge de Prioridade (Pendente em Vermelho / Resolvido em Verde) */}
+                {(() => {
+                  if (!prio.isPrioritaria) return null
+
+                  if (prio.status === 'resolvido') {
+                    return (
+                      <div className="mb-2 inline-flex items-center gap-1.5 text-[10px] font-bold text-emerald-300 bg-emerald-950/80 border border-emerald-500/50 px-2 py-0.5 rounded-md w-fit shadow-sm shadow-emerald-500/20">
+                        <CheckCircle2 className="h-3 w-3 text-emerald-400 shrink-0" />
+                        <span>
+                          {prio.tipo === 'cancelamento'
+                            ? '✅ CANCELAMENTO ATENDIDO & CONFIRMADO'
+                            : prio.tipo === 'comprovante'
+                            ? '✅ COMPROVANTE VALIDADO & ATENDIDO'
+                            : '✅ ALTERAÇÃO ATENDIDA & ATUALIZADA'}
+                        </span>
+                      </div>
+                    )
+                  }
+
+                  return (
+                    <div className="mb-2 inline-flex items-center gap-1.5 text-[10px] font-bold text-red-300 bg-red-950/80 border border-red-500/50 px-2 py-0.5 rounded-md w-fit animate-pulse shadow-sm shadow-red-500/20">
+                      <AlertTriangle className="h-3 w-3 text-red-400 shrink-0" />
+                      <span>
+                        {prio.tipo === 'cancelamento'
+                          ? '🚨 CANCELAMENTO DE PEDIDO SOLICITADO'
+                          : prio.tipo === 'comprovante'
+                          ? '🚨 COMPROVANTE DE PAGAMENTO ENVIADO'
+                          : '🚨 ALTERAÇÃO DE ITENS SOLICITADA'}
+                      </span>
+                    </div>
+                  )
+                })()}
 
                 {/* Indicador de "Em Espera" (+5 min sem resposta humana) */}
                 {tempoEspera !== null && tempoEspera >= 5 && (

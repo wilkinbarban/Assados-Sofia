@@ -107,7 +107,12 @@ export default function CadastroPage() {
 
       const data = await res.json()
 
-      if (!res.ok || !data.success) {
+      if (data.continuation === 'CHECK_YOUR_EXISTING_SIGNUP_OR_RECOVER_ACCOUNT') {
+        setChallengeId(null)
+        setUserId(null)
+        setEtapa('formulario')
+        setApiError('Se você já possui uma conta, recupere o acesso para continuar.')
+      } else if (!res.ok || !data.success) {
         setApiError(data.error || 'Erro ao realizar cadastro.')
       } else {
         setChallengeId(data.challengeId)
@@ -142,7 +147,6 @@ export default function CadastroPage() {
           challengeId,
           telefone,
           codigo: codigoOtp,
-          userId,
           nome
         })
       })

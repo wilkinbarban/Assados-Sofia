@@ -19,6 +19,10 @@ insert into public.pedidos(id,cliente_id,status,tipo_entrega,total_produtos_cent
  ('55555555-5555-4555-8555-555555555533','55555555-5555-4555-8555-555555555510','novo','retirada',1000,1000,'dinheiro'),
  ('55555555-5555-4555-8555-555555555534','55555555-5555-4555-8555-555555555510','confirmado','retirada',2000,2000,'dinheiro'),
  ('55555555-5555-4555-8555-555555555535','55555555-5555-4555-8555-555555555510','confirmado','retirada',0,0,'dinheiro');
+
+-- Legacy stock states are historical data. Only the canonical lifecycle
+-- function owner may manufacture them; application roles must use the RPC.
+set local role postgres;
 update public.pedidos set estoque_estado='aplicado' where id in('55555555-5555-4555-8555-555555555534','55555555-5555-4555-8555-555555555535');
 insert into public.itens_pedido(pedido_id,produto_id,preco_unitario_centavos,quantidade) values
  ('55555555-5555-4555-8555-555555555531','55555555-5555-4555-8555-555555555521',1000,2),
@@ -34,11 +38,14 @@ insert into public.pedido_estoque_snapshots(pedido_id,efeitos) values
 insert into public.pedidos(id,cliente_id,status,tipo_entrega,total_produtos_centavos,total_pedido_centavos,meio_pagamento,estoque_estado) values('55555555-5555-4555-8555-555555555560','55555555-5555-4555-8555-555555555510','confirmado','retirada',1000,1000,'dinheiro','aplicado');
 insert into public.pedido_estoque_efeitos values('55555555-5555-4555-8555-555555555560','55555555-5555-4555-8555-555555555524',1,true);
 insert into public.pedido_estoque_snapshots values('55555555-5555-4555-8555-555555555560','[]');
+reset role;
 
 -- The ledger is intentionally private in production. This transaction-only
 -- read policy lets the authenticated test actor verify function side effects
 -- without weakening the deployed grants or write boundary.
 grant select on public.pedido_estoque_efeitos to authenticated;
+grant execute on function public.confirmar_pedido_estoque(uuid, uuid) to authenticated;
+grant execute on function public.cancelar_pedido_estoque(uuid, uuid) to authenticated;
 create policy test_authenticated_order_effect_reads
 on public.pedido_estoque_efeitos for select to authenticated
 using (true);

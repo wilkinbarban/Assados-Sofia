@@ -115,6 +115,7 @@ export function formatarCardapioResumido(produtos: ProdutoCardapio[], baseUrl = 
         : ''
 
       linhas.push(`${icone} *${item.nome}*`)
+      linhas.push(`🔖 product:${item.id}`)
       linhas.push(`📷 ${imgUrl}`)
       if (item.descricao) {
         // Se a descrição tiver itens separados por vírgula ou +, quebrar em bullets limpos
@@ -145,6 +146,7 @@ export function formatarCardapioResumido(produtos: ProdutoCardapio[], baseUrl = 
       const imgPath = item.url_imagem ? `${item.url_imagem.startsWith('http') ? item.url_imagem : `${cleanBaseUrl}${item.url_imagem}`}` : ''
 
       linhas.push(`${icone} *${item.nome}*`)
+      linhas.push(`🔖 product:${item.id}`)
       if (imgPath) {
         linhas.push(`📷 ${imgPath}`)
       }

@@ -6,7 +6,7 @@ const host = '127.0.0.1'
 const baseURL = `http://${host}:${port}`
 const supabaseEnv = localSupabaseEnv()
 const webServerEnv = { ...process.env, ...supabaseEnv }
-delete webServerEnv.NO_COLOR
+delete (webServerEnv as Record<string, string | undefined>).NO_COLOR
 recoverImagePersistenceFunction()
 
 export default defineConfig({

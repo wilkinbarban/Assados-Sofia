@@ -48,6 +48,8 @@ const mockSupabase = {
   from: vi.fn().mockReturnValue({
     insert: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    order: vi.fn().mockResolvedValue({ data: [], error: null }),
     single: vi.fn().mockResolvedValue({ data: null, error: null }),
   }),
 }
@@ -94,6 +96,34 @@ vi.mock('@/app/actions/carrinho', () => ({
   actionAtualizarQuantidadeItem: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
   actionRemoverItemDoCarrinho: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
   actionLimparCarrinho: vi.fn().mockResolvedValue({ success: true, carrinho: null }),
+}))
+
+// Mock Pedidos Server Actions
+vi.mock('@/app/actions/pedidos', () => ({
+  actionCriarPedidoCliente: vi.fn().mockResolvedValue({
+    success: true,
+    pedido: {
+      id: 'ped-123',
+      status: 'novo',
+      status_pagamento: 'pendente',
+      total_pedido_centavos: 8990,
+      tipo_entrega: 'retirada',
+      data_criacao: new Date().toISOString(),
+      itens_pedido: [],
+    },
+    mensagem: {
+      id: 'msg-inserted-456',
+      conversa_id: 'conversa-123',
+      remetente: 'cliente',
+      conteudo: '🛒 *Pedido #PED-123 Registrado!*',
+      url_anexo: null,
+      data_criacao: new Date().toISOString(),
+    },
+  }),
+  actionListarMeusPedidosCliente: vi.fn().mockResolvedValue({
+    success: true,
+    data: [],
+  }),
 }))
 
 const baseConversa = {
@@ -306,6 +336,22 @@ describe('ChatContainer Core UI Tests (Phase 2)', () => {
     expect(costelaCard).toBeInTheDocument()
   })
 
+  it('keeps catalog and current order visible as primary customer actions', () => {
+    render(
+      <ChatContainer
+        clienteNome="Ana Silva"
+        conversaInicial={baseConversa}
+        mensagensIniciais={[]}
+        produtos={mockProdutos}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: /Abrir cardápio/i })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Abrir meu pedido/i })).toBeInTheDocument()
+    expect(screen.getByTestId('customer-commerce-panel')).toHaveClass('lg:w-[min(46vw,560px)]')
+    expect(screen.getByTestId('customer-chat-shell')).toHaveClass('h-full', 'min-h-0')
+  })
+
   describe('ClienteChatPage Server Component (Task 3.1)', () => {
     it('keeps the client catalog on its existing RPC and preserves the returned catalog order', async () => {
       // Mock getUser to return authenticated user
@@ -447,6 +493,8 @@ describe('ChatContainer Core UI Tests (Phase 2)', () => {
         return {
           insert: vi.fn().mockReturnThis(),
           select: vi.fn().mockReturnThis(),
+          eq: vi.fn().mockReturnThis(),
+          order: vi.fn().mockResolvedValue({ data: [], error: null }),
           single: vi.fn().mockResolvedValue({ data: null, error: null }),
         }
       })

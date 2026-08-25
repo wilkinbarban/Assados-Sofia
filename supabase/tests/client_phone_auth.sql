@@ -54,14 +54,14 @@ declare
   v_cooldown timestamptz;
 begin
   -- 1. Solicitar desafio OTP (inicia como pending_delivery)
-  select p_desafio_id into v_desafio_id
+  select s.p_desafio_id into v_desafio_id
   from public.solicitar_desafio_otp(
     p_telefone := '5541988880001',
     p_proposito := 'signup'::public.tipo_desafio_otp,
     p_hash_codigo := v_hash,
     p_ip_origem := '192.168.1.100',
     p_usuario_id := null
-  );
+  ) s;
 
   select status into v_status from public.desafios_otp where id = v_desafio_id;
   if v_status <> 'pending_delivery' then
@@ -112,14 +112,14 @@ declare
   v_status text;
   v_cooldown timestamptz;
 begin
-  select p_desafio_id into v_desafio_id
+  select s.p_desafio_id into v_desafio_id
   from public.solicitar_desafio_otp(
     p_telefone := '5541988880003',
     p_proposito := 'signup'::public.tipo_desafio_otp,
     p_hash_codigo := v_hash,
     p_ip_origem := '192.168.1.101',
     p_usuario_id := null
-  );
+  ) s;
 
   -- Registrar falha na entrega
   perform public.ativar_desafio_otp(
@@ -149,14 +149,14 @@ declare
   v_erro text;
 begin
   -- Criar desafio com propósito signup
-  select p_desafio_id into v_desafio_id
+  select s.p_desafio_id into v_desafio_id
   from public.solicitar_desafio_otp(
     p_telefone := '5541988880004',
     p_proposito := 'signup'::public.tipo_desafio_otp,
     p_hash_codigo := v_hash,
     p_ip_origem := '192.168.1.102',
     p_usuario_id := null
-  );
+  ) s;
 
   perform public.ativar_desafio_otp(
     p_desafio_id := v_desafio_id,
@@ -195,14 +195,14 @@ declare
   v_sucesso boolean;
   v_erro text;
 begin
-  select p_desafio_id into v_desafio_id
+  select s.p_desafio_id into v_desafio_id
   from public.solicitar_desafio_otp(
     p_telefone := '5541988880005',
     p_proposito := 'signup'::public.tipo_desafio_otp,
     p_hash_codigo := v_hash_correto,
     p_ip_origem := '192.168.1.103',
-    p_usuario_id := null
-  );
+    p_usuario_id := '88888888-8888-4888-8888-888888888882'
+  ) s;
 
   perform public.ativar_desafio_otp(
     p_desafio_id := v_desafio_id,
@@ -213,15 +213,18 @@ begin
 
   -- 3 tentativas erradas consecutivas
   for i in 1..3 loop
-    select sucesso, codigo_erro into v_sucesso, v_erro
+    select f.sucesso, f.codigo_erro into v_sucesso, v_erro
     from public.finalizar_desafio_otp(
       p_desafio_id := v_desafio_id,
       p_telefone := '5541988880005',
       p_proposito := 'signup'::public.tipo_desafio_otp,
       p_hash_codigo := v_hash_errado,
-      p_usuario_id := null,
+      p_usuario_id := '88888888-8888-4888-8888-888888888882',
       p_nome := 'Teste'
-    );
+    ) f;
+    if v_erro <> 'CODIGO_INVALIDO' then
+      raise exception 'Tentativa % falhou com v_erro=%, v_sucesso=%, v_desafio_id=%', i, v_erro, v_sucesso, v_desafio_id;
+    end if;
   end loop;
 
   select status, tentativas into v_status, v_tentativas
@@ -251,14 +254,14 @@ begin
   values ('Cliente Órfão WhatsApp', '5541988880006')
   returning id into v_cliente_existente_id;
 
-  select p_desafio_id into v_desafio_id
+  select s.p_desafio_id into v_desafio_id
   from public.solicitar_desafio_otp(
     p_telefone := '5541988880006',
     p_proposito := 'signup'::public.tipo_desafio_otp,
     p_hash_codigo := v_hash,
     p_ip_origem := '192.168.1.104',
     p_usuario_id := '88888888-8888-4888-8888-888888888883'
-  );
+  ) s;
 
   perform public.ativar_desafio_otp(
     p_desafio_id := v_desafio_id,
@@ -268,7 +271,7 @@ begin
   );
 
   -- Finalizar desafio e associar ao usuario_id
-  select sucesso, codigo_erro, cliente_id into v_sucesso, v_erro, v_cliente_final_id
+  select f.sucesso, f.codigo_erro, f.cliente_id into v_sucesso, v_erro, v_cliente_final_id
   from public.finalizar_desafio_otp(
     p_desafio_id := v_desafio_id,
     p_telefone := '5541988880006',
@@ -277,7 +280,7 @@ begin
     p_usuario_id := '88888888-8888-4888-8888-888888888883',
     p_nome := 'Cliente B Vinculado',
     p_origem_verificacao := 'telegram'
-  );
+  ) f;
 
   if not v_sucesso or v_cliente_final_id is null then
     raise exception 'Falha ao finalizar desafio: sucesso=%, erro=%', v_sucesso, v_erro;
@@ -293,7 +296,7 @@ begin
   end if;
 
   -- Tentativa de re-consumo do mesmo desafio deve falhar
-  select sucesso, codigo_erro into v_sucesso, v_erro
+  select f.sucesso, f.codigo_erro into v_sucesso, v_erro
   from public.finalizar_desafio_otp(
     p_desafio_id := v_desafio_id,
     p_telefone := '5541988880006',
@@ -301,7 +304,7 @@ begin
     p_hash_codigo := v_hash,
     p_usuario_id := '88888888-8888-4888-8888-888888888883',
     p_nome := 'Tentativa Replay'
-  );
+  ) f;
 
   if v_sucesso then
     raise exception 'Re-consumo de desafio já consumido teve sucesso indevido';
@@ -322,14 +325,14 @@ declare
   v_erro text;
   v_valido boolean;
 begin
-  select p_desafio_id into v_desafio_id
+  select s.p_desafio_id into v_desafio_id
   from public.solicitar_desafio_otp(
     p_telefone := '5541988880007',
     p_proposito := 'recovery'::public.tipo_desafio_otp,
     p_hash_codigo := v_hash,
     p_ip_origem := '192.168.1.105',
     p_usuario_id := '88888888-8888-4888-8888-888888888882'
-  );
+  ) s;
 
   perform public.ativar_desafio_otp(
     p_desafio_id := v_desafio_id,

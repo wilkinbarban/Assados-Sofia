@@ -1,10 +1,111 @@
 'use client'
 
 import React, { useState, useEffect, useRef } from 'react'
-import { Sparkles, Send, Bot, AlertCircle, Loader2 } from 'lucide-react'
+import {
+  Sparkles,
+  Send,
+  Bot,
+  AlertCircle,
+  AlertTriangle,
+  Loader2,
+  Edit3,
+  CheckCircle2,
+  FileText,
+  Image as ImageIcon,
+  ExternalLink,
+  Eye,
+  Download,
+} from 'lucide-react'
 import { alternarIaConversa, enviarMensagemOperador } from '@/app/actions/atendimento'
 import { Conversa, Mensagem } from './ConversationsQueue'
 import CreateOrderModal from './CreateOrderModal'
+import { createClient } from '@/lib/supabase/client'
+import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante'
+
+function AttachmentCard({
+  urlArquivo,
+  onVisualizar,
+}: {
+  urlArquivo: string
+  onVisualizar: (url: string, nome: string) => void
+}) {
+  const [downloading, setDownloading] = useState(false)
+  const isPdf = urlArquivo.toLowerCase().includes('.pdf') || urlArquivo.toLowerCase().endsWith('.pdf')
+  const fileName = urlArquivo.split('/').pop() || 'comprovante'
+
+  const handleDownload = async (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setDownloading(true)
+    try {
+      const supabase = createClient()
+      const { data, error } = await supabase.storage
+        .from('chat-midias')
+        .createSignedUrl(urlArquivo, 3600)
+
+      if (error || !data?.signedUrl) throw error || new Error('Falha ao gerar link')
+
+      const res = await fetch(data.signedUrl)
+      const blob = await res.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(blobUrl)
+    } catch (err) {
+      console.error('Erro ao baixar anexo:', err)
+    } finally {
+      setDownloading(false)
+    }
+  }
+
+  return (
+    <div className="mt-2.5 rounded-2xl border border-zinc-700/80 bg-zinc-950/80 p-3 text-xs text-zinc-200 shadow-md space-y-2.5 max-w-sm">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+          {isPdf ? <FileText className="h-5 w-5" /> : <ImageIcon className="h-5 w-5" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-black uppercase text-amber-300 border border-amber-500/30">
+              {isPdf ? 'PDF' : 'IMAGEM'}
+            </span>
+            <span className="truncate text-xs font-bold text-zinc-100">{fileName}</span>
+          </div>
+          <span className="text-[10px] text-zinc-400">Comprovante de pagamento</span>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 pt-1 border-t border-zinc-800/80">
+        <button
+          type="button"
+          onClick={() => onVisualizar(urlArquivo, fileName)}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
+        >
+          <Eye className="h-3.5 w-3.5" />
+          <span>Visualizar</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleDownload}
+          disabled={downloading}
+          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-700/80 text-[11px] font-bold transition-all active:scale-95 disabled:opacity-50 cursor-pointer shadow-sm"
+        >
+          {downloading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
+          <span>Baixar</span>
+        </button>
+      </div>
+    </div>
+  )
+}
 
 interface OperatorChatConsoleProps {
   conversa: Conversa | null
@@ -22,6 +123,22 @@ export default function OperatorChatConsole({
   const [iaAlternando, setIaAlternando] = useState(false)
   const [erroEnvio, setErroEnvio] = useState<string | null>(null)
   const [isOrderModalOpen, setIsOrderModalOpen] = useState(false)
+  const [comprovanteModal, setComprovanteModal] = useState<{
+    isOpen: boolean
+    urlArquivo: string | null
+    nomeArquivo?: string
+  }>({
+    isOpen: false,
+    urlArquivo: null,
+  })
+
+  const handleAbrirVisualizador = (urlArquivo: string, nomeArquivo?: string) => {
+    setComprovanteModal({
+      isOpen: true,
+      urlArquivo,
+      nomeArquivo: nomeArquivo || urlArquivo.split('/').pop() || 'comprovante.pdf',
+    })
+  }
   
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
@@ -218,6 +335,156 @@ export default function OperatorChatConsole({
         </div>
       </div>
 
+      {/* Banner de Prioridade (Pendente em Vermelho / Resolvido em Verde) */}
+      {(() => {
+        let indexSolicitacao = -1
+        let tipoDetectado: 'cancelamento' | 'alteracao' | 'comprovante' | null = null
+
+        for (let i = mensagens.length - 1; i >= 0; i--) {
+          const m = mensagens[i]
+          if (m.remetente === 'cliente' && m.conteudo) {
+            const txt = m.conteudo.toLowerCase()
+            if (txt.includes('cancelar') || txt.includes('cancelamento') || txt.includes('cancela') || txt.includes('queria cancelar')) {
+              indexSolicitacao = i
+              tipoDetectado = 'cancelamento'
+              break
+            }
+            if (
+              txt.includes('alterar pedido') ||
+              txt.includes('modificar pedido') ||
+              txt.includes('mudar pedido') ||
+              txt.includes('mudar horário') ||
+              txt.includes('mudar horario') ||
+              txt.includes('trocar item') ||
+              txt.includes('trocar pedido') ||
+              txt.includes('alterar item') ||
+              txt.includes('remover item') ||
+              txt.includes('adicionar item') ||
+              txt.includes('queria mudar')
+            ) {
+              indexSolicitacao = i
+              tipoDetectado = 'alteracao'
+              break
+            }
+            if (
+              txt.includes('comprovante') ||
+              txt.includes('comprovante de pagamento') ||
+              txt.includes('comprovante pix') ||
+              m.url_anexo
+            ) {
+              indexSolicitacao = i
+              tipoDetectado = 'comprovante'
+              break
+            }
+          }
+        }
+
+        if (!tipoDetectado || indexSolicitacao === -1) return null
+
+        let resolvido = false
+        for (let j = indexSolicitacao + 1; j < mensagens.length; j++) {
+          const mPosterior = mensagens[j]
+          if (mPosterior.remetente === 'operador') {
+            resolvido = true
+            break
+          }
+          if (mPosterior.conteudo) {
+            const cLower = mPosterior.conteudo.toLowerCase()
+            if (
+              cLower.includes('atualizado no balcão') ||
+              cLower.includes('pedido confirmado') ||
+              cLower.includes('pedido cancelado') ||
+              cLower.includes('cancelado pelo atendimento') ||
+              cLower.includes('conforme combinado') ||
+              cLower.includes('pagamento aprovado') ||
+              cLower.includes('comprovante validado') ||
+              cLower.includes('pagamento confirmado')
+            ) {
+              resolvido = true
+              break
+            }
+          }
+        }
+
+        if (resolvido) {
+          return (
+            <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-emerald-950/90 via-zinc-900 to-emerald-950/40 border border-emerald-500/60 p-3.5 text-xs text-emerald-200 shadow-xl shadow-emerald-950/40 shrink-0">
+              <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
+                <CheckCircle2 className="h-5 w-5" />
+              </div>
+              <div className="flex-1 space-y-1.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <strong className="text-emerald-300 font-black tracking-wide uppercase text-[11px]">
+                    ✅ SOLICITAÇÃO RESOLVIDA & CONFIRMADA
+                  </strong>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                    {tipoDetectado === 'cancelamento'
+                      ? 'Cancelamento Atendido'
+                      : tipoDetectado === 'comprovante'
+                      ? 'Comprovante Validado & Pago'
+                      : 'Alteração de Pedido Concluída'}
+                  </span>
+                </div>
+                <p className="text-zinc-300 text-xs leading-relaxed">
+                  {tipoDetectado === 'cancelamento'
+                    ? 'A solicitação de cancelamento foi tratada e confirmada pelo atendimento com o cliente.'
+                    : tipoDetectado === 'comprovante'
+                    ? 'O comprovante enviado pelo cliente foi revisado e o pagamento foi aprovado com sucesso.'
+                    : 'A alteração dos componentes/horário do pedido foi salva e notificada com sucesso ao cliente.'}
+                </p>
+              </div>
+            </div>
+          )
+        }
+
+        return (
+          <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-red-950/90 via-zinc-900 to-amber-950/40 border border-red-500/60 p-3.5 text-xs text-red-200 shadow-xl shadow-red-950/40 shrink-0 animate-pulse">
+            <div className="p-2 rounded-xl bg-red-500/20 text-red-400 shrink-0">
+              <AlertTriangle className="h-5 w-5" />
+            </div>
+            <div className="flex-1 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <strong className="text-red-300 font-black tracking-wide uppercase text-[11px]">
+                  🚨 ATENDIMENTO PRIORITÁRIO PENDENTE
+                </strong>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-300 border border-red-500/40">
+                  {tipoDetectado === 'cancelamento'
+                    ? 'Cancelamento Solicitado'
+                    : tipoDetectado === 'comprovante'
+                    ? 'Comprovante de Pagamento Anexado'
+                    : 'Alteração de Itens/Horário'}
+                </span>
+              </div>
+              <p className="text-zinc-300 text-xs leading-relaxed">
+                {tipoDetectado === 'cancelamento'
+                  ? 'O cliente solicitou o cancelamento do pedido. Responda com cordialidade e proceda com o cancelamento ou verificação no painel de pedidos ao lado.'
+                  : tipoDetectado === 'comprovante'
+                  ? 'O cliente enviou o comprovante em PDF/imagem. Abra o documento anexo na conversa, confira o valor e confirme a aprovação do pedido ao lado.'
+                  : 'O cliente solicitou ajuste nos itens ou no horário do pedido. Você pode editar os componentes e recalcular o total ao vivo na aba lateral de Pedidos Realizados.'}
+              </p>
+
+              {tipoDetectado === 'comprovante' && (() => {
+                const anexoRecente = mensagens.slice().reverse().find((m) => m.url_anexo)?.url_anexo
+                if (!anexoRecente) return null
+                const nomeRecente = anexoRecente.split('/').pop() || 'comprovante.pdf'
+                return (
+                  <div className="pt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleAbrirVisualizador(anexoRecente, nomeRecente)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Eye className="h-3.5 w-3.5" />
+                      <span>Visualizar Comprovante Anexo</span>
+                    </button>
+                  </div>
+                )
+              })()}
+            </div>
+          </div>
+        )
+      })()}
+
       {/* Histórico Cronológico de Mensagens */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {mensagens.length === 0 ? (
@@ -253,6 +520,13 @@ export default function OperatorChatConsole({
 
                   <p className="whitespace-pre-wrap leading-relaxed break-words">{msg.conteudo}</p>
                   
+                  {msg.url_anexo && (
+                    <AttachmentCard
+                      urlArquivo={msg.url_anexo}
+                      onVisualizar={handleAbrirVisualizador}
+                    />
+                  )}
+
                   <div
                     className={`text-[9px] mt-1.5 text-right ${
                       isOperador ? 'text-zinc-950/70' : 'text-zinc-500'
@@ -326,6 +600,15 @@ export default function OperatorChatConsole({
         conversa={conversa}
         isOpen={isOrderModalOpen}
         onClose={() => setIsOrderModalOpen(false)}
+      />
+
+      {/* Modal de Visualização de Comprovante */}
+      <ModalVisualizadorComprovante
+        isOpen={comprovanteModal.isOpen}
+        onClose={() => setComprovanteModal({ isOpen: false, urlArquivo: null })}
+        urlArquivo={comprovanteModal.urlArquivo}
+        nomeArquivo={comprovanteModal.nomeArquivo}
+        clienteNome={conversa?.clientes?.nome}
       />
     </div>
   )

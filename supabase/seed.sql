@@ -1,15 +1,13 @@
 -- Seed Data para Testes Locais: Autenticação e Validação de Telefone (Épica 1)
 
 -- 1. Limpeza de dados existentes (de baixo para cima devido a chaves estrangeiras)
+TRUNCATE public.produto_imagem_orfao_eventos CASCADE;
+TRUNCATE public.produto_imagem_orfao_reconciliacoes CASCADE;
+TRUNCATE public.logs_auditoria CASCADE;
 TRUNCATE public.codigos_verificacao CASCADE;
 TRUNCATE public.clientes CASCADE;
 TRUNCATE public.perfis CASCADE;
-DELETE FROM auth.users WHERE id IN (
-    'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1',
-    'b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2',
-    'c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3',
-    '7c7c7c7c-7c7c-7c7c-7c7c-7c7c7c7c7c7c'
-);
+DELETE FROM auth.users WHERE true;
 
 -- 2. Inserir usuários de teste na tabela auth.users do Supabase Auth
 -- Senha de teste padrão criptografada com bcrypt usando a extensão pgcrypto
@@ -19,8 +17,10 @@ INSERT INTO auth.users (
     aud,
     role,
     email,
+    phone,
     encrypted_password,
     email_confirmed_at,
+    phone_confirmed_at,
     recovery_sent_at,
     last_sign_in_at,
     raw_app_meta_data,
@@ -39,8 +39,10 @@ INSERT INTO auth.users (
     'authenticated',
     'authenticated',
     'admin@asados.com',
+    NULL,
     extensions.crypt('SenhaAdmin123', extensions.gen_salt('bf')),
     now(),
+    NULL,
     null,
     null,
     '{"provider": "email", "providers": ["email"]}',
@@ -59,8 +61,10 @@ INSERT INTO auth.users (
     'authenticated',
     'authenticated',
     'vendedor@asados.com',
+    NULL,
     extensions.crypt('SenhaVendedor123', extensions.gen_salt('bf')),
     now(),
+    NULL,
     null,
     null,
     '{"provider": "email", "providers": ["email"]}',
@@ -79,8 +83,10 @@ INSERT INTO auth.users (
     'authenticated',
     'authenticated',
     'supervisor@asados.com',
+    NULL,
     extensions.crypt('SenhaSupervisor123', extensions.gen_salt('bf')),
     now(),
+    NULL,
     null,
     null,
     '{"provider": "email", "providers": ["email"]}',
@@ -92,19 +98,43 @@ INSERT INTO auth.users (
     '',
     ''
 ),
--- Cliente Web (para testar merge de contas)
+-- Cliente João Web (Phone-First)
 (
     '00000000-0000-0000-0000-000000000000',
     'c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3',
     'authenticated',
     'authenticated',
-    'cliente_web@asados.com',
+    NULL,
+    '5541988888888',
     extensions.crypt('SenhaCliente123', extensions.gen_salt('bf')),
+    NULL,
     now(),
     null,
     null,
-    '{"provider": "email", "providers": ["email"]}',
+    '{"provider": "phone", "providers": ["phone"]}',
     '{"nome": "João Web"}',
+    now(),
+    now(),
+    '',
+    '',
+    '',
+    ''
+),
+-- Cliente Phone-First
+(
+    '00000000-0000-0000-0000-000000000000',
+    'd5d5d5d5-d5d5-d5d5-d5d5-d5d5d5d5d5d5',
+    'authenticated',
+    'authenticated',
+    NULL,
+    '5541999998888',
+    extensions.crypt('SenhaCliente123', extensions.gen_salt('bf')),
+    NULL,
+    now(),
+    null,
+    null,
+    '{"provider": "phone", "providers": ["phone"]}',
+    '{"nome": "Carlos Phone"}',
     now(),
     now(),
     '',
@@ -158,6 +188,21 @@ INSERT INTO public.clientes (
     'Av. Sete de Setembro, 456 - Curitiba'
 );
 
+-- Cliente Phone-First criado no fluxo de telefone
+INSERT INTO public.clientes (
+    id,
+    usuario_id,
+    nome,
+    telefone,
+    endereco
+) VALUES (
+    'd5d5d5d5-d5d5-d5d5-d5d5-d5d5d5d5d5d5',
+    'd5d5d5d5-d5d5-d5d5-d5d5-d5d5d5d5d5d5',
+    'Carlos Phone',
+    '5541999998888',
+    'Rua XV de Novembro, 789 - Curitiba'
+);
+
 -- 5. Inserir Conversas de Teste
 INSERT INTO public.conversas (
     id,
@@ -193,4 +238,3 @@ INSERT INTO public.mensagens (
     'Olá, João! Eu sou a Sofía, assistente virtual da Asados. Nossos kits variam de R$ 150 a R$ 450. Qual tamanho de evento você planeja?',
     NULL
 );
-

@@ -271,12 +271,17 @@ export default function OperatorCartPanel({
   return (
     <div className="flex h-full flex-col bg-zinc-950 text-zinc-100">
       {/* Barra superior de status do carrinho */}
-      <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/40 px-4 py-3 shrink-0">
+      <div className="flex items-center justify-between border-b border-amber-500/20 bg-gradient-to-r from-amber-500/10 via-zinc-900/70 to-zinc-900/40 px-4 py-3 shrink-0">
         <div className="flex items-center gap-2">
           <ShoppingCart className="h-4 w-4 text-amber-500" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-zinc-200">
-            Carrinho Aberto ({totalItens})
-          </span>
+          <div>
+            <span className="block text-xs font-bold uppercase tracking-wider text-zinc-100">
+              Carrinho Aberto ({totalItens})
+            </span>
+            <span className="block max-w-[13rem] truncate text-[10px] text-zinc-500">
+              Pedido de {clienteNome || 'cliente selecionado'}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -421,7 +426,7 @@ export default function OperatorCartPanel({
 
         {/* Seção de Resumo Financeiro e Parâmetros de Pedido */}
         {carrinho && itens.length > 0 && (
-          <div className="space-y-4 rounded-xl border border-zinc-800 bg-zinc-900/30 p-3.5">
+          <div className="space-y-4 rounded-xl border border-amber-500/20 bg-gradient-to-b from-amber-500/5 to-zinc-900/40 p-3.5 shadow-lg shadow-black/10">
             {/* Totais */}
             <div className="space-y-1.5 text-xs border-b border-zinc-800/60 pb-3">
               <div className="flex justify-between text-zinc-400">
@@ -440,9 +445,9 @@ export default function OperatorCartPanel({
                   <span className="font-mono text-zinc-200">+{formatarMoeda(carrinho.taxa_entrega_centavos)}</span>
                 </div>
               )}
-              <div className="flex justify-between font-semibold text-sm text-amber-400 pt-1">
-                <span>Total:</span>
-                <span className="font-mono">{formatarMoeda(carrinho.total_centavos)}</span>
+              <div className="flex items-end justify-between pt-2">
+                <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-400">Total do pedido</span>
+                <span className="font-mono text-xl font-black text-amber-400">{formatarMoeda(carrinho.total_centavos)}</span>
               </div>
             </div>
 

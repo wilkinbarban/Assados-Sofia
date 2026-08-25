@@ -272,3 +272,27 @@ export async function reordenarProdutosVisiveis(itens: Array<{ id: string; ordem
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
 }
+
+/**
+ * Retorna o catálogo de produtos ativos para seleção nos painéis de atendimento e edição de pedidos.
+ */
+export async function actionListarCatalogoProdutos() {
+  try {
+    const adminSupabase = createAdminClient()
+    const { data: produtos, error } = await adminSupabase
+      .from('produtos')
+      .select('id, nome, preco_centavos, ativo, url_imagem, url_imagem_thumb')
+      .eq('ativo', true)
+      .order('ordem_exibicao', { ascending: true })
+
+    if (error) {
+      console.error('Erro ao listar catálogo de produtos:', error)
+      return { success: false, error: error.message, data: [] }
+    }
+
+    return { success: true, data: produtos || [] }
+  } catch (error: any) {
+    console.error('Erro inesperado na action actionListarCatalogoProdutos:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO', data: [] }
+  }
+}

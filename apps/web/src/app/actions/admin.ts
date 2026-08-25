@@ -8,6 +8,7 @@ import {
   getEvolutionQrCode,
 } from '@/lib/whatsapp/evolution-admin-client'
 import { revalidatePath } from 'next/cache'
+import { consolidateAdminUsers } from '@/lib/admin/user-list'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 
 /**
@@ -63,8 +64,9 @@ export async function listarUsuariosAdmin() {
       perPage: 1000
     })
 
-    if (authError || !authData?.users) {
-      return { success: false, error: `ERRO_AUTH_ADMIN: ${authError?.message || 'Falha ao buscar usuários'}` }
+    const authUsers = authError || !authData?.users ? [] : authData.users
+    if (authError) {
+      console.warn('[Admin Users] Auth Admin indisponível; exibindo perfis sem metadados de autenticação.')
     }
 
     const { data: perfis, error: perfisError } = await adminSupabase
@@ -80,15 +82,7 @@ export async function listarUsuariosAdmin() {
       .from('clientes')
       .select('id, telefone')
 
-    const consolidated = perfis.map((perfil) => {
-      const authUser = authData.users.find((u) => u.id === perfil.id)
-      const cliente = clientes?.find((c) => c.id === perfil.id)
-      return {
-        ...perfil,
-        email: authUser?.email || null,
-        telefone: authUser?.phone || cliente?.telefone || null,
-      }
-    })
+    const consolidated = consolidateAdminUsers(perfis, authUsers, clientes || [])
 
     return { success: true, data: consolidated }
   } catch (error: any) {
@@ -600,168 +594,29 @@ export async function deletarUsuarioAdmin(usuarioAlvoId: string) {
     if (!check.authorized || !check.user) {
       return { success: false, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
     }
-
-    const { user } = check
-    const callerId = user.id
-
-    // 1. Impedir auto-exclusão
-    if (usuarioAlvoId === callerId) {
-      return { success: false, error: 'ANTI_LOCKOUT_AUTO_EXCLUSAO' }
+    if (check.perfil?.funcao !== 'admin') {
+      return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
     }
 
-    const adminSupabase = createAdminClient()
-
-    // 2. Buscar dados do perfil alvo
-    const { data: perfilAlvo, error: errorPerfil } = await adminSupabase
-      .from('perfis')
-      .select('nome, funcao, ativo')
-      .eq('id', usuarioAlvoId)
-      .single()
-
-    if (errorPerfil || !perfilAlvo) {
-      return { success: false, error: 'PERFIL_ALVO_NAO_ENCONTRADO' }
-    }
-
-    // 3. Garantir mínimo de um admin ativo
-    if (perfilAlvo.funcao === 'admin' && perfilAlvo.ativo) {
-      const { count, error: countError } = await adminSupabase
-        .from('perfis')
-        .select('*', { count: 'exact', head: true })
-        .eq('funcao', 'admin')
-        .eq('ativo', true)
-        .neq('id', usuarioAlvoId)
-
-      if (countError) {
-        return { success: false, error: `ERRO_VALIDACAO_ADMIN: ${countError.message}` }
-      }
-
-      if (!count || count < 1) {
-        return { success: false, error: 'MINIMO_UM_ADMIN_ATIVO' }
-      }
-    }
-
-    // 4. Deleção manual em cascata
-    const { data: cliente, error: errCliente } = await adminSupabase
-      .from('clientes')
-      .select('id')
-      .eq('usuario_id', usuarioAlvoId)
-      .maybeSingle()
-
-    if (errCliente) {
-      return { success: false, error: `ERRO_BUSCA_CLIENTE: ${errCliente.message}` }
-    }
-
-    if (cliente) {
-      const clienteId = cliente.id
-
-      // 4.1. Buscar pedidos do cliente
-      const { data: pedidos, error: errPedidos } = await adminSupabase
-        .from('pedidos')
-        .select('id')
-        .eq('cliente_id', clienteId)
-
-      if (errPedidos) {
-        return { success: false, error: `ERRO_BUSCA_PEDIDOS: ${errPedidos.message}` }
-      }
-
-      const pedidoIds = (pedidos || []).map((p: any) => p.id)
-
-      if (pedidoIds.length > 0) {
-        // Excluir itens dos pedidos
-        const { error: errItens } = await adminSupabase
-          .from('itens_pedido')
-          .delete()
-          .in('pedido_id', pedidoIds)
-
-        if (errItens) {
-          return { success: false, error: `ERRO_EXCLUIR_ITENS_PEDIDO: ${errItens.message}` }
-        }
-
-        // Excluir pedidos
-        const { error: errDelPedidos } = await adminSupabase
-          .from('pedidos')
-          .delete()
-          .eq('cliente_id', clienteId)
-
-        if (errDelPedidos) {
-          return { success: false, error: `ERRO_EXCLUIR_PEDIDOS: ${errDelPedidos.message}` }
-        }
-      }
-
-      // 4.2. Buscar conversas
-      const { data: conversas, error: errConversas } = await adminSupabase
-        .from('conversas')
-        .select('id')
-        .eq('cliente_id', clienteId)
-
-      if (errConversas) {
-        return { success: false, error: `ERRO_BUSCA_CONVERSAS: ${errConversas.message}` }
-      }
-
-      const conversaIds = (conversas || []).map((c: any) => c.id)
-
-      if (conversaIds.length > 0) {
-        // Excluir mensagens das conversas
-        const { error: errMensagens } = await adminSupabase
-          .from('mensagens')
-          .delete()
-          .in('conversa_id', conversaIds)
-
-        if (errMensagens) {
-          return { success: false, error: `ERRO_EXCLUIR_MENSAGENS: ${errMensagens.message}` }
-        }
-
-        // Excluir conversas
-        const { error: errDelConversas } = await adminSupabase
-          .from('conversas')
-          .delete()
-          .eq('cliente_id', clienteId)
-
-        if (errDelConversas) {
-          return { success: false, error: `ERRO_EXCLUIR_CONVERSAS: ${errDelConversas.message}` }
-        }
-      }
-
-      // 4.3. Excluir perfil de cliente
-      const { error: errDelCliente } = await adminSupabase
-        .from('clientes')
-        .delete()
-        .eq('id', clienteId)
-
-      if (errDelCliente) {
-        return { success: false, error: `ERRO_EXCLUIR_CLIENTE: ${errDelCliente.message}` }
-      }
-    }
-
-    // 5. Excluir perfil de public.perfis
-    const { error: errDelPerfil } = await adminSupabase
-      .from('perfis')
-      .delete()
-      .eq('id', usuarioAlvoId)
-
-    if (errDelPerfil) {
-      return { success: false, error: `ERRO_EXCLUIR_PERFIL: ${errDelPerfil.message}` }
-    }
-
-    // 6. Excluir do Supabase Auth
-    const { error: authDeleteError } = await adminSupabase.auth.admin.deleteUser(usuarioAlvoId)
-    if (authDeleteError) {
-      return { success: false, error: `ERRO_AUTH_DELETE: ${authDeleteError.message}` }
-    }
-
-    // 7. Inserir log de auditoria com a ação 'excluir_usuario'
-    const { error: logError } = await adminSupabase.from('logs_auditoria').insert({
-      usuario_id: callerId,
-      acao: 'excluir_usuario',
-      detalhes: {
-        usuario_alvo_id: usuarioAlvoId,
-        funcao: perfilAlvo.funcao
-      }
+    // The database owns one locked transaction: it preserves orders, events,
+    // receipts and the immutable audit trail while detaching personal data.
+    const { error: dbError } = await check.supabase.rpc('anonymizar_usuario_admin', {
+      p_usuario_alvo_id: usuarioAlvoId,
     })
+    if (dbError) return { success: false, error: dbError.message }
 
-    if (logError) {
-      console.warn('Erro ao registrar log de auditoria para excluir_usuario:', logError.message)
+    // Auth deletion is deliberately after the committed DB authority. If it
+    // fails, the inactive/anonymised state remains safe and can be retried.
+    const { error: authDeleteError } = await createAdminClient().auth.admin.deleteUser(usuarioAlvoId)
+    const authUserAlreadyAbsent = authDeleteError?.status === 404 || /user.*not found|not found.*user/i.test(authDeleteError?.message || '')
+    if (authDeleteError && !authUserAlreadyAbsent) {
+      return { success: false, error: `ERRO_AUTH_DELETE_PENDENTE: ${authDeleteError.message}` }
     }
+
+    const { error: completionError } = await check.supabase.rpc('concluir_anonymizacao_usuario_admin', {
+      p_usuario_alvo_id: usuarioAlvoId,
+    })
+    if (completionError) return { success: false, error: completionError.message }
 
     revalidatePath('/atendimento/admin')
     return { success: true }
@@ -882,7 +737,7 @@ export async function testarConexaoLLM(apiKey: string, model: string) {
         messages: [
           { role: 'user', content: 'responda apenas com a palavra OK' }
         ],
-        max_tokens: 5,
+        max_tokens: 150,
         temperature: 0.1
       })
     })
@@ -949,10 +804,10 @@ export async function testarConexaoOmniRoute(baseUrl: string, apiKey: string, mo
           { role: 'system', content: 'Você é a Sofía da Casa de Assados.' },
           { role: 'user', content: 'responda apenas com a palavra OK' }
         ],
-        max_tokens: 10,
+        max_tokens: 150,
         temperature: 0.1
       }),
-      signal: AbortSignal.timeout(10000)
+      signal: AbortSignal.timeout(15000)
     })
 
     const latenciaMs = Date.now() - inicio

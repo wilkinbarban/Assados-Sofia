@@ -1,20 +1,17 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Package,
   Search,
   RefreshCw,
   Clock,
   CheckCircle2,
-  XCircle,
   AlertCircle,
   Loader2,
   DollarSign,
-  QrCode,
   ExternalLink,
   MessageSquare,
-  Filter,
   TrendingUp,
   ShoppingBag,
   User,
@@ -32,12 +29,16 @@ import {
 import Link from 'next/link'
 import { BrandLogo } from '@/components/ui/BrandLogo'
 import { OperatorLogoutButton } from '@/components/operator/OperatorLogoutButton'
+import { ReceiptOutputActions } from '@/components/receipts/ReceiptOutputActions'
+import { getOrderContinuation, type OrderAction } from '@/components/operator/orderContinuation'
 import {
   actionListarPedidos,
   actionAtualizarStatusPedido,
   actionAtualizarStatusPagamento,
   gerarPreferenciaPagamento,
+  gerarCobrancaPixPedido,
 } from '@/app/actions/pedidos'
+import ModalCobrancaPix, { DadosPixModal } from '@/components/operator/ModalCobrancaPix'
 
 interface PedidoItem {
   id: string
@@ -63,6 +64,9 @@ interface Pedido {
   total_produtos_centavos: number
   total_pedido_centavos: number
   status_pagamento: 'pendente' | 'aprovado' | 'rejeitado' | 'reembolsado'
+  receita_realizada_centavos?: number
+  elegivel_para_comprovante?: boolean
+  continuacao?: string | null
   meio_pagamento: 'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro'
   mercado_pago_preferencia_id?: string | null
   data_criacao: string
@@ -131,8 +135,16 @@ export default function OrdersManagementDashboard({
 
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [filtroData, setFiltroData] = useState<string>('todos')
+  const [modalPixPedido, setModalPixPedido] = useState<{
+    id: string
+    clienteNome: string
+    dadosPix: DadosPixModal
+    statusPagamento: string
+  } | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
+  const paymentAttemptKeys = useRef(new Map<string, string>())
 
   const carregarPedidos = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true)
@@ -313,7 +325,7 @@ export default function OrdersManagementDashboard({
     })
   }, [pedidos, statusFilter, pagamentoFilter, entregaFilter, meioPagamentoFilter, periodoFilter, ordenacao, searchQuery])
 
-  const handleMarcarEntregue = async (pedidoId: string) => {
+  const handleAtualizarStatus = async (pedidoId: string, novoStatus: 'confirmado' | 'entregue') => {
     setActionLoadingId(pedidoId)
     setErrorMsg(null)
     setSuccessMsg(null)
@@ -321,11 +333,11 @@ export default function OrdersManagementDashboard({
     try {
       const res = await actionAtualizarStatusPedido({
         pedidoId,
-        novoStatus: 'entregue',
+        novoStatus,
       })
 
       if (res.success) {
-        setSuccessMsg('Pedido marcado como Entregue com sucesso!')
+        setSuccessMsg(novoStatus === 'entregue' ? 'Pedido marcado como entregue.' : 'Pedido confirmado com sucesso.')
         await carregarPedidos(true)
         setTimeout(() => setSuccessMsg(null), 3000)
       } else {
@@ -334,32 +346,6 @@ export default function OrdersManagementDashboard({
     } catch (err: any) {
       console.error('Erro ao marcar entregue:', err)
       setErrorMsg('Erro inesperado ao atualizar status.')
-    } finally {
-      setActionLoadingId(null)
-    }
-  }
-
-  const handleMarcarConfirmado = async (pedidoId: string) => {
-    setActionLoadingId(pedidoId)
-    setErrorMsg(null)
-    setSuccessMsg(null)
-
-    try {
-      const res = await actionAtualizarStatusPedido({
-        pedidoId,
-        novoStatus: 'confirmado',
-      })
-
-      if (res.success) {
-        setSuccessMsg('Pedido confirmado para preparo!')
-        await carregarPedidos(true)
-        setTimeout(() => setSuccessMsg(null), 3000)
-      } else {
-        setErrorMsg((res as any).error || 'Erro ao confirmar pedido.')
-      }
-    } catch (err: any) {
-      console.error('Erro ao confirmar pedido:', err)
-      setErrorMsg('Erro inesperado ao confirmar status.')
     } finally {
       setActionLoadingId(null)
     }
@@ -395,7 +381,10 @@ export default function OrdersManagementDashboard({
     }
   }
 
-  const handleAtualizarPagamento = async (pedidoId: string, novoStatus: 'aprovado' | 'pendente' | 'rejeitado') => {
+  const handleAtualizarPagamento = async (pedidoId: string, novoStatus: 'aprovado' | 'pendente' | 'rejeitado', reason: string) => {
+    const attempt = `${pedidoId}:${novoStatus}:${reason}`
+    const idempotencyKey = paymentAttemptKeys.current.get(attempt) ?? crypto.randomUUID()
+    paymentAttemptKeys.current.set(attempt, idempotencyKey)
     setActionLoadingId(pedidoId)
     setErrorMsg(null)
     setSuccessMsg(null)
@@ -404,9 +393,12 @@ export default function OrdersManagementDashboard({
       const res = await actionAtualizarStatusPagamento({
         pedidoId,
         statusPagamento: novoStatus,
+        reason,
+        idempotencyKey,
       })
 
       if (res.success) {
+        paymentAttemptKeys.current.delete(attempt)
         setSuccessMsg(`Status de pagamento atualizado para: ${novoStatus.toUpperCase()}`)
         await carregarPedidos(true)
         setTimeout(() => setSuccessMsg(null), 3000)
@@ -422,7 +414,20 @@ export default function OrdersManagementDashboard({
   }
 
   const handleAprovarPagamento = async (pedidoId: string) => {
-    return handleAtualizarPagamento(pedidoId, 'aprovado')
+    const reason = window.prompt('Informe o motivo da aprovação manual do pagamento:')?.trim()
+    if (!reason) {
+      setErrorMsg('Informe o motivo para registrar a aprovação manual.')
+      return
+    }
+    return handleAtualizarPagamento(pedidoId, 'aprovado', reason)
+  }
+
+  const handleOrderAction = async (pedidoId: string, action: OrderAction) => {
+    if (action === 'confirmar') return handleAtualizarStatus(pedidoId, 'confirmado')
+    if (action === 'entregar') return handleAtualizarStatus(pedidoId, 'entregue')
+    if (action === 'cancelar') return handleCancelarPedido(pedidoId)
+    if (action === 'aprovar_pagamento') return handleAprovarPagamento(pedidoId)
+    return handleGerarLinkPagamento(pedidoId)
   }
 
   const handleCancelarPedido = async (pedidoId: string) => {
@@ -435,18 +440,22 @@ export default function OrdersManagementDashboard({
     setSuccessMsg(null)
 
     try {
-      const res = await gerarPreferenciaPagamento(pedidoId)
-      if (res.success && res.url) {
-        window.open(res.url, '_blank', 'noopener,noreferrer')
-        setSuccessMsg('Link de pagamento aberto em nova aba!')
+      const pedido = pedidos.find((p) => p.id === pedidoId)
+      const res = await gerarCobrancaPixPedido(pedidoId)
+      if (res.success && res.pix) {
+        setModalPixPedido({
+          id: pedidoId,
+          clienteNome: (Array.isArray(pedido?.clientes) ? pedido?.clientes[0]?.nome : pedido?.clientes?.nome) || 'Cliente',
+          dadosPix: res.pix,
+          statusPagamento: pedido?.status_pagamento || 'pendente',
+        })
         await carregarPedidos(true)
-        setTimeout(() => setSuccessMsg(null), 3000)
       } else {
-        setErrorMsg((res as any).error || 'Não foi possível gerar preferência de pagamento.')
+        setErrorMsg((res as any).error || 'Não foi possível gerar cobrança PIX.')
       }
     } catch (err: any) {
-      console.error('Erro ao gerar pagamento MP:', err)
-      setErrorMsg('Erro ao processar pagamento.')
+      console.error('Erro ao gerar cobrança PIX:', err)
+      setErrorMsg('Erro ao processar cobrança PIX.')
     } finally {
       setActionLoadingId(null)
     }
@@ -1054,72 +1063,41 @@ export default function OrdersManagementDashboard({
                     </div>
                   </div>
 
-                  {/* Ações do Atendente / Operador */}
-                  {pedido.status !== 'cancelado' && (
-                    <div className="p-4 bg-zinc-950/60 border-t border-zinc-800/80 flex items-center gap-2 rounded-b-2xl">
-                      {pedido.status !== 'entregue' && (
-                        <button
-                          type="button"
-                          disabled={isCurrentAction}
-                          onClick={() => handleMarcarEntregue(pedido.id)}
-                          className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-950/40 cursor-pointer select-none active:scale-98 disabled:opacity-50"
-                          title="Finalizar pedido e marcar como entregue"
-                        >
-                          {isCurrentAction ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <>
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                              <span>Marcar Entregue</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-
-                      {pedido.status_pagamento === 'pendente' && (
-                        <button
-                          type="button"
-                          disabled={isCurrentAction}
-                          onClick={() => handleAprovarPagamento(pedido.id)}
-                          className="flex items-center justify-center gap-1 py-2 px-2.5 bg-zinc-800 hover:bg-zinc-700 text-amber-400 border border-zinc-700 rounded-xl text-xs font-bold transition-all cursor-pointer select-none active:scale-95 disabled:opacity-50"
-                          title="Confirmar recebimento do pagamento em dinheiro ou PIX"
-                        >
-                          <DollarSign className="h-3.5 w-3.5" />
-                          <span>Pago</span>
-                        </button>
-                      )}
-
-                      {pedido.status_pagamento === 'pendente' && (
-                        <button
-                          type="button"
-                          disabled={isCurrentAction}
-                          onClick={() => handleGerarLinkPagamento(pedido.id)}
-                          className="p-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded-xl transition-all cursor-pointer select-none"
-                          title="Gerar / Abrir Link de Pagamento no Mercado Pago"
-                        >
-                          <QrCode className="h-4 w-4" />
-                        </button>
-                      )}
-
-                      {pedido.status !== 'entregue' && (
-                        <button
-                          type="button"
-                          disabled={isCurrentAction}
-                          onClick={() => handleCancelarPedido(pedido.id)}
-                          className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-950/40 rounded-xl border border-transparent hover:border-red-900/40 transition-colors cursor-pointer select-none"
-                          title="Cancelar pedido e restaurar estoque"
-                        >
-                          <XCircle className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  )}
+                  {(() => {
+                    const continuation = getOrderContinuation(pedido)
+                    const actionLabels: Record<OrderAction, string> = {
+                      confirmar: 'Confirmar pedido', entregar: 'Marcar entregue', cancelar: 'Cancelar pedido',
+                      aprovar_pagamento: 'Aprovar pagamento', gerar_pagamento: 'Cobrança PIX',
+                    }
+                    return (
+                      <div className="p-4 bg-zinc-950/60 border-t border-zinc-800/80 rounded-b-2xl" aria-label="Próximas ações do pedido">
+                        <p className="mb-2 text-[11px] text-zinc-400" role="status">{continuation.message}</p>
+                        {pedido.elegivel_para_comprovante && <ReceiptOutputActions pedidoId={pedido.id} disabled={isCurrentAction} />}
+                        {continuation.actions.length > 0 && <div className="flex flex-wrap items-center gap-2">
+                          {continuation.actions.map((action) => <button key={action} type="button" disabled={isCurrentAction} onClick={() => handleOrderAction(pedido.id, action)} aria-label={actionLabels[action]} className={action === 'cancelar' ? 'inline-flex items-center gap-1.5 py-2 px-3 rounded-xl text-xs font-bold border border-zinc-700 text-zinc-300 hover:border-red-900 hover:bg-red-950/40 hover:text-red-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400 disabled:opacity-50' : 'inline-flex items-center gap-1.5 py-2 px-3 bg-amber-500 hover:bg-amber-400 text-zinc-950 rounded-xl text-xs font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400 disabled:opacity-50'}>
+                            {isCurrentAction ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : actionLabels[action]}
+                          </button>)}
+                        </div>}
+                      </div>
+                    )
+                  })()}
                 </div>
               )
             })}
           </div>
         )}
       </main>
+
+      {modalPixPedido && (
+        <ModalCobrancaPix
+          isOpen={!!modalPixPedido}
+          onClose={() => setModalPixPedido(null)}
+          pedidoId={modalPixPedido.id}
+          clienteNome={modalPixPedido.clienteNome}
+          dadosPix={modalPixPedido.dadosPix}
+          statusPagamento={modalPixPedido.statusPagamento}
+        />
+      )}
     </div>
   )
 }

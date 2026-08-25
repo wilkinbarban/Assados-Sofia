@@ -43,37 +43,19 @@ export async function POST(request: Request) {
       )
     }
 
-    // 3. Criar ou atualizar usuário não-confirmado no Supabase Auth
+    // 3. Create only a new pending account. Existing accounts are never
+    // changed before proving control of their phone, confirmed or otherwise.
     const supabaseAdmin = createAdminClient()
-    let userId: string
-
     const { data: createData, error: createError } = await supabaseAdmin.auth.admin.createUser({
-      phone: canonicalPhone,
-      password: senha,
-      user_metadata: { nome, name: nome },
-      phone_confirm: false
+      phone: canonicalPhone, password: senha, user_metadata: { nome, name: nome }, phone_confirm: false
     })
-
     if (createError) {
-      // Se usuário já existe não-confirmado, atualizar senha e metadata
       if (createError.message?.toLowerCase().includes('already') || createError.status === 422) {
-        const { data: usersData } = await supabaseAdmin.auth.admin.listUsers()
-        const existingUser = usersData?.users?.find(u => u.phone === canonicalPhone)
-        if (existingUser) {
-          userId = existingUser.id
-          await supabaseAdmin.auth.admin.updateUserById(userId, {
-            password: senha,
-            user_metadata: { nome, name: nome }
-          })
-        } else {
-          return NextResponse.json({ error: createError.message }, { status: 400 })
-        }
-      } else {
-        return NextResponse.json({ error: createError.message }, { status: 400 })
+        return NextResponse.json({ success: false, continuation: 'CHECK_YOUR_EXISTING_SIGNUP_OR_RECOVER_ACCOUNT' }, { status: 202 })
       }
-    } else {
-      userId = createData.user.id
+      return NextResponse.json({ error: createError.message }, { status: 400 })
     }
+    const userId = createData.user.id
 
     // 4. Obter IP de origem
     const ipOrigem = request.headers.get('x-forwarded-for')?.split(',')[0].trim() || '127.0.0.1'

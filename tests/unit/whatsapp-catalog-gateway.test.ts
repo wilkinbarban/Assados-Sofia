@@ -51,10 +51,10 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
     })
 
     expect(payload.number).toBe('5541999998888')
-    expect(payload.text).toContain('O que vai querer hoje')
+    expect(payload.body).toContain('O que vai querer hoje')
     expect(payload.cards).toHaveLength(2)
     expect(payload.cards[0].title).toBe('🍗 Combo 1 - O Clássico da Sofia')
-    expect(payload.cards[0].image).toBe('https://casadeasados.duckdns.org/combo1.jpg')
+    expect(payload.cards[0].imageUrl).toBe('https://casadeasados.duckdns.org/combo1.jpg')
     expect(payload.cards[0].buttons[0].id).toBe('cart:add:prod-1')
     expect(payload.cards[0].buttons[0].displayText).toContain('Adicionar')
   })
@@ -96,7 +96,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
     )
   })
 
-  it('enviarCardapioWhatsApp executa fallback transparente para cartões simulados se carrossel falhar (ex: 404/500)', async () => {
+  it('enviarCardapioWhatsApp executa fallback para botões se o carrossel falhar', async () => {
     // 1. Falha no envio do carrossel (ex: Evolution 2.3.7 retorna 404 para sendCarousel)
     mockFetch.mockResolvedValueOnce({
       ok: false,
@@ -105,9 +105,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
       text: async () => 'Endpoint sendCarousel not found on 2.3.7',
     })
 
-    // 2. Envios sucessivos de fallback com sendMedia
-    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'SUCCESS' }) })
-    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ status: 'SUCCESS' }) })
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 201 })
 
     const resultado = await enviarCardapioWhatsApp({
       telefone: '5541999998888',
@@ -115,7 +113,46 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
     })
 
     expect(resultado.success).toBe(true)
-    expect(resultado.modoUtilizado).toBe('CARDS_FALLBACK')
-    expect(mockFetch).toHaveBeenCalledTimes(3) // 1 tentativa carrossel + 2 fotos de fallback
+    expect(resultado.modoUtilizado).toBe('BUTTONS_FALLBACK')
+    expect(mockFetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('continua para lista quando o fallback de botões é rejeitado', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 404, text: async () => 'carousel unavailable' })
+      .mockResolvedValueOnce({ ok: false, status: 422, text: async () => 'buttons unavailable' })
+      .mockResolvedValueOnce({ ok: true, status: 201 })
+
+    const resultado = await enviarCardapioWhatsApp({
+      telefone: '5541999998888',
+      produtos: mockProdutos,
+    })
+
+    expect(resultado).toEqual({
+      success: true,
+      modoUtilizado: 'LIST_FALLBACK',
+    })
+    expect(mockFetch).toHaveBeenLastCalledWith(
+      'http://127.0.0.1:8086/message/sendList/asados-bot',
+      expect.objectContaining({ method: 'POST' })
+    )
+  })
+
+  it('executa a cascata carousel → cards → text e retorna falha se nenhuma entrega funcionar', async () => {
+    mockFetch
+      .mockResolvedValueOnce({ ok: false, status: 404, text: async () => 'carousel unavailable' })
+      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'buttons unavailable' })
+      .mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'list unavailable' })
+      .mockResolvedValueOnce({ ok: false, status: 503, text: async () => 'text unavailable' })
+
+    const resultado = await enviarCardapioWhatsApp({
+      telefone: '5541999998888',
+      produtos: mockProdutos,
+    })
+
+    expect(resultado.success).toBe(false)
+    expect(resultado.modoUtilizado).toBe('TEXT_FALLBACK')
+    expect(resultado.error).toContain('Evolution API rejeitou sendText com status 503')
+    expect(mockFetch).toHaveBeenCalledTimes(4)
   })
 })

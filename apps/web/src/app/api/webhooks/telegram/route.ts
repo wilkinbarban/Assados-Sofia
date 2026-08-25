@@ -6,6 +6,12 @@ import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { deriveTelegramMessageKey } from '@/lib/telegram/idempotency'
 import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
 import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
+import { executarToolSofia } from '@/lib/ai/tools'
+import { parseTelegramCatalogCallback, selectOfficialTelegramCombos } from '@/lib/telegram/catalog'
+import {
+  enviarCatalogoTelegram,
+  responderCallbackTelegram,
+} from '@/lib/telegram/send'
 
 /**
  * Envia mensagem direta via API do Telegram (sem passar pelo pipeline RAG)
@@ -45,6 +51,17 @@ type TelegramMessage = {
   from?: { id?: string | number }
   text?: string
   contact?: { phone_number?: string; first_name?: string; user_id?: string | number }
+}
+
+type TelegramCallbackQuery = {
+  id: string
+  data?: string
+  from: { id: string | number }
+  message?: TelegramMessage
+}
+
+function isCatalogRequest(text: string) {
+  return /\b(card[aá]pio|menu|combos?|op[cç][oõ]es|o que tem)\b/i.test(text)
 }
 
 function isOwnTelegramContact(message: TelegramMessage): boolean {
@@ -129,6 +146,65 @@ export async function POST(request: Request) {
     }
 
     const body = await request.json()
+    const callbackQuery = body.callback_query as TelegramCallbackQuery | undefined
+    if (callbackQuery) {
+      const action = parseTelegramCatalogCallback(callbackQuery.data || '')
+      const chatId = callbackQuery.message?.chat.id?.toString() || callbackQuery.from.id.toString()
+      console.info('[Telegram Webhook] Catalog callback received.', {
+        action: action?.action || 'unsupported',
+        chatId,
+      })
+      if (!action) {
+        await responderCallbackTelegram(callbackQuery.id, 'Ação indisponível.')
+        return Response.json({ ok: true, status: 'unsupported_callback' })
+      }
+
+      const supabaseAdmin = createAdminClient()
+      const { data: client, error: clientError } = await supabaseAdmin
+        .from('clientes')
+        .select('id, telefone')
+        .eq('telegram_chat_id', chatId)
+        .maybeSingle()
+
+      if (clientError || !client) {
+        await responderCallbackTelegram(callbackQuery.id, 'Compartilhe seu telefone antes de montar o pedido.')
+        return Response.json({ ok: true, status: 'client_required' })
+      }
+
+      const result = action.action === 'cart'
+        ? await executarToolSofia('ver_carrinho', {}, {
+            clienteId: client.id,
+            telefone: client.telefone || undefined,
+            canal: 'telegram',
+            supabaseClient: supabaseAdmin,
+          })
+        : action.action === 'details'
+          ? await (async () => {
+              const { data: product } = await supabaseAdmin
+                .from('produtos')
+                .select('id, nome, descricao, preco_centavos, url_imagem')
+                .eq('id', action.productId)
+                .eq('ativo', true)
+                .maybeSingle()
+              return product
+                ? { success: true, mensagem: `${product.nome}\n\n${product.descricao || 'Assado especial da casa.'}\n\nR$ ${(product.preco_centavos / 100).toFixed(2).replace('.', ',')}` }
+                : { success: false, mensagem: 'Esse produto não está disponível no momento.' }
+            })()
+          : await executarToolSofia('adicionar_ao_carrinho', {
+              produtoId: action.productId,
+              quantidade: 1,
+            }, {
+              clienteId: client.id,
+              telefone: client.telefone || undefined,
+              canal: 'telegram',
+              supabaseClient: supabaseAdmin,
+            })
+
+      await responderCallbackTelegram(callbackQuery.id, result.success ? 'Pedido atualizado.' : result.mensagem)
+      await enviarMensagemDireta(chatId, result.mensagem)
+      return Response.json({ ok: true, status: `catalog_${action.action}` })
+    }
+
     const message = body.message as TelegramMessage | undefined
 
     if (!message) {
@@ -446,6 +522,19 @@ Como posso te ajudar com o churrasco hoje? 🥩`
         }
       }
       return Response.json({ ok: true, message: 'Opt-out processado' })
+    }
+
+    if (isCatalogRequest(messageText)) {
+      const { data: products, error: productsError } = await supabaseAdmin
+        .from('produtos')
+        .select('id, nome, descricao, preco_centavos, quantidade_estoque, url_imagem')
+        .eq('ativo', true)
+        .order('ordem_exibicao', { ascending: true })
+
+      if (!productsError && products?.length) {
+        await enviarCatalogoTelegram(telegramChatId, selectOfficialTelegramCombos(products))
+        return Response.json({ ok: true, status: 'catalog_sent' })
+      }
     }
 
     // Disparar pipeline RAG

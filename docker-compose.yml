@@ -33,8 +33,34 @@ services:
       - supabase-private
       - portafolio-net
 
+  mercado-pago-recovery:
+    image: alpine:3.20
+    container_name: asados-mercado-pago-recovery
+    restart: always
+    environment:
+      - MERCADO_PAGO_RECOVERY_SECRET=${MERCADO_PAGO_RECOVERY_SECRET:?set MERCADO_PAGO_RECOVERY_SECRET}
+      - MERCADO_PAGO_RECOVERY_URL=http://web:3000/api/internal/mercadopago/recover
+      - MERCADO_PAGO_RECOVERY_INTERVAL_SECONDS=${MERCADO_PAGO_RECOVERY_INTERVAL_SECONDS:-60}
+    command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec /scheduler/mercadopago-recovery-scheduler.sh"]
+    depends_on:
+      web:
+        condition: service_healthy
+    volumes:
+      - ./ops/mercadopago-recovery-scheduler.sh:/scheduler/mercadopago-recovery-scheduler.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /tmp/mercado-pago-recovery-last-success"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 70s
+    networks:
+      - app-private
+
   evolution-api:
-    image: evoapicloud/evolution-api:v2.3.7
+    # Production remains on the latest verified stable release by default.
+    # Use EVOLUTION_API_VERSION=2.4.0-rc2 only in the compatibility laboratory;
+    # keep WHATSAPP_INTERACTIVE_CAROUSEL_ENABLED=false until the matrix passes.
+    image: evoapicloud/evolution-api:${EVOLUTION_API_VERSION:-v2.3.7}
     container_name: asados-evolution-api
     restart: always
     ports:
@@ -137,4 +163,3 @@ networks:
   portafolio-net:
     name: portafolio_default
     external: true
-

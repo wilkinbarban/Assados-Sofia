@@ -79,6 +79,7 @@ export default async function AdminPage() {
     WHATSAPP_PROVIDER: 'meta',
     MERCADO_PAGO_ACCESS_TOKEN: '',
     MERCADO_PAGO_PUBLIC_KEY: '',
+    MERCADO_PAGO_WEBHOOK_SECRET: '',
     TELEGRAM_BOT_TOKEN: '',
     SOFIA_SYSTEM_PROMPT: '',
   }
@@ -131,6 +132,9 @@ export default async function AdminPage() {
   }
   if (!systemConfigs.MERCADO_PAGO_PUBLIC_KEY && process.env.MERCADO_PAGO_PUBLIC_KEY) {
     systemConfigs.MERCADO_PAGO_PUBLIC_KEY = process.env.MERCADO_PAGO_PUBLIC_KEY
+  }
+  if (!systemConfigs.MERCADO_PAGO_WEBHOOK_SECRET && process.env.MERCADO_PAGO_WEBHOOK_SECRET) {
+    systemConfigs.MERCADO_PAGO_WEBHOOK_SECRET = process.env.MERCADO_PAGO_WEBHOOK_SECRET
   }
   if (!systemConfigs.OMNIROUTE_BASE_URL && process.env.OMNIROUTE_BASE_URL) {
     systemConfigs.OMNIROUTE_BASE_URL = process.env.OMNIROUTE_BASE_URL

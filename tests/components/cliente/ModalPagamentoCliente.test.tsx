@@ -1,0 +1,98 @@
+import React from 'react'
+import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { describe, expect, it, vi, afterEach } from 'vitest'
+import ModalPagamentoCliente from '@/components/cliente/ModalPagamentoCliente'
+
+const mocks = vi.hoisted(() => ({
+  gerarCobrancaPixPedido: vi.fn(),
+  gerarPreferenciaPagamento: vi.fn(),
+  enviarComprovantePagamentoCliente: vi.fn(),
+  createClient: vi.fn(),
+}))
+
+vi.mock('@/app/actions/pedidos', () => ({
+  gerarCobrancaPixPedido: mocks.gerarCobrancaPixPedido,
+  gerarPreferenciaPagamento: mocks.gerarPreferenciaPagamento,
+  enviarComprovantePagamentoCliente: mocks.enviarComprovantePagamentoCliente,
+}))
+
+vi.mock('@/lib/supabase/client', () => ({
+  createClient: () => ({
+    channel: () => ({
+      on: () => ({
+        subscribe: vi.fn(),
+      }),
+    }),
+    removeChannel: vi.fn(),
+  }),
+}))
+
+describe('ModalPagamentoCliente Component', () => {
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+  it('loads and renders PIX QR code and Copia e Cola on open', async () => {
+    mocks.gerarCobrancaPixPedido.mockResolvedValue({
+      success: true,
+      pix: {
+        qrCodeBase64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        qrCodeCopiaCola: '00020126580014br.gov.bcb.pix0136cliente-order',
+        ticketUrl: 'https://sandbox.mercadopago.com.br/ticket/client',
+        paymentId: 'mock_client_pix',
+        valorCentavos: 8500,
+      },
+    })
+
+    render(
+      <ModalPagamentoCliente
+        isOpen={true}
+        onClose={vi.fn()}
+        pedidoId="order-client-1234"
+        valorCentavos={8500}
+        statusPagamento="pendente"
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('00020126580014br.gov.bcb.pix0136cliente-order')).toBeDefined()
+    })
+  })
+
+  it('switches to Comprovante tab and submits customer receipt', async () => {
+    mocks.gerarCobrancaPixPedido.mockResolvedValue({
+      success: true,
+      pix: {
+        qrCodeCopiaCola: '00020126580014br.gov.bcb.pix0136cliente-order',
+      },
+    })
+    mocks.enviarComprovantePagamentoCliente.mockResolvedValue({ success: true })
+
+    render(
+      <ModalPagamentoCliente
+        isOpen={true}
+        onClose={vi.fn()}
+        pedidoId="order-client-1234"
+        valorCentavos={8500}
+        statusPagamento="pendente"
+      />
+    )
+
+    const comprovanteTab = screen.getByRole('button', { name: /Comprovante/i })
+    fireEvent.click(comprovanteTab)
+
+    expect(screen.getByText(/Clique para selecionar ou arraste o comprovante/i)).toBeInTheDocument()
+
+    const textarea = screen.getByPlaceholderText(/Ex: Realizei o pagamento às 12:10/i)
+    fireEvent.change(textarea, { target: { value: 'Comprovante PIX pago ID E999888' } })
+
+    const submitBtn = screen.getByRole('button', { name: /Enviar Comprovante ao Atendimento/i })
+    fireEvent.click(submitBtn)
+
+    await waitFor(() => {
+      expect(mocks.enviarComprovantePagamentoCliente).toHaveBeenCalledWith('order-client-1234', {
+        texto: 'Comprovante PIX pago ID E999888',
+      })
+    })
+  })
+})

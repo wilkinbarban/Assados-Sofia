@@ -5,6 +5,24 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { agendarPedidoNoCalendario } from '@/lib/calendar/google'
+import {
+  projetarElegibilidadeReceita,
+  resumirReceitaRealizada,
+  type OrderRevenueInput,
+} from '@/lib/orders/revenueEligibility'
+import { notificarClienteAtualizacaoPedido } from '@/lib/orders/orderNotifications'
+import { obterConfiguracaoSistema } from '@/lib/config/sistema'
+import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
+import { enviarMensagemTelegram } from '@/lib/telegram/send'
+import QRCode from 'qrcode'
+
+function safeRevalidatePath(path: string) {
+  try {
+    revalidatePath(path)
+  } catch {
+    // Silencia erros de contexto quando executado em testes unitários sem store estática
+  }
+}
 
 
 // Schema para validação dos dados do pedido recebidos pelo operador
@@ -183,11 +201,444 @@ export async function criarPedidoOperador(data: {
       return { success: false, error: `ERRO_ITENS_PEDIDO: ${itensError.message}` }
     }
 
-    revalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento')
     return { success: true, data: pedido }
   } catch (error: any) {
     console.error('Erro na action criarPedidoOperador:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+const editarItensPedidoSchema = z.object({
+  pedidoId: z.string().min(1, 'ID do pedido inválido'),
+  itens: z.array(
+    z.object({
+      produto_id: z.string().min(1, 'ID do produto inválido'),
+      quantidade: z.number().int().min(1, 'A quantidade deve ser de pelo menos 1'),
+      preco_unitario_centavos: z.number().int().min(0, 'Preço unitário inválido'),
+    })
+  ).min(1, 'O pedido deve conter pelo menos 1 item'),
+  notificarCliente: z.boolean().optional().default(true),
+})
+
+/**
+ * Permite ao operador editar os componentes/itens de um pedido ativo no Atendimento,
+ * recalculando o total em tempo real e notificando o cliente nos canais configurados.
+ */
+export async function actionEditarItensPedidoOperador(input: {
+  pedidoId: string
+  itens: Array<{
+    produto_id: string
+    quantidade: number
+    preco_unitario_centavos: number
+  }>
+  notificarCliente?: boolean
+}) {
+  try {
+    const validacao = editarItensPedidoSchema.safeParse(input)
+    if (!validacao.success) {
+      const msg = validacao.error.issues?.[0]?.message || (validacao.error as any).errors?.[0]?.message || 'DADOS_INVALIDOS'
+      return { success: false, error: msg }
+    }
+
+    const { pedidoId, itens, notificarCliente } = validacao.data
+
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    const { data: perfil, error: perfilError } = await supabase
+      .from('perfis')
+      .select('funcao, ativo')
+      .eq('id', user.id)
+      .single()
+
+    const funcoesValidas = ['admin', 'supervisor', 'vendedor']
+    if (perfilError || !perfil || !perfil.ativo || !funcoesValidas.includes(perfil.funcao)) {
+      return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
+    }
+
+    const admin = createAdminClient()
+
+    // 1. Buscar pedido atual
+    const { data: pedido, error: pedidoError } = await admin
+      .from('pedidos')
+      .select(`
+        id,
+        cliente_id,
+        conversa_id,
+        status,
+        status_pagamento,
+        tipo_entrega,
+        taxa_entrega_centavos,
+        total_produtos_centavos,
+        total_pedido_centavos
+      `)
+      .eq('id', pedidoId)
+      .single()
+
+    if (pedidoError || !pedido) {
+      return { success: false, error: 'PEDIDO_NAO_ENCONTRADO' }
+    }
+
+    if (pedido.status === 'cancelado' || pedido.status === 'entregue') {
+      return { success: false, error: `PEDIDO_NAO_EDITAVEL: O pedido está com status '${pedido.status}'` }
+    }
+
+    // 2. Buscar nomes e detalhes atualizados dos produtos
+    const produtoIds = itens.map((it) => it.produto_id)
+    const { data: produtosDb, error: prodError } = await admin
+      .from('produtos')
+      .select('id, nome, preco_centavos')
+      .in('id', produtoIds)
+
+    if (prodError) {
+      return { success: false, error: `ERRO_PRODUTOS: ${prodError.message}` }
+    }
+
+    const produtosMap = new Map((produtosDb || []).map((p) => [p.id, p]))
+
+    // 3. Recalcular totais com base nos preços dos itens
+    let novoTotalProdutosCentavos = 0
+    const novosItensValidados = itens.map((it) => {
+      const prodInfo = produtosMap.get(it.produto_id)
+      const precoUnit = it.preco_unitario_centavos > 0 ? it.preco_unitario_centavos : (prodInfo?.preco_centavos || 0)
+      novoTotalProdutosCentavos += precoUnit * it.quantidade
+      return {
+        pedido_id: pedidoId,
+        produto_id: it.produto_id,
+        quantidade: it.quantidade,
+        preco_unitario_centavos: precoUnit,
+        nome: prodInfo?.nome || 'Item',
+      }
+    })
+
+    const novaTaxa = pedido.taxa_entrega_centavos || 0
+    const novoTotalPedidoCentavos = novoTotalProdutosCentavos + novaTaxa
+
+    // 4. Substituir itens do pedido
+    await admin.from('itens_pedido').delete().eq('pedido_id', pedidoId)
+
+    const itensParaInserir = novosItensValidados.map(({ nome, ...resto }) => resto)
+    const { error: insertItensError } = await admin
+      .from('itens_pedido')
+      .insert(itensParaInserir)
+
+    if (insertItensError) {
+      console.error('[actionEditarItensPedidoOperador] Erro ao inserir itens atualizados:', insertItensError)
+      return { success: false, error: `ERRO_ATUALIZACAO_ITENS: ${insertItensError.message}` }
+    }
+
+    // 5. Atualizar totais do pedido
+    const { data: pedidoAtualizado, error: updatePedidoError } = await admin
+      .from('pedidos')
+      .update({
+        total_produtos_centavos: novoTotalProdutosCentavos,
+        total_pedido_centavos: novoTotalPedidoCentavos,
+        data_atualizacao: new Date().toISOString(),
+      })
+      .eq('id', pedidoId)
+      .select()
+      .single()
+
+    if (updatePedidoError) {
+      console.error('[actionEditarItensPedidoOperador] Erro ao atualizar pedido:', updatePedidoError)
+      return { success: false, error: `ERRO_ATUALIZACAO_PEDIDO: ${updatePedidoError.message}` }
+    }
+
+    // 6. Formatar mensagem detalhada
+    const formatarMoeda = (centavos: number) =>
+      (centavos / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    const itensTexto = novosItensValidados
+      .map((it) => `• ${it.quantidade}x ${it.nome} (${formatarMoeda(it.preco_unitario_centavos * it.quantidade)})`)
+      .join('\n')
+
+    const mensagemAtualizacao = `📝 *Pedido #${pedidoId.substring(0, 8).toUpperCase()} Atualizado no Balcão!*\n\n*Itens Atualizados:*\n${itensTexto}\n\n💰 *Novo Total:* ${formatarMoeda(novoTotalPedidoCentavos)}\n\nOlá! Seu pedido foi ajustado conforme combinado com o atendimento. Você já pode conferir no seu painel!`
+
+    // Registrar no chat se houver conversa vinculada
+    if (pedido.conversa_id) {
+      await admin.from('mensagens').insert({
+        conversa_id: pedido.conversa_id,
+        remetente: 'operador',
+        conteudo: mensagemAtualizacao,
+        url_anexo: null,
+      })
+
+      await admin.from('conversas').update({
+        data_atualizacao: new Date().toISOString(),
+      }).eq('id', pedido.conversa_id)
+    }
+
+    safeRevalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento/pedidos')
+    safeRevalidatePath('/cliente/chat')
+    safeRevalidatePath('/cliente/pedidos')
+
+    // 7. Notificar cliente omnichannel se solicitado
+    if (notificarCliente) {
+      notificarClienteAtualizacaoPedido({
+        pedidoId,
+        tipo: 'status_pedido',
+        novoStatus: pedido.status,
+        statusPagamento: pedido.status_pagamento,
+      }).catch((err) => {
+        console.warn('[actionEditarItensPedidoOperador] Erro não-bloqueante na notificação:', err)
+      })
+    }
+
+    return {
+      success: true,
+      pedido: pedidoAtualizado,
+      totalProdutosCentavos: novoTotalProdutosCentavos,
+      totalPedidoCentavos: novoTotalPedidoCentavos,
+    }
+  } catch (error: any) {
+    console.error('[actionEditarItensPedidoOperador] Erro inesperado:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Cria um pedido real no banco de dados a partir do carrinho ativo do cliente.
+ * Limpa o carrinho e registra o pedido com status 'novo' para que os atendentes humanos
+ * vejam o pedido na Área de Atendimento e o cliente veja em "Meus Pedidos".
+ */
+export async function actionCriarPedidoCliente(data: {
+  conversaId?: string | null
+  horarioRetirada?: string | null
+}) {
+  try {
+    const supabase = await createClient()
+
+    // 1. Validar autenticação do usuário
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    const admin = createAdminClient()
+
+    // 2. Buscar cliente vinculado ao usuário
+    const { data: cliente, error: clienteError } = await admin
+      .from('clientes')
+      .select('id, nome, telefone, usuario_id')
+      .eq('usuario_id', user.id)
+      .single()
+
+    if (clienteError || !cliente) {
+      return { success: false, error: 'CLIENTE_NAO_ENCONTRADO' }
+    }
+
+    // 3. Buscar carrinho ativo com itens e detalhes dos produtos
+    const { data: carrinho, error: cartError } = await admin
+      .from('carrinhos')
+      .select(`
+        id,
+        horario_retirada,
+        itens_carrinho (
+          id,
+          produto_id,
+          quantidade,
+          preco_unitario_centavos,
+          produtos (
+            id,
+            nome,
+            preco_centavos,
+            ativo
+          )
+        )
+      `)
+      .eq('cliente_id', cliente.id)
+      .maybeSingle()
+
+    if (cartError || !carrinho || !carrinho.itens_carrinho || carrinho.itens_carrinho.length === 0) {
+      return { success: false, error: 'CARRINHO_VAZIO', message: 'Nenhum item encontrado no carrinho ativo' }
+    }
+
+    // 4. Validar produtos e calcular totais
+    let totalProdutosCentavos = 0
+    const itensValidos: Array<{
+      produto_id: string
+      quantidade: number
+      preco_unitario_centavos: number
+      nome: string
+    }> = []
+
+    for (const it of carrinho.itens_carrinho as any[]) {
+      const prod = it.produtos
+      if (!prod || prod.ativo === false) continue
+      const precoUnit = prod.preco_centavos || it.preco_unitario_centavos
+      totalProdutosCentavos += precoUnit * it.quantidade
+      itensValidos.push({
+        produto_id: it.produto_id,
+        quantidade: it.quantidade,
+        preco_unitario_centavos: precoUnit,
+        nome: prod.nome,
+      })
+    }
+
+    if (itensValidos.length === 0) {
+      return { success: false, error: 'PRODUTOS_INDISPONIVEIS', message: 'Nenhum produto ativo disponível no catálogo' }
+    }
+
+    // 5. Inserir Pedido no banco
+    const { data: pedido, error: pedidoError } = await admin
+      .from('pedidos')
+      .insert({
+        cliente_id: cliente.id,
+        conversa_id: data.conversaId || null,
+        status: 'novo',
+        tipo_entrega: 'retirada',
+        endereco_entrega: null,
+        taxa_entrega_centavos: 0,
+        total_produtos_centavos: totalProdutosCentavos,
+        total_pedido_centavos: totalProdutosCentavos,
+        status_pagamento: 'pendente',
+        meio_pagamento: 'pix',
+      })
+      .select()
+      .single()
+
+    if (pedidoError || !pedido) {
+      console.error('[actionCriarPedidoCliente] Erro ao inserir pedido:', pedidoError)
+      return { success: false, error: `ERRO_CRIACAO_PEDIDO: ${pedidoError?.message || 'Falha desconhecida'}` }
+    }
+
+    // 6. Inserir itens vinculados ao pedido
+    const itensInsert = itensValidos.map((it) => ({
+      pedido_id: pedido.id,
+      produto_id: it.produto_id,
+      quantidade: it.quantidade,
+      preco_unitario_centavos: it.preco_unitario_centavos,
+    }))
+
+    const { error: itensError } = await admin
+      .from('itens_pedido')
+      .insert(itensInsert)
+
+    if (itensError) {
+      console.error('[actionCriarPedidoCliente] Erro ao inserir itens, revertendo pedido:', itensError)
+      await admin.from('pedidos').delete().eq('id', pedido.id)
+      return { success: false, error: `ERRO_ITENS_PEDIDO: ${itensError.message}` }
+    }
+
+    // 7. Limpar itens do carrinho ativo
+    await admin.from('itens_carrinho').delete().eq('carrinho_id', carrinho.id)
+
+    // 8. Formatar mensagem e registrar no chat
+    const formatarMoeda = (centavos: number) =>
+      (centavos / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    const horarioEfetivo = data.horarioRetirada || carrinho.horario_retirada || '12:00'
+    const itensTexto = itensValidos
+      .map((it) => `• ${it.quantidade}x ${it.nome} (${formatarMoeda(it.preco_unitario_centavos * it.quantidade)})`)
+      .join('\n')
+
+    const mensagemTexto = `🛒 *Pedido #${pedido.id.substring(0, 8).toUpperCase()} Registrado!*\n\n${itensTexto}\n\n💰 *Total:* ${formatarMoeda(totalProdutosCentavos)}\n🕒 *Horário de Retirada:* ${horarioEfetivo}\n📍 *Local:* Balcão Umbará (Casa de Assados Sofia)\n\nOlá! Acabei de enviar esse pedido para o atendimento!`
+
+    let novaMensagem = null
+    if (data.conversaId) {
+      const { data: msgData } = await admin
+        .from('mensagens')
+        .insert({
+          conversa_id: data.conversaId,
+          remetente: 'cliente',
+          conteudo: mensagemTexto,
+          url_anexo: null,
+        })
+        .select()
+        .single()
+
+      novaMensagem = msgData
+
+      await admin.from('conversas').update({
+        data_atualizacao: new Date().toISOString(),
+      }).eq('id', data.conversaId)
+    }
+
+    safeRevalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento/pedidos')
+    safeRevalidatePath('/cliente/chat')
+    safeRevalidatePath('/cliente/pedidos')
+
+    return {
+      success: true,
+      pedido,
+      mensagem: novaMensagem,
+      mensagemTexto,
+    }
+  } catch (error: any) {
+    console.error('[actionCriarPedidoCliente] Erro inesperado:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Lista todos os pedidos registrados pertencentes ao cliente autenticado atual.
+ */
+export async function actionListarMeusPedidosCliente() {
+  try {
+    const supabase = await createClient()
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO', data: [] }
+    }
+
+    const admin = createAdminClient()
+    const { data: cliente, error: clienteError } = await admin
+      .from('clientes')
+      .select('id')
+      .eq('usuario_id', user.id)
+      .single()
+
+    if (clienteError || !cliente) {
+      return { success: false, error: 'CLIENTE_NAO_ENCONTRADO', data: [] }
+    }
+
+    const { data: pedidos, error: pedidosError } = await admin
+      .from('pedidos')
+      .select(`
+        id,
+        cliente_id,
+        conversa_id,
+        status,
+        tipo_entrega,
+        endereco_entrega,
+        taxa_entrega_centavos,
+        total_produtos_centavos,
+        total_pedido_centavos,
+        status_pagamento,
+        meio_pagamento,
+        data_criacao,
+        data_atualizacao,
+        itens_pedido (
+          id,
+          produto_id,
+          quantidade,
+          preco_unitario_centavos,
+          produtos (
+            id,
+            nome,
+            preco_centavos,
+            url_imagem,
+            url_imagem_thumb
+          )
+        )
+      `)
+      .eq('cliente_id', cliente.id)
+      .order('data_criacao', { ascending: false })
+
+    if (pedidosError) {
+      console.error('[actionListarMeusPedidosCliente] Erro ao listar pedidos:', pedidosError)
+      return { success: false, error: pedidosError.message, data: [] }
+    }
+
+    return { success: true, data: pedidos || [] }
+  } catch (error: any) {
+    console.error('[actionListarMeusPedidosCliente] Erro inesperado:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO', data: [] }
   }
 }
 
@@ -201,6 +652,56 @@ function mapearErroEstoquePedido(error: { code?: string; message?: string }) {
   return 'ERRO_ESTOQUE_PEDIDO'
 }
 
+function mapearErroStatusPagamento(error: { code?: string; message?: string }) {
+  if (error.message?.includes('MANUAL_PAYMENT_REASON_REQUIRED')) {
+    return { error: 'MOTIVO_APROVACAO_MANUAL_OBRIGATORIO', continuation: 'INFORMAR_MOTIVO_APROVACAO_MANUAL' }
+  }
+  if (error.message?.includes('MANUAL_PAYMENT_IDEMPOTENCY_CONFLICT')) {
+    return { error: 'CONFLITO_IDEMPOTENCIA_PAGAMENTO_MANUAL', continuation: 'RECARREGAR_STATUS_PAGAMENTO' }
+  }
+  if (error.message?.includes('MERCADO_PAGO_EXTERNAL_REFERENCE_CONFLICT') || error.code === '23505') {
+    return { error: 'CONFLITO_REFERENCIA_MERCADO_PAGO', continuation: 'REVISAR_REFERENCIA_MERCADO_PAGO' }
+  }
+  if (error.message?.includes('PEDIDO_NAO_ENCONTRADO')) {
+    return { error: 'PEDIDO_NAO_ENCONTRADO', continuation: 'SELECIONAR_PEDIDO_EXISTENTE' }
+  }
+  if (error.code === '42501') {
+    return { error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE', continuation: 'SOLICITAR_ACESSO_OPERADOR' }
+  }
+  return { error: 'ERRO_STATUS_PAGAMENTO', continuation: 'TENTAR_NOVAMENTE' }
+}
+
+function mapearErroTransicaoPedido(error: { code?: string; message?: string }) {
+  if (error.message?.includes('TRANSICAO_PEDIDO_INVALIDA') || error.code === '23514') {
+    return {
+      error: 'TRANSICAO_PEDIDO_INVALIDA',
+      continuation: 'RECARREGAR_ACOES_VALIDAS',
+    }
+  }
+  if (error.message?.includes('IDEMPOTENCY_CONFLICT') || error.code === '23505') {
+    return {
+      error: 'CONFLITO_IDEMPOTENCIA',
+      continuation: 'RECARREGAR_ACOES_VALIDAS',
+    }
+  }
+  if (error.message?.includes('PEDIDO_NAO_ENCONTRADO')) {
+    return {
+      error: 'PEDIDO_NAO_ENCONTRADO',
+      continuation: 'SELECIONAR_PEDIDO_EXISTENTE',
+    }
+  }
+  if (error.code === '42501') {
+    return {
+      error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE',
+      continuation: 'SOLICITAR_ACESSO_OPERADOR',
+    }
+  }
+  return {
+    error: 'ERRO_TRANSICAO_PEDIDO',
+    continuation: 'TENTAR_NOVAMENTE',
+  }
+}
+
 export async function confirmarPedidoOperador(pedidoId: string, correlationId = pedidoId) {
   try {
     const check = await verificarPermissaoOperador()
@@ -210,9 +711,11 @@ export async function confirmarPedidoOperador(pedidoId: string, correlationId = 
 
     const { supabase } = check
 
-    const { data: pedido, error: stockError } = await supabase.rpc('confirmar_pedido_estoque', {
+    const { data: pedido, error: stockError } = await supabase.rpc('transicionar_pedido', {
       p_pedido_id: pedidoId,
-      p_correlation_id: correlationId,
+      p_novo_status: 'confirmado',
+      p_idempotency_key: correlationId,
+      p_reason: null,
     }).single()
     if (stockError || !pedido) return { success: false, error: mapearErroEstoquePedido(stockError || {}) }
 
@@ -231,7 +734,17 @@ export async function confirmarPedidoOperador(pedidoId: string, correlationId = 
       }
     }
 
-    revalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento')
+
+    // Disparar notificação omnichannel (Web Chat, WhatsApp, Telegram) de forma não-bloqueante
+    notificarClienteAtualizacaoPedido({
+      pedidoId,
+      tipo: 'status_pedido',
+      novoStatus: 'confirmado',
+      supabaseClient: supabase,
+    }).catch((err) => {
+      console.warn('[confirmarPedidoOperador] Falha não-bloqueante na notificação omnichannel:', err)
+    })
 
     // Buscar o pedido atualizado para retornar
     const { data: pedidoAtualizado } = await supabase
@@ -318,7 +831,7 @@ export async function gerarPreferenciaPagamento(pedidoId: string) {
     }
 
     // 5. Validar credencial do Mercado Pago e ativar modo mock se necessário
-    const token = process.env.MERCADO_PAGO_ACCESS_TOKEN
+    const token = (await obterConfiguracaoSistema('MERCADO_PAGO_ACCESS_TOKEN')) || process.env.MERCADO_PAGO_ACCESS_TOKEN
     const isPlaceholder = !token || 
       token.includes('placeholder') || 
       token.includes('insert_here') || 
@@ -394,11 +907,19 @@ export async function gerarPreferenciaPagamento(pedidoId: string) {
     if (!response.ok) {
       const errorText = await response.text()
       console.error('[gerarPreferenciaPagamento] Falha ao criar preferência no Mercado Pago:', response.status, errorText)
-      return { success: false, error: 'ERRO_API_MERCADO_PAGO', details: errorText }
+      let friendlyError = 'Falha ao criar checkout no Mercado Pago.'
+      try {
+        const parsed = JSON.parse(errorText)
+        if (parsed.message) friendlyError = `Mercado Pago: ${parsed.message}`
+      } catch {
+        // fallback
+      }
+      return { success: false, error: friendlyError, details: errorText }
     }
 
     const responseData = await response.json()
     const preferenceId = responseData.id
+    // Prefer sandbox_init_point if present (enables test user logins on sandbox)
     const initPoint = responseData.sandbox_init_point || responseData.init_point
 
     if (!preferenceId || !initPoint) {
@@ -437,9 +958,11 @@ export async function cancelarPedido(pedidoId: string, correlationId = pedidoId)
     }
 
     const { supabase } = check
-    const { error } = await supabase.rpc('cancelar_pedido_estoque', {
+    const { error } = await supabase.rpc('transicionar_pedido', {
       p_pedido_id: pedidoId,
-      p_correlation_id: correlationId,
+      p_novo_status: 'cancelado',
+      p_idempotency_key: correlationId,
+      p_reason: null,
     }).single()
     if (error) return { success: false, error: mapearErroEstoquePedido(error) }
 
@@ -525,6 +1048,7 @@ export async function actionListarPedidos(filtros?: {
 
     const mapped = (data || []).map((pedido: any) => ({
       ...pedido,
+      ...projetarElegibilidadeReceita(pedido),
       itens: (pedido.itens || []).map((item: any) => ({
         ...item,
         preco_total_centavos: item.preco_total_centavos ?? ((item.preco_unitario_centavos || 0) * (item.quantidade || 1)),
@@ -539,11 +1063,52 @@ export async function actionListarPedidos(filtros?: {
 }
 
 /**
+ * Exposes a non-PII sales report whose realization and future receipt
+ * eligibility use the same authoritative order/payment predicate.
+ */
+export async function actionObterResumoReceitaRealizada() {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized) {
+      return { success: false, error: check.error }
+    }
+
+    const { data, error } = await check.supabase
+      .from('pedidos')
+      .select('id, status, status_pagamento, total_pedido_centavos')
+      .limit(100)
+
+    if (error) {
+      console.error('[actionObterResumoReceitaRealizada] Erro na consulta:', error)
+      return {
+        success: false,
+        error: 'ERRO_RESUMO_RECEITA',
+        continuation: 'TENTAR_NOVAMENTE',
+      }
+    }
+
+    return {
+      success: true,
+      data: resumirReceitaRealizada((data || []) as OrderRevenueInput[]),
+    }
+  } catch (error: any) {
+    console.error('Erro na action actionObterResumoReceitaRealizada:', error)
+    return {
+      success: false,
+      error: 'ERRO_RESUMO_RECEITA',
+      continuation: 'TENTAR_NOVAMENTE',
+    }
+  }
+}
+
+/**
  * Atualiza o status de um pedido (ex: confirmado -> entregue ou cancelado).
  */
 export async function actionAtualizarStatusPedido(params: {
   pedidoId: string
   novoStatus: 'novo' | 'confirmado' | 'entregue' | 'cancelado'
+  idempotencyKey?: string
+  reason?: string
 }) {
   try {
     const check = await verificarPermissaoOperador()
@@ -552,36 +1117,33 @@ export async function actionAtualizarStatusPedido(params: {
     }
 
     const { supabase } = check
-    const { pedidoId, novoStatus } = params
+    const { pedidoId, novoStatus, reason } = params
+    const { data, error } = await supabase.rpc('transicionar_pedido', {
+      p_pedido_id: pedidoId,
+      p_novo_status: novoStatus,
+      p_idempotency_key: params.idempotencyKey ?? crypto.randomUUID(),
+      p_reason: reason?.trim() || null,
+    }).single()
 
-    if (novoStatus === 'cancelado') {
-      const res = await cancelarPedido(pedidoId)
-      if (res.success) {
-        revalidatePath('/atendimento')
-        revalidatePath('/atendimento/pedidos')
-      }
-      return res
-    }
-
-    const updatePayload: Record<string, any> = { status: novoStatus }
-    if (novoStatus === 'entregue') {
-      updatePayload.status_pagamento = 'aprovado'
-    }
-
-    const { data, error } = await supabase
-      .from('pedidos')
-      .update(updatePayload)
-      .eq('id', pedidoId)
-      .select()
-      .single()
-
-    if (error) {
+    if (error || !data) {
       console.error('[actionAtualizarStatusPedido] Erro ao atualizar status:', error)
-      return { success: false, error: error.message }
+      return { success: false, ...mapearErroTransicaoPedido(error || {}) }
     }
 
-    revalidatePath('/atendimento')
-    revalidatePath('/atendimento/pedidos')
+    safeRevalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento/pedidos')
+
+    // Disparar notificação omnichannel (Web Chat, WhatsApp, Telegram) de forma não-bloqueante
+    notificarClienteAtualizacaoPedido({
+      pedidoId,
+      tipo: 'status_pedido',
+      novoStatus,
+      motivo: reason,
+      supabaseClient: supabase,
+    }).catch((err) => {
+      console.warn('[actionAtualizarStatusPedido] Falha não-bloqueante na notificação omnichannel:', err)
+    })
+
     return { success: true, data }
   } catch (error: any) {
     console.error('Erro na action actionAtualizarStatusPedido:', error)
@@ -595,6 +1157,8 @@ export async function actionAtualizarStatusPedido(params: {
 export async function actionAtualizarStatusPagamento(params: {
   pedidoId: string
   statusPagamento: 'pendente' | 'aprovado' | 'rejeitado' | 'reembolsado'
+  reason?: string
+  idempotencyKey?: string
 }) {
   try {
     const check = await verificarPermissaoOperador()
@@ -603,25 +1167,549 @@ export async function actionAtualizarStatusPagamento(params: {
     }
 
     const { supabase } = check
-    const { pedidoId, statusPagamento } = params
+    const { pedidoId, statusPagamento, reason } = params
+    const normalizedReason = reason?.trim()
+    if (!normalizedReason) {
+      return {
+        success: false,
+        error: 'MOTIVO_APROVACAO_MANUAL_OBRIGATORIO',
+        continuation: 'INFORMAR_MOTIVO_APROVACAO_MANUAL',
+      }
+    }
 
-    const { data, error } = await supabase
-      .from('pedidos')
-      .update({ status_pagamento: statusPagamento })
-      .eq('id', pedidoId)
-      .select()
-      .single()
+    const { data, error } = await supabase.rpc('registrar_status_pagamento', {
+      p_pedido_id: pedidoId,
+      p_novo_status: statusPagamento,
+      p_source: 'manual',
+      p_external_reference: null,
+      p_reason: normalizedReason,
+      p_idempotency_key: params.idempotencyKey ?? crypto.randomUUID(),
+    }).single()
 
     if (error) {
       console.error('[actionAtualizarStatusPagamento] Erro ao atualizar pagamento:', error)
-      return { success: false, error: error.message }
+      return { success: false, ...mapearErroStatusPagamento(error) }
     }
 
-    revalidatePath('/atendimento')
-    revalidatePath('/atendimento/pedidos')
+    safeRevalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento/pedidos')
+
+    // Disparar notificação omnichannel (Web Chat, WhatsApp, Telegram) de forma não-bloqueante
+    notificarClienteAtualizacaoPedido({
+      pedidoId,
+      tipo: 'status_pagamento',
+      statusPagamento,
+      motivo: normalizedReason,
+      supabaseClient: supabase,
+    }).catch((err) => {
+      console.warn('[actionAtualizarStatusPagamento] Falha não-bloqueante na notificação omnichannel:', err)
+    })
+
     return { success: true, data }
   } catch (error: any) {
     console.error('Erro na action actionAtualizarStatusPagamento:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
 }
+
+function mapearErroEmissaoComprovante(error: { code?: string; message?: string }) {
+  if (error.message?.includes('RECEIPT_ISSUANCE_INELIGIVEL')) {
+    return {
+      error: 'PEDIDO_NAO_ELEGIVEL_PARA_COMPROVANTE',
+      continuation: 'MARCAR_PEDIDO_COMO_ENTREGUE_OU_APROVAR_PAGAMENTO',
+    }
+  }
+  if (error.message?.includes('PEDIDO_NAO_ENCONTRADO')) {
+    return { error: 'PEDIDO_NAO_ENCONTRADO', continuation: 'SELECIONAR_PEDIDO_EXISTENTE' }
+  }
+  if (error.code === '42501') {
+    return { error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE', continuation: 'SOLICITAR_ACESSO_OPERADOR' }
+  }
+  return { error: 'ERRO_EMISSAO_COMPROVANTE', continuation: 'TENTAR_NOVAMENTE' }
+}
+
+/**
+ * Issues or reprints the authoritative immutable receipt snapshot. Callers
+ * provide only references; the database re-reads and freezes domain data.
+ */
+export async function actionEmitirComprovanteVenda(params: {
+  pedidoId: string
+  idempotencyKey: string
+}) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized) {
+      return { success: false, error: check.error }
+    }
+
+    const { data, error } = await check.supabase.rpc('emitir_comprovante_venda', {
+      p_pedido_id: params.pedidoId,
+      p_idempotency_key: params.idempotencyKey,
+    }).single()
+
+    if (error || !data) {
+      return { success: false, ...mapearErroEmissaoComprovante(error || {}) }
+    }
+
+    safeRevalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento/pedidos')
+    return { success: true, ...data }
+  } catch (error: any) {
+    console.error('Erro na action actionEmitirComprovanteVenda:', error)
+    return { success: false, ...mapearErroEmissaoComprovante(error) }
+  }
+}
+
+/**
+ * Gera a cobrança instantânea via PIX no Mercado Pago (ou modo mock de desenvolvimento),
+ * retornando a imagem do QR Code em Base64 e o código Copia e Cola EMV para o cliente pagar.
+ */
+export async function gerarCobrancaPixPedido(pedidoId: string) {
+  try {
+    const supabase = await createClient()
+
+    // 1. Obter usuário autenticado
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    // 2. Buscar perfil do usuário para validar permissões
+    const { data: perfil } = await supabase
+      .from('perfis')
+      .select('funcao, ativo')
+      .eq('id', user.id)
+      .maybeSingle()
+
+    // 3. Buscar dados do pedido e cliente
+    const { data: pedido, error: pedidoError } = await supabase
+      .from('pedidos')
+      .select(`
+        id,
+        status,
+        status_pagamento,
+        total_produtos_centavos,
+        total_pedido_centavos,
+        cliente_id,
+        clientes:cliente_id (
+          id,
+          usuario_id,
+          nome,
+          telefone
+        )
+      `)
+      .eq('id', pedidoId)
+      .single()
+
+    if (pedidoError || !pedido) {
+      return { success: false, error: 'PEDIDO_NAO_ENCONTRADO' }
+    }
+
+    const funcoesAutorizadas = ['admin', 'supervisor', 'vendedor']
+    const isOperador = perfil && perfil.ativo && funcoesAutorizadas.includes(perfil.funcao)
+    const clienteDono = pedido.clientes as any
+    const isDono = clienteDono && clienteDono.usuario_id === user.id
+
+    if (!isOperador && !isDono) {
+      return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
+    }
+
+    const valorCentavos = pedido.total_pedido_centavos || pedido.total_produtos_centavos
+    const valorReais = Number((valorCentavos / 100).toFixed(2))
+
+    // 4. Obter token de acesso do Mercado Pago
+    const token = (await obterConfiguracaoSistema('MERCADO_PAGO_ACCESS_TOKEN')) || process.env.MERCADO_PAGO_ACCESS_TOKEN
+    const isPlaceholder = !token || 
+      token.includes('placeholder') || 
+      token.includes('insert_here') || 
+      token.includes('seu_access_token_mercado_pago_aqui') ||
+      token.includes('your_access_token')
+
+    if (isPlaceholder) {
+      const mockPaymentId = `mock_pix_${pedidoId.slice(0, 8)}`
+      const mockCopiaCola = `00020126580014br.gov.bcb.pix0136${pedidoId}520400005303986540${valorReais.toFixed(2)}5802BR5922CASA DE ASSADOS SOFIA6008CURITIBA62070503***6304MOCK`
+      const mockQrCodeDataUrl = await QRCode.toDataURL(mockCopiaCola, { width: 320, margin: 1 })
+      const mockQrCodeBase64 = mockQrCodeDataUrl.replace(/^data:image\/png;base64,/, '')
+
+      const supabaseAdmin = createAdminClient()
+      await supabaseAdmin
+        .from('pedidos')
+        .update({ mercado_pago_pagamento_id: mockPaymentId })
+        .eq('id', pedidoId)
+
+      return {
+        success: true,
+        pix: {
+          qrCodeBase64: mockQrCodeBase64,
+          qrCodeCopiaCola: mockCopiaCola,
+          ticketUrl: `https://sandbox.mercadopago.com.br/payments/${mockPaymentId}/ticket`,
+          paymentId: mockPaymentId,
+          valorCentavos,
+          expiraEmMinutos: 30,
+        }
+      }
+    }
+
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org'
+    const notificationUrl = `${appUrl}/api/webhooks/mercadopago`
+    const clienteNome = clienteDono?.nome || 'Cliente'
+    const nomes = clienteNome.trim().split(' ')
+    const firstName = nomes[0] || 'Cliente'
+    const lastName = nomes.slice(1).join(' ') || 'Sofia'
+
+    const isTestToken = token.startsWith('TEST-')
+    const payerEmail = isTestToken
+      ? 'test_user_payer@testuser.com'
+      : `cliente_${pedidoId.slice(0, 8)}@casadeasados.duckdns.org`
+
+    const payload = {
+      transaction_amount: valorReais,
+      description: `Pedido #${pedidoId.slice(0, 8).toUpperCase()} - Assados Sofia`,
+      payment_method_id: 'pix',
+      payer: {
+        email: payerEmail,
+        first_name: firstName,
+        last_name: lastName,
+      },
+      notification_url: notificationUrl,
+      external_reference: pedidoId,
+    }
+
+    const response = await fetch('https://api.mercadopago.com/v1/payments', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'X-Idempotency-Key': `pix-create-${pedidoId}-${Date.now()}`
+      },
+      body: JSON.stringify(payload)
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('[gerarCobrancaPixPedido] Erro ao criar pagamento PIX no Mercado Pago:', response.status, errorText)
+
+      let isLiveCredsError = false
+      try {
+        const parsed = JSON.parse(errorText)
+        if (
+          response.status === 401 &&
+          (parsed.message?.includes('Unauthorized use of live credentials') ||
+            parsed.cause?.[0]?.description?.includes('Unauthorized use of live credentials'))
+        ) {
+          isLiveCredsError = true
+        }
+      } catch {
+        // fallback
+      }
+
+      // Se a credencial for de teste/não homologada pelo BACEN, fornecer fallback de teste com QR Code funcional de simulação
+      if (isLiveCredsError) {
+        console.warn('[gerarCobrancaPixPedido] Usando modo de simulação PIX Sandbox devido a credenciais de teste não homologadas no BACEN.')
+        const mockPaymentId = `mock_pix_${pedidoId.slice(0, 8)}`
+        const mockCopiaCola = `00020126580014br.gov.bcb.pix0136${pedidoId}520400005303986540${valorReais.toFixed(2)}5802BR5922CASA DE ASSADOS SOFIA6008CURITIBA62070503***6304MOCK`
+        const mockQrCodeDataUrl = await QRCode.toDataURL(mockCopiaCola, { width: 320, margin: 1 })
+        const mockQrCodeBase64 = mockQrCodeDataUrl.replace(/^data:image\/png;base64,/, '')
+
+        const supabaseAdmin = createAdminClient()
+        await supabaseAdmin
+          .from('pedidos')
+          .update({ mercado_pago_pagamento_id: mockPaymentId })
+          .eq('id', pedidoId)
+
+        return {
+          success: true,
+          pix: {
+            qrCodeBase64: mockQrCodeBase64,
+            qrCodeCopiaCola: mockCopiaCola,
+            ticketUrl: `https://sandbox.mercadopago.com.br/payments/${mockPaymentId}/ticket`,
+            paymentId: mockPaymentId,
+            valorCentavos,
+            expiraEmMinutos: 30,
+          }
+        }
+      }
+
+      let friendlyError = 'Não foi possível gerar a cobrança PIX via Mercado Pago.'
+      try {
+        const parsed = JSON.parse(errorText)
+        if (parsed.message) {
+          friendlyError = `Mercado Pago: ${parsed.message}`
+        }
+      } catch {
+        // fallback
+      }
+
+      return { success: false, error: friendlyError, details: errorText }
+    }
+
+    const responseData = await response.json()
+    const txData = responseData.point_of_interaction?.transaction_data
+    let qrCodeBase64 = txData?.qr_code_base64
+    const qrCodeCopiaCola = txData?.qr_code
+    const ticketUrl = txData?.ticket_url
+    const paymentId = String(responseData.id)
+
+    if (!qrCodeCopiaCola) {
+      console.error('[gerarCobrancaPixPedido] Resposta de PIX sem QR code do Mercado Pago:', responseData)
+      return { success: false, error: 'RESPOSTA_INVALIDA_PIX_MERCADO_PAGO' }
+    }
+
+    // Se o Mercado Pago não retornou base64 ou retornou vazio, gerar localmente a partir da chave copia e cola
+    if (!qrCodeBase64) {
+      const generatedDataUrl = await QRCode.toDataURL(qrCodeCopiaCola, { width: 320, margin: 1 })
+      qrCodeBase64 = generatedDataUrl.replace(/^data:image\/png;base64,/, '')
+    }
+
+    // Salvar o ID do pagamento gerado no pedido
+    const supabaseAdmin = createAdminClient()
+    await supabaseAdmin
+      .from('pedidos')
+      .update({ mercado_pago_pagamento_id: paymentId })
+      .eq('id', pedidoId)
+
+    return {
+      success: true,
+      pix: {
+        qrCodeBase64,
+        qrCodeCopiaCola,
+        ticketUrl,
+        paymentId,
+        valorCentavos,
+        expiraEmMinutos: 30,
+      }
+    }
+  } catch (error: any) {
+    console.error('Erro na action gerarCobrancaPixPedido:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/**
+ * Envia mensagem transacional multicanal com a cobrança PIX gerada para o cliente.
+ */
+export async function despacharCobrancaPixMulticanal(
+  pedidoId: string,
+  dadosPix: { qrCodeCopiaCola: string; valorCentavos: number; ticketUrl?: string }
+) {
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized) {
+      return { success: false, error: check.error }
+    }
+
+    const supabaseAdmin = createAdminClient()
+    const { data: pedido, error: pedidoError } = await supabaseAdmin
+      .from('pedidos')
+      .select(`
+        id,
+        conversa_id,
+        cliente_id,
+        clientes:cliente_id (
+          id,
+          nome,
+          telefone,
+          telegram_chat_id
+        )
+      `)
+      .eq('id', pedidoId)
+      .single()
+
+    if (pedidoError || !pedido) {
+      return { success: false, error: 'PEDIDO_NAO_ENCONTRADO' }
+    }
+
+    const cliente = pedido.clientes as any
+    const nomeCliente = cliente?.nome || 'Cliente'
+    const telefone = cliente?.telefone
+    const telegramChatId = cliente?.telegram_chat_id
+    const pedidoShort = pedidoId.slice(0, 8).toUpperCase()
+    const valorFormatado = (dadosPix.valorCentavos / 100).toLocaleString('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    })
+
+    const textoMensagem = `Olá, *${nomeCliente}*! 🥩\n\nSeu pedido *#${pedidoShort}* na Casa de Assados Sofia está pronto para pagamento!\n\n💰 *Valor Total:* ${valorFormatado}\n\n🔑 *Chave PIX (Copia e Cola):*\n\`\`\`\n${dadosPix.qrCodeCopiaCola}\n\`\`\`\n\n📲 *Como pagar:* Copie o código acima e cole no app do seu banco na opção "PIX Copia e Cola", ou acesse o seu Painel de Pedidos para escanear o QR Code.\n\nApós o pagamento, você pode anexar seu comprovante aqui mesmo na conversa!`
+
+    const canaisNotificados: string[] = []
+    let conversaId = pedido.conversa_id
+
+    if (!conversaId && pedido.cliente_id) {
+      const { data: conversa } = await supabaseAdmin
+        .from('conversas')
+        .select('id')
+        .eq('cliente_id', pedido.cliente_id)
+        .order('data_atualizacao', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      conversaId = conversa?.id || null
+    }
+
+    if (conversaId) {
+      await supabaseAdmin.from('mensagens').insert({
+        conversa_id: conversaId,
+        remetente: 'operador',
+        conteudo: textoMensagem,
+      })
+      canaisNotificados.push('chat')
+
+      if (telefone) {
+        try {
+          await enviarMensagemWhatsapp(conversaId, {
+            texto: textoMensagem,
+            remetente: 'operador',
+          })
+          canaisNotificados.push('whatsapp')
+        } catch (wErr) {
+          console.warn('[despacharCobrancaPixMulticanal] Falha ao enviar WhatsApp:', wErr)
+        }
+      }
+
+      if (telegramChatId) {
+        try {
+          await enviarMensagemTelegram(conversaId, {
+            texto: textoMensagem,
+            remetente: 'operador',
+          })
+          canaisNotificados.push('telegram')
+        } catch (tErr) {
+          console.warn('[despacharCobrancaPixMulticanal] Falha ao enviar Telegram:', tErr)
+        }
+      }
+    }
+
+    return {
+      success: true,
+      canaisNotificados,
+    }
+  } catch (error: any) {
+    console.error('Erro na action despacharCobrancaPixMulticanal:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+export const enviarCobrancaPixAoCliente = despacharCobrancaPixMulticanal
+
+/**
+ * Registra o comprovante enviado pelo cliente (PDF/imagem ou anexo de storage) na tabela de comprovantes
+ * e na conversa do pedido, notificando os atendentes e operadores no painel.
+ */
+export async function enviarComprovantePagamentoCliente(
+  pedidoId: string,
+  payload: {
+    urlComprovante?: string
+    nomeArquivo?: string
+    tamanhoBytes?: number
+    texto?: string
+  }
+) {
+  try {
+    const supabase = await createClient()
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    const { data: pedido, error: pedidoError } = await supabase
+      .from('pedidos')
+      .select(`
+        id,
+        conversa_id,
+        cliente_id,
+        clientes:cliente_id (
+          id,
+          usuario_id,
+          nome
+        )
+      `)
+      .eq('id', pedidoId)
+      .single()
+
+    if (pedidoError || !pedido) {
+      return { success: false, error: 'PEDIDO_NAO_ENCONTRADO' }
+    }
+
+    const clienteDono = pedido.clientes as any
+    const isDono = clienteDono && clienteDono.usuario_id === user.id
+    if (!isDono) {
+      const check = await verificarPermissaoOperador()
+      if (!check.authorized) {
+        return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
+      }
+    }
+
+    const supabaseAdmin = createAdminClient()
+    let conversaId = pedido.conversa_id
+
+    if (!conversaId && pedido.cliente_id) {
+      const { data: conversa } = await supabaseAdmin
+        .from('conversas')
+        .select('id')
+        .eq('cliente_id', pedido.cliente_id)
+        .order('data_atualizacao', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      conversaId = conversa?.id || null
+    }
+
+    // 1. Se houver anexo de arquivo no storage, registrar na tabela oficial de comprovantes
+    if (pedido.cliente_id && payload.urlComprovante) {
+      try {
+        const { error: insertCompError } = await supabaseAdmin
+          .from('comprovantes')
+          .insert({
+            cliente_id: pedido.cliente_id,
+            url_arquivo: payload.urlComprovante,
+            nome_arquivo: payload.nomeArquivo || 'comprovante.pdf',
+            tamanho_bytes: payload.tamanhoBytes || 0,
+          })
+
+        if (insertCompError) {
+          console.warn('[enviarComprovantePagamentoCliente] Erro ao inserir na tabela comprovantes:', insertCompError)
+        }
+      } catch (compErr) {
+        console.warn('[enviarComprovantePagamentoCliente] Exceção ao gravar comprovante no banco:', compErr)
+      }
+    }
+
+    // 2. Enviar a mensagem para a conversa e alertar o atendente
+    const isPdf = payload.nomeArquivo?.toLowerCase().endsWith('.pdf')
+    const nomeExibicao = payload.nomeArquivo || (isPdf ? 'comprovante.pdf' : 'comprovante')
+    const conteudoMensagem = payload.texto
+      ? `📄 *Comprovante de Pagamento Anexado:* ${payload.texto}\n📎 *Arquivo:* ${nomeExibicao}`
+      : `📄 *Comprovante de Pagamento Anexado pelo Cliente.*\n📎 *Arquivo:* ${nomeExibicao}`
+
+    if (conversaId) {
+      await supabaseAdmin.from('mensagens').insert({
+        conversa_id: conversaId,
+        remetente: 'cliente',
+        conteudo: conteudoMensagem,
+        url_anexo: payload.urlComprovante || null,
+      })
+
+      // Abre a conversa para atendimento humano prioritário
+      await supabaseAdmin
+        .from('conversas')
+        .update({
+          status: 'aberta',
+          ia_ativa: false,
+          data_atualizacao: new Date().toISOString(),
+        })
+        .eq('id', conversaId)
+    }
+
+    safeRevalidatePath('/atendimento')
+    safeRevalidatePath('/atendimento/pedidos')
+    safeRevalidatePath('/cliente/pedidos')
+    safeRevalidatePath('/cliente/chat')
+
+    return { success: true }
+  } catch (error: any) {
+    console.error('Erro na action enviarComprovantePagamentoCliente:', error)
+    return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+

@@ -37,7 +37,7 @@ Este documento especifica os requisitos funcionais, não-funcionais e regras de 
 *   **REQ-PAG-012**: O sistema MUST consultar a API oficial do Mercado Pago utilizando a credencial `MERCADO_PAGO_ACCESS_TOKEN` para obter os detalhes e o status real da transação a partir do ID do recurso recebido.
 *   **REQ-PAG-013**: Se o status do pagamento obtido for aprovado (`approved`):
     *   O sistema MUST atualizar a coluna `status_pagamento` da tabela `public.pedidos` para `'aprovado'`.
-    *   O sistema MUST atualizar a coluna `status` da tabela `public.pedidos` para `'confirmado'`.
+    *   O sistema MUST NOT atualizar a coluna `status` da tabela `public.pedidos` como efeito colateral da aprovação do pagamento.
     *   O sistema MUST disparar a sincronização ou criação do evento correspondente no Google Calendar.
 *   **REQ-PAG-014**: Se o status do pagamento obtido for rejeitado (`rejected` ou `cancelled`):
     *   O sistema MUST atualizar a coluna `status_pagamento` da tabela `public.pedidos` para `'rejeitado'`.
@@ -83,7 +83,7 @@ Este documento especifica os requisitos funcionais, não-funcionais e regras de 
 *   **Quando** o endpoint `/api/webhooks/mercadopago` recebe uma requisição POST com o payload contendo `type` = `"payment"` e `data.id` = `"payment_9999"`,
 *   **Então** o webhook responde imediatamente com status HTTP `200 OK`,
 *   **E** de forma assíncrona, consulta a API do Mercado Pago com o ID `"payment_9999"` obtendo o status `"approved"`,
-*   **E** atualiza no banco de dados o pedido para `status_pagamento = 'aprovado'` e `status = 'confirmado'`,
+*   **E** atualiza no banco de dados apenas `status_pagamento = 'aprovado'`, preservando o `status` independente do pedido,
 *   **E** invoca `agendarPedidoNoCalendario("9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d")`, que insere o evento no Google Calendar e retorna o ID do evento (ex: `"event_gcal_1010"`),
 *   **E** persiste o ID `"event_gcal_1010"` na coluna `google_event_id` do pedido.
 
@@ -92,7 +92,7 @@ Este documento especifica os requisitos funcionais, não-funcionais e regras de 
 *   **Quando** o endpoint `/api/webhooks/mercadopago` recebe uma requisição POST com o payload contendo `type` = `"payment"` e `data.id` = `"payment_9999"`,
 *   **Então** o webhook responde imediatamente com status HTTP `200 OK`,
 *   **E** de forma assíncrona, consulta a API do Mercado Pago obtendo o status `"approved"`,
-*   **E** atualiza no banco de dados o pedido para `status_pagamento = 'aprovado'` e `status = 'confirmado'`,
+*   **E** atualiza no banco de dados apenas `status_pagamento = 'aprovado'`, preservando o `status` independente do pedido,
 *   **E** faz uma requisição PATCH para a API do Google Calendar atualizando o título do evento `"event_gcal_1010"` para incluir o prefixo `[PAGO]`.
 
 #### Cenário 3: Recebimento de notificação de pagamento rejeitado

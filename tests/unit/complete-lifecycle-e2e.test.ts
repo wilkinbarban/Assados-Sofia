@@ -27,7 +27,6 @@ import {
   obterOuCriarCarrinhoAtivo,
   adicionarItemAoCarrinho,
   atualizarQuantidadeItemCarrinho,
-  removerItemDoCarrinho,
   converterCarrinhoEmPedido,
 } from '@/lib/carrinho/service'
 import {
@@ -35,12 +34,10 @@ import {
   actionAtualizarStatusPedido,
   actionAtualizarStatusPagamento,
   confirmarPedidoOperador,
-  cancelarPedido,
 } from '@/app/actions/pedidos'
 import { processarAcaoInterativaWhatsApp } from '@/lib/whatsapp/action-router'
 import { enviarCardapioWhatsApp } from '@/lib/whatsapp/gateways/catalog-gateway'
 import { formatarCardapioResumido } from '@/lib/cardapio/formatar'
-import { POST as handleEvolutionWebhook } from '@/app/api/webhooks/evolution/route'
 import { POST as handleTelegramWebhook } from '@/app/api/webhooks/telegram/route'
 
 const systemConfigs: Record<string, string> = {
@@ -134,7 +131,7 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
           if (table === 'carrinhos') {
             return {
               select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockImplementation((col: string, val: string) => {
+                eq: vi.fn().mockImplementation((col: string) => {
                   if (col === 'id') {
                     return {
                       single: vi.fn().mockResolvedValue({ data: mockCartState, error: null }),
@@ -217,7 +214,7 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
           if (table === 'carrinhos') {
             return {
               select: vi.fn().mockReturnValue({
-                eq: vi.fn().mockImplementation((col: string, val: string) => {
+                eq: vi.fn().mockImplementation((col: string) => {
                   if (col === 'id') {
                     return {
                       single: vi.fn().mockResolvedValue({ data: mockCartState, error: null }),
@@ -371,7 +368,10 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
           return {}
         }),
         rpc: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({ data: mockPedidoState, error: null }),
+          single: vi.fn().mockImplementation(() => {
+            mockPedidoState.status_pagamento = 'aprovado'
+            return Promise.resolve({ data: mockPedidoState, error: null })
+          }),
         }),
       }
 
@@ -386,12 +386,36 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
       const payRes = await actionAtualizarStatusPagamento({
         pedidoId: mockPedidoState.id,
         statusPagamento: 'aprovado',
+        reason: 'PIX conferido pelo operador',
       })
       expect(payRes.success).toBe(true)
-      expect(payRes.data?.status_pagamento).toBe('aprovado')
+      expect((payRes.data as any)?.status_pagamento).toBe('aprovado')
     })
 
     it('1.5 Finalização do pedido: marcação de status como Entregue no balcão Umbará', async () => {
+      const directStatusUpdate = vi.fn()
+      const transitionRpc = vi.fn().mockImplementation(
+        (name: string, params: {
+          p_pedido_id: string
+          p_novo_status: string
+          p_idempotency_key: string
+          p_reason: string | null
+        }) => ({
+          single: vi.fn().mockImplementation(() => {
+            expect(name).toBe('transicionar_pedido')
+            mockPedidoState.status = params.p_novo_status
+            return Promise.resolve({
+              data: {
+                pedido_id: params.p_pedido_id,
+                status: mockPedidoState.status,
+                valid_next_actions: [],
+                idempotent: false,
+              },
+              error: null,
+            })
+          }),
+        }),
+      )
       const mockSupabaseServer = {
         auth: {
           getUser: vi.fn().mockResolvedValue({ data: { user: { id: mockOperador.id } }, error: null }),
@@ -408,20 +432,12 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
           }
           if (table === 'pedidos') {
             return {
-              update: vi.fn().mockReturnValue({
-                eq: vi.fn().mockReturnValue({
-                  select: vi.fn().mockReturnValue({
-                    single: vi.fn().mockImplementation(() => {
-                      mockPedidoState.status = 'entregue'
-                      return Promise.resolve({ data: mockPedidoState, error: null })
-                    }),
-                  }),
-                }),
-              }),
+              update: directStatusUpdate,
             }
           }
           return {}
         }),
+        rpc: transitionRpc,
       }
 
       mocks.createClient.mockResolvedValue(mockSupabaseServer as any)
@@ -429,10 +445,19 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
       const statusRes = await actionAtualizarStatusPedido({
         pedidoId: mockPedidoState.id,
         novoStatus: 'entregue',
+        idempotencyKey: 'lifecycle-manual-delivery-1',
+        reason: 'Pedido retirado no balcão Umbará',
       })
 
       expect(statusRes.success).toBe(true)
-      expect(statusRes.data?.status).toBe('entregue')
+      expect((statusRes.data as any)?.status).toBe('entregue')
+      expect(transitionRpc).toHaveBeenCalledWith('transicionar_pedido', {
+        p_pedido_id: mockPedidoState.id,
+        p_novo_status: 'entregue',
+        p_idempotency_key: 'lifecycle-manual-delivery-1',
+        p_reason: 'Pedido retirado no balcão Umbará',
+      })
+      expect(directStatusUpdate).not.toHaveBeenCalled()
     })
   })
 
@@ -491,7 +516,7 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
         const fetchBody = JSON.parse((global.fetch as any).mock.calls[0][1].body)
         expect(fetchBody.number).toBe(mockCliente.telefone)
         expect(fetchBody.cards).toHaveLength(2)
-        expect(fetchBody.cards[0].image).toBe(mockProdutos[0].url_imagem)
+        expect(fetchBody.cards[0].imageUrl).toBe(mockProdutos[0].url_imagem)
         expect(fetchBody.cards[0].body).toContain('69,90')
         expect(fetchBody.cards[0].buttons[0].id).toBe(`cart:add:${mockProdutos[0].id}`)
       })
@@ -530,7 +555,7 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
             if (table === 'carrinhos') {
               return {
                 select: vi.fn().mockReturnValue({
-                  eq: vi.fn().mockImplementation((col: string, val: string) => {
+                  eq: vi.fn().mockImplementation((col: string) => {
                     if (col === 'id') {
                       return {
                         single: vi.fn().mockResolvedValue({ data: mockCartWa, error: null }),
@@ -715,6 +740,29 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
           },
         ]
 
+        const directStatusUpdate = vi.fn()
+        const transitionRpc = vi.fn().mockImplementation(
+          (name: string, params: {
+            p_pedido_id: string
+            p_novo_status: string
+            p_idempotency_key: string
+            p_reason: string | null
+          }) => ({
+            single: vi.fn().mockImplementation(() => {
+              expect(name).toBe('transicionar_pedido')
+              mockPedidosGlobal[0].status = params.p_novo_status
+              return Promise.resolve({
+                data: {
+                  pedido_id: params.p_pedido_id,
+                  status: mockPedidosGlobal[0].status,
+                  valid_next_actions: [],
+                  idempotent: false,
+                },
+                error: null,
+              })
+            }),
+          }),
+        )
         const mockSupabaseServer = {
           auth: {
             getUser: vi.fn().mockResolvedValue({ data: { user: { id: mockOperador.id } }, error: null }),
@@ -736,20 +784,12 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
                     limit: vi.fn().mockResolvedValue({ data: mockPedidosGlobal, error: null }),
                   }),
                 }),
-                update: vi.fn().mockReturnValue({
-                  eq: vi.fn().mockReturnValue({
-                    select: vi.fn().mockReturnValue({
-                      single: vi.fn().mockResolvedValue({
-                        data: { ...mockPedidosGlobal[0], status: 'entregue' },
-                        error: null,
-                      }),
-                    }),
-                  }),
-                }),
+                update: directStatusUpdate,
               }
             }
             return {}
           }),
+          rpc: transitionRpc,
         }
 
         mocks.createClient.mockResolvedValue(mockSupabaseServer as any)
@@ -765,9 +805,18 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
         const finalizacaoRes = await actionAtualizarStatusPedido({
           pedidoId: 'ped-sofia-200',
           novoStatus: 'entregue',
+          idempotencyKey: 'lifecycle-sofia-delivery-1',
+          reason: 'Pedido da Sofia retirado no balcão',
         })
         expect(finalizacaoRes.success).toBe(true)
-        expect(finalizacaoRes.data?.status).toBe('entregue')
+        expect((finalizacaoRes.data as any)?.status).toBe('entregue')
+        expect(transitionRpc).toHaveBeenCalledWith('transicionar_pedido', {
+          p_pedido_id: 'ped-sofia-200',
+          p_novo_status: 'entregue',
+          p_idempotency_key: 'lifecycle-sofia-delivery-1',
+          p_reason: 'Pedido da Sofia retirado no balcão',
+        })
+        expect(directStatusUpdate).not.toHaveBeenCalled()
       })
     })
   })

@@ -134,8 +134,7 @@ describe('Fase 4: Phone-First Client Authentication API Routes', () => {
           challengeId: 'desafio-123',
           telefone: '41 99999-8888',
           codigo: '123456',
-          userId: 'user-123',
-          nome: 'Carlos'
+            nome: 'Carlos'
         })
       })
 
@@ -147,7 +146,6 @@ describe('Fase 4: Phone-First Client Authentication API Routes', () => {
         challengeId: 'desafio-123',
         phone: '5541999998888',
         code: '123456',
-        userId: 'user-123',
         nome: 'Carlos'
       }))
     })

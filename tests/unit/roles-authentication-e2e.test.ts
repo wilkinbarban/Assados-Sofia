@@ -94,7 +94,7 @@ describe('End-to-End Roles Authentication & Authorization Suite', () => {
     })
 
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: 'cliente_web@asados.com',
+      phone: '5541988888888',
       password: 'SenhaCliente123',
     })
 

@@ -1,7 +1,8 @@
 import React from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import OrdersManagementDashboard from '@/components/operator/OrdersManagementDashboard'
+import { actionAtualizarStatusPagamento } from '@/app/actions/pedidos'
 
 vi.mock('@/app/actions/pedidos', () => ({
   actionListarPedidos: vi.fn().mockResolvedValue({ success: true, data: [] }),
@@ -125,5 +126,35 @@ describe('OrdersManagementDashboard - Advanced Filtering & Search', () => {
 
     expect(screen.getByText('Wilkin Silva')).toBeDefined()
     expect(screen.getByText('Beatriz Santos')).toBeDefined()
+  })
+})
+
+describe('OrdersManagementDashboard - lifecycle actions', () => {
+  it('shows only valid independent continuation actions with accessible names', () => {
+    const pedido: any = { id: 'ped-continuation', status: 'novo', status_pagamento: 'pendente', tipo_entrega: 'retirada', taxa_entrega_centavos: 0, total_produtos_centavos: 1000, total_pedido_centavos: 1000, meio_pagamento: 'pix', data_criacao: new Date().toISOString(), data_atualizacao: new Date().toISOString(), cliente_id: 'cli', itens: [], clientes: { id: 'cli', nome: 'Cliente', telefone: '5541999999999' } }
+    render(<OrdersManagementDashboard usuarioLogado={{ id: 'user-admin', nome: 'Admin Sofia', funcao: 'admin' }} pedidosIniciais={[pedido]} />)
+    expect(screen.getByRole('button', { name: 'Confirmar pedido' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Aprovar pagamento' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Cobrança PIX' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Marcar entregue' })).toBeNull()
+  })
+
+  it('reuses one idempotency key when a manual approval is retried with the same reason', async () => {
+    const pedido: any = { id: 'ped-retry', status: 'novo', status_pagamento: 'pendente', tipo_entrega: 'retirada', taxa_entrega_centavos: 0, total_produtos_centavos: 1000, total_pedido_centavos: 1000, meio_pagamento: 'pix', data_criacao: new Date().toISOString(), data_atualizacao: new Date().toISOString(), cliente_id: 'cli', itens: [], clientes: { id: 'cli', nome: 'Cliente', telefone: '5541999999999' } }
+    vi.spyOn(window, 'prompt').mockReturnValue('PIX confirmado no caixa')
+    vi.mocked(actionAtualizarStatusPagamento)
+      .mockResolvedValueOnce({ success: false, error: 'Falha de rede' } as any)
+      .mockResolvedValueOnce({ success: true } as any)
+
+    render(<OrdersManagementDashboard usuarioLogado={{ id: 'user-admin', nome: 'Admin Sofia', funcao: 'admin' }} pedidosIniciais={[pedido]} />)
+
+    const approval = screen.getAllByRole('button', { name: 'Aprovar pagamento' })[0]
+    fireEvent.click(approval)
+    await waitFor(() => expect(actionAtualizarStatusPagamento).toHaveBeenCalledTimes(1))
+    fireEvent.click(approval)
+    await waitFor(() => expect(actionAtualizarStatusPagamento).toHaveBeenCalledTimes(2))
+
+    const [firstCall, secondCall] = vi.mocked(actionAtualizarStatusPagamento).mock.calls
+    expect(firstCall[0].idempotencyKey).toBe(secondCall[0].idempotencyKey)
   })
 })

@@ -31,7 +31,8 @@
     "selfhost:migrate": "ops/supabase/migrate.sh",
     "selfhost:verify": "ops/supabase/verify.sh",
     "integration:verify": "ops/verify-integrations.sh",
-    "test:e2e:production": "docker run --rm --network host -v $PWD:/work -v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker:ro -w /work -e HOME=/root -e SELFHOST_E2E=true -e NPM_CONFIG_UPDATE_NOTIFIER=false mcr.microsoft.com/playwright:v1.61.1-noble npx playwright test --config=playwright.production.config.ts"
+    "test:e2e:production": "docker run --rm --network host -v $PWD:/work -v /var/run/docker.sock:/var/run/docker.sock -v /usr/bin/docker:/usr/bin/docker:ro -w /work -e HOME=/root -e SELFHOST_E2E=true -e NPM_CONFIG_UPDATE_NOTIFIER=false mcr.microsoft.com/playwright:v1.61.1-noble npx playwright test --config=playwright.production.config.ts",
+    "selfhost:test:db": "scripts/run-selfhost-supabase-tests.sh"
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",

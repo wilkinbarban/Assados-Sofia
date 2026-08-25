@@ -24,7 +24,11 @@ function query(result: unknown) {
 function supabaseFixture({
   user = { id: 'user-1' },
   profile = { funcao: 'cliente', ativo: true },
-  client = null as { id: string } | null,
+  client = null,
+}: {
+  user?: { id: string } | null
+  profile?: { funcao: string; ativo: boolean } | null
+  client?: { id: string } | null
 } = {}) {
   return {
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user } }) },

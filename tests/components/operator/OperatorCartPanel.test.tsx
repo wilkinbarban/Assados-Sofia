@@ -37,6 +37,7 @@ describe('OperatorCartPanel (TDD)', () => {
     render(<OperatorCartPanel clienteId="cli-1" clienteNome="João Silva" />)
 
     expect(await screen.findByText('Carrinho Vazio')).toBeInTheDocument()
+    expect(screen.getByText('Pedido de João Silva')).toBeInTheDocument()
     expect(screen.getByText(/Os itens adicionados pelo cliente no WhatsApp/i)).toBeInTheDocument()
   })
 

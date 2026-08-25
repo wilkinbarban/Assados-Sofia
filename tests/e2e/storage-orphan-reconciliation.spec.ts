@@ -5,10 +5,16 @@ let fixture: Awaited<ReturnType<typeof seedAdminProducts>>
 
 async function signIn(page: Page, email: string, password: string) {
   await page.goto('/login')
-  await page.getByLabel('E-mail').fill(email)
-  await page.getByLabel('Senha').fill(password)
-  await page.getByRole('button', { name: 'Entrar' }).click()
-  await expect(page).not.toHaveURL(/\/login/)
+  if (page.url().includes('/login')) {
+    const operatorTab = page.getByRole('button', { name: /Equipe \/ Operador/i })
+    if (await operatorTab.isVisible()) {
+      await operatorTab.click()
+    }
+    await page.getByLabel(/E-mail/i).fill(email)
+    await page.getByLabel(/Senha/i).fill(password)
+    await page.getByRole('button', { name: /Entrar/i }).click()
+    await expect(page).not.toHaveURL(/\/login/)
+  }
 }
 
 test.describe.serial('storage orphan reconciliation admin tab', () => {

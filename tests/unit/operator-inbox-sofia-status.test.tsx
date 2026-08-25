@@ -17,15 +17,13 @@ vi.mock('@/app/actions/atendimento', () => ({
 
 vi.mock('@/lib/supabase/client', () => ({
   createClient: () => ({
-    channel: () => ({
-      on: () => ({
-        on: () => ({
-          on: () => ({
-            subscribe: () => ({}),
-          }),
-        }),
-      }),
-    }),
+    channel: () => {
+      const ch: any = {
+        on: () => ch,
+        subscribe: () => ch,
+      }
+      return ch
+    },
     removeChannel: vi.fn(),
     from: () => ({
       select: () => ({

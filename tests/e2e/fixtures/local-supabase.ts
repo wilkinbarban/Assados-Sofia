@@ -17,18 +17,33 @@ function statusValue(status: string, name: string) {
   return new RegExp(`^${name}="?([^"\\n]+)"?$`, 'm').exec(status)?.[1]
 }
 
+function loadDotEnvIfPresent() {
+  try {
+    for (const line of readFileSync('.env', 'utf8').split('\n')) {
+      if (!line || line.startsWith('#') || !line.includes('=')) continue
+      const separator = line.indexOf('=')
+      const key = line.slice(0, separator).trim()
+      const val = line.slice(separator + 1).trim()
+      process.env[key] ??= val
+    }
+  } catch {}
+}
+
 function readLocalSupabaseEnv() {
-  if (process.env.SELFHOST_E2E === 'true') {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  loadDotEnvIfPresent()
+  if (process.env.SELFHOST_E2E === 'true' || process.env.NEXT_PUBLIC_SUPABASE_URL === SELFHOST_URL) {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || SELFHOST_URL
     const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
     if (url !== SELFHOST_URL || !anonKey || !serviceKey) {
       throw new Error('E2E safety gate rejected invalid self-hosted credentials')
     }
+    process.env.SELFHOST_E2E = 'true'
     return {
       NEXT_PUBLIC_SUPABASE_URL: url,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: anonKey,
       SUPABASE_SERVICE_ROLE_KEY: serviceKey,
+      SUPABASE_INTERNAL_URL: url,
     }
   }
 
@@ -48,6 +63,7 @@ function readLocalSupabaseEnv() {
     NEXT_PUBLIC_SUPABASE_URL: url,
     NEXT_PUBLIC_SUPABASE_ANON_KEY: anonKey,
     SUPABASE_SERVICE_ROLE_KEY: serviceKey,
+    SUPABASE_INTERNAL_URL: url,
   }
 }
 

@@ -21,8 +21,8 @@ describe('order stock actions', () => {
     await confirmarPedidoOperador('11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222')
     await cancelarPedido('11111111-1111-4111-8111-111111111111', '33333333-3333-4333-8333-333333333333')
     expect(c.rpc.mock.calls).toEqual([
-      ['confirmar_pedido_estoque', { p_pedido_id: '11111111-1111-4111-8111-111111111111', p_correlation_id: '22222222-2222-4222-8222-222222222222' }],
-      ['cancelar_pedido_estoque', { p_pedido_id: '11111111-1111-4111-8111-111111111111', p_correlation_id: '33333333-3333-4333-8333-333333333333' }],
+      ['transicionar_pedido', { p_pedido_id: '11111111-1111-4111-8111-111111111111', p_novo_status: 'confirmado', p_idempotency_key: '22222222-2222-4222-8222-222222222222', p_reason: null }],
+      ['transicionar_pedido', { p_pedido_id: '11111111-1111-4111-8111-111111111111', p_novo_status: 'cancelado', p_idempotency_key: '33333333-3333-4333-8333-333333333333', p_reason: null }],
     ])
   })
 

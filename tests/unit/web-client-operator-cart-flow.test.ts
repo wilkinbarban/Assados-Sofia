@@ -37,7 +37,7 @@ describe('Web Client & Operator Unified Cart Management Flow', () => {
 
     // Cliente A e Cliente B
     const clienteAId = 'c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3'
-    const clienteBId = 'e1b19eff-ab67-4429-ad00-8b13276e4754'
+    const clienteBId = 'd4d4d4d4-d4d4-d4d4-d4d4-d4d4d4d4d4d4'
 
     // Limpar carrinhos residuais
     await limparCarrinho({ clienteId: clienteAId })

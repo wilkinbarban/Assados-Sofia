@@ -7,6 +7,7 @@ import { BrandLogo } from '@/components/ui/BrandLogo'
 import { obterStatusSofiaAtendimento } from '@/app/actions/atendimento'
 import type { SofiaAtendimentoStatus } from '@/app/actions/atendimento'
 import type { Cliente, Conversa, Mensagem } from '@/components/operator/ConversationsQueue'
+import { ClipboardList, Settings, ShoppingBag } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -150,31 +151,36 @@ export default async function AtendimentoPage() {
 
           <Link
             href="/atendimento/pedidos"
-            className="inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
+            className="inline-flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-amber-300 shadow-sm shadow-amber-500/5 transition-all hover:border-amber-400/50 hover:bg-amber-500/15 hover:text-amber-200 cursor-pointer select-none"
           >
-            Pedidos
+            <ClipboardList className="h-4 w-4" />
+            <span>Gestão de Pedidos</span>
           </Link>
 
           <Link
             href="/atendimento/produtos"
-            className="hidden sm:inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
+            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
           >
+            <ShoppingBag className="h-3.5 w-3.5" />
             Estoque
           </Link>
 
-          <Link
-            href="/atendimento/conhecimento"
-            className="hidden sm:inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
-          >
-            Base RAG
-          </Link>
+          <div className="hidden lg:flex items-center gap-1 rounded-xl border border-zinc-800 bg-zinc-950/30 p-1">
+            <Link
+              href="/atendimento/conhecimento"
+              className="inline-flex items-center px-2.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 rounded-lg text-[11px] font-semibold transition-all cursor-pointer select-none"
+            >
+              Base RAG
+            </Link>
 
-          <Link
-            href="/atendimento/perfil"
-            className="px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
-          >
-            Meu Perfil
-          </Link>
+            <Link
+              href="/atendimento/perfil"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 rounded-lg text-[11px] font-semibold transition-all cursor-pointer select-none"
+            >
+              <Settings className="h-3.5 w-3.5" />
+              Meu Perfil
+            </Link>
+          </div>
 
           <OperatorLogoutButton />
 

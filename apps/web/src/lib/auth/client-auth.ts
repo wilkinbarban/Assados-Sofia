@@ -8,7 +8,7 @@ export interface FinalizeSignupParams {
   challengeId: string
   phone: string
   code: string
-  userId: string
+  userId?: string
   nome?: string
   origemVerificacao?: string
 }
@@ -40,11 +40,10 @@ export interface PasswordRecoveryResult {
 export async function finalizeClientSignupSaga(
   params: FinalizeSignupParams
 ): Promise<FinalizeSignupResult> {
-  const { challengeId, phone, code, userId, nome, origemVerificacao = 'whatsapp' } = params
+  const { challengeId, phone, code, nome, origemVerificacao = 'whatsapp' } = params
 
   // 1. Finalização atômica do OTP no PostgreSQL
   const otpResult = await verifyOtpChallenge(challengeId, phone, 'signup', code, {
-    userId,
     nome,
     origemVerificacao
   })
@@ -58,12 +57,16 @@ export async function finalizeClientSignupSaga(
 
   // 2. Confirmação idempotente do telefone no Supabase Auth (GoTrue)
   const supabaseAdmin = createAdminClient()
-  const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(userId, {
+  const { data: boundChallenge, error: challengeError } = await supabaseAdmin
+    .from('desafios_otp').select('usuario_id').eq('id', challengeId).maybeSingle()
+  const boundUserId = boundChallenge?.usuario_id
+  if (challengeError || !boundUserId) return { success: false, clienteId: otpResult.clienteId, error: 'USUARIO_DESAFIO_AUSENTE' }
+  const { error: authErr } = await supabaseAdmin.auth.admin.updateUserById(boundUserId, {
     phone_confirm: true
   })
 
   if (authErr) {
-    console.error(`[Signup Saga] Erro ao confirmar telefone no GoTrue para usuário ${userId}:`, authErr)
+    console.error(`[Signup Saga] Erro ao confirmar telefone no GoTrue para usuário ${boundUserId}:`, authErr)
     return {
       success: false,
       clienteId: otpResult.clienteId,

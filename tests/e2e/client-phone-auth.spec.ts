@@ -15,11 +15,11 @@ test.describe('E2E: Client Phone-First Authentication Flow', () => {
       })
     })
 
-    await page.goto('http://127.0.0.1:3020/cadastro')
+    await page.goto('/cadastro')
 
     // 1. Verify header & elements
-    await expect(page.locator('h1')).toContainText('Asados Sofía')
-    await expect(page.getByText('Crie sua conta com seu celular de Curitiba')).toBeVisible()
+    await expect(page.getByText('Casa de Assados Sofia')).toBeVisible()
+    await expect(page.getByText(/Crie sua conta em poucos segundos com seu celular de Curitiba/i)).toBeVisible()
 
     // 2. Verify inputs: Nome, Celular, Senha (no Email field)
     await expect(page.getByLabel(/Nome Completo/i)).toBeVisible()
@@ -35,7 +35,7 @@ test.describe('E2E: Client Phone-First Authentication Flow', () => {
     // 4. Submit registration
     await page.getByRole('button', { name: /Continuar para Verificação/i }).click()
 
-    // 6. Verify transition to OTP verification card
+    // 5. Verify transition to OTP verification card
     await expect(page.getByRole('heading', { name: /Confirme seu Telefone/i })).toBeVisible({ timeout: 10000 })
     await expect(page.getByText(/Enviamos um código de 6 dígitos/i)).toBeVisible()
     await expect(page.locator('input#codigoOtp')).toBeVisible()
@@ -43,7 +43,7 @@ test.describe('E2E: Client Phone-First Authentication Flow', () => {
   })
 
   test('Login page renders Segregated Client & Operator Tabs', async ({ page }) => {
-    await page.goto('http://127.0.0.1:3020/login')
+    await page.goto('/login')
 
     // 1. Client tab is active by default
     await expect(page.getByRole('button', { name: /Sou Cliente/i })).toBeVisible()
@@ -67,7 +67,7 @@ test.describe('E2E: Client Phone-First Authentication Flow', () => {
   })
 
   test('Admin logs in with email and reaches /atendimento/admin dashboard', async ({ page }) => {
-    await page.goto('http://127.0.0.1:3020/login')
+    await page.goto('/login')
     await page.getByRole('button', { name: /Equipe \/ Operador/i }).click()
 
     await page.getByLabel(/E-mail Corporativo/i).fill('admin@asados.com')
@@ -79,7 +79,7 @@ test.describe('E2E: Client Phone-First Authentication Flow', () => {
   })
 
   test('Supervisor logs in with email and reaches /atendimento dashboard', async ({ page }) => {
-    await page.goto('http://127.0.0.1:3020/login')
+    await page.goto('/login')
     await page.getByRole('button', { name: /Equipe \/ Operador/i }).click()
 
     await page.getByLabel(/E-mail Corporativo/i).fill('supervisor@asados.com')
@@ -91,7 +91,7 @@ test.describe('E2E: Client Phone-First Authentication Flow', () => {
   })
 
   test('Vendedor logs in with email and reaches /atendimento dashboard', async ({ page }) => {
-    await page.goto('http://127.0.0.1:3020/login')
+    await page.goto('/login')
     await page.getByRole('button', { name: /Equipe \/ Operador/i }).click()
 
     await page.getByLabel(/E-mail Corporativo/i).fill('vendedor@asados.com')
@@ -103,11 +103,11 @@ test.describe('E2E: Client Phone-First Authentication Flow', () => {
   })
 
   test('Cliente logs in with phone and password and reaches /cliente/chat', async ({ page }) => {
-    await page.goto('http://127.0.0.1:3020/login')
+    await page.goto('/login')
     await page.getByRole('button', { name: /Sou Cliente/i }).click()
 
     await page.getByLabel(/Celular de Curitiba/i).fill('41999998888')
-    await page.getByLabel(/Senha/i).fill('SenhaCliente123!')
+    await page.getByLabel(/Senha/i).fill('SenhaCliente123')
     await page.getByRole('button', { name: /Entrar na Conta/i }).click()
 
     await page.waitForURL('**/cliente/chat', { timeout: 10000 })

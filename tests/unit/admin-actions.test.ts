@@ -118,3 +118,31 @@ describe('obterComprovantes Server Action (Task 2.7)', () => {
     expect(fromSpy).toHaveBeenCalledWith('comprovantes')
   })
 })
+
+describe('deletarUsuarioAdmin idempotent Auth completion', () => {
+  it('completes a pending anonymisation when Auth already reports the user absent', async () => {
+    const operator = makeOperatorClient('admin') as any
+    operator.rpc = vi.fn()
+      .mockResolvedValueOnce({ error: null })
+      .mockResolvedValueOnce({ error: null })
+    mocks.createClient.mockResolvedValue(operator)
+    mocks.createAdminClient.mockReturnValue({ auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: { status: 404, message: 'User not found' } }) } } })
+    const { deletarUsuarioAdmin } = await import('@/app/actions/admin')
+    await expect(deletarUsuarioAdmin('target-1')).resolves.toEqual({ success: true })
+    expect(operator.rpc).toHaveBeenNthCalledWith(1, 'anonymizar_usuario_admin', { p_usuario_alvo_id: 'target-1' })
+    expect(operator.rpc).toHaveBeenNthCalledWith(2, 'concluir_anonymizacao_usuario_admin', { p_usuario_alvo_id: 'target-1' })
+  })
+
+  it('keeps pending when Auth deletion fails and only completes after retry', async () => {
+    const operator = makeOperatorClient('admin') as any
+    operator.rpc = vi.fn().mockResolvedValue({ error: null })
+    mocks.createClient.mockResolvedValue(operator)
+    const deleteUser = vi.fn().mockResolvedValueOnce({ error: { status: 500, message: 'temporary failure' } }).mockResolvedValueOnce({ error: null })
+    mocks.createAdminClient.mockReturnValue({ auth: { admin: { deleteUser } } })
+    const { deletarUsuarioAdmin } = await import('@/app/actions/admin')
+    expect((await deletarUsuarioAdmin('target-1')).error).toContain('ERRO_AUTH_DELETE_PENDENTE')
+    expect(operator.rpc).toHaveBeenCalledTimes(1)
+    await expect(deletarUsuarioAdmin('target-1')).resolves.toEqual({ success: true })
+    expect(operator.rpc).toHaveBeenCalledTimes(3)
+  })
+})

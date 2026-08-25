@@ -15,7 +15,7 @@ export interface EnviarCardapioInput {
 
 export interface EnviarCardapioResult {
   success: boolean
-  modoUtilizado: 'CAROUSEL_NATIVO' | 'CARDS_FALLBACK' | 'TEXT_FALLBACK'
+  modoUtilizado: 'CAROUSEL_NATIVO' | 'BUTTONS_FALLBACK' | 'LIST_FALLBACK' | 'TEXT_FALLBACK'
   error?: string
 }
 
@@ -35,7 +35,7 @@ export function montarPayloadCarrossel(params: EnviarCardapioInput) {
     const icone = p.nome.toLowerCase().includes('costela') ? '🥩' : '🍗'
 
     return {
-      image: p.urlImagem || 'https://casadeasados.duckdns.org/logo-casa-de-assados-sofia.svg',
+      imageUrl: p.urlImagem || 'https://casadeasados.duckdns.org/logo-casa-de-assados-sofia.svg',
       title: `${icone} ${p.nome}`,
       body: `${p.descricao || 'Assado tradicional no bafo de domingo'}\n\n*Valor:* ${valor}`,
       buttons: [
@@ -55,8 +55,78 @@ export function montarPayloadCarrossel(params: EnviarCardapioInput) {
 
   return {
     number: params.telefone,
-    text: `🔥 *Cardápio Oficial de Domingo — Casa de Assados Sofia*\n_Tradição no Umbará • O que vai querer hoje?_`,
+    body: `🔥 *Cardápio Oficial de Domingo — Casa de Assados Sofia*\n_Tradição no Umbará • O que vai querer hoje?_`,
     cards,
+  }
+}
+
+export function montarPayloadBotoes(params: EnviarCardapioInput) {
+  return {
+    number: params.telefone,
+    title: '🔥 Cardápio Oficial de Domingo',
+    description: 'Escolha um produto para adicionar ao pedido:',
+    footer: 'Casa de Assados Sofia · Umbará',
+    buttons: params.produtos.slice(0, 3).map((produto) => ({
+      type: 'reply',
+      displayText: produto.nome.slice(0, 20),
+      id: `cart:add:${produto.id}`,
+    })),
+  }
+}
+
+export function montarPayloadLista(params: EnviarCardapioInput) {
+  return {
+    number: params.telefone,
+    title: '🔥 Cardápio Oficial de Domingo',
+    description: 'Veja os assados disponíveis e escolha o seu.',
+    footerText: 'Casa de Assados Sofia · Umbará',
+    buttonText: 'Ver cardápio',
+    sections: [{
+      title: 'Produtos',
+      rows: params.produtos.map((produto) => ({
+        title: produto.nome.slice(0, 24),
+        description: formatarMoeda(produto.precoCentavos),
+        rowId: `cart:add:${produto.id}`,
+      })),
+    }],
+  }
+}
+
+export function montarPayloadTexto(params: EnviarCardapioInput) {
+  const itens = params.produtos.map((produto, index) => [
+    `${index + 1}. *${produto.nome}* — ${formatarMoeda(produto.precoCentavos)}`,
+    produto.descricao ? `   ${produto.descricao}` : null,
+  ].filter(Boolean).join('\n'))
+
+  return {
+    number: params.telefone,
+    text: [
+      '🔥 *Cardápio Oficial de Domingo — Casa de Assados Sofia*',
+      '',
+      ...itens,
+      '',
+      'Responda *Quero o item N* para adicionar ao pedido.',
+    ].join('\n'),
+  }
+}
+
+async function postEvolution(
+  url: string,
+  headers: Record<string, string>,
+  payload: unknown,
+  mode: string,
+): Promise<void> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(payload),
+  })
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '')
+    throw new Error(
+      `Evolution API rejeitou ${mode} com status ${response.status}${detail ? `: ${detail}` : ''}`,
+    )
   }
 }
 
@@ -116,50 +186,57 @@ export async function enviarCardapioWhatsApp(
     Origin: process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org',
   }
 
-  // 1. Tentar Modo A: Carrusel Nativo (2.4.x) se feature flag estiver ativa
+  // Native carousel stays opt-in until the pinned Evolution image passes the compatibility matrix.
   if (carouselEnabled === 'true') {
     try {
-      const carouselPayload = montarPayloadCarrossel(input)
-      const res = await fetch(`${cleanUrl}/message/sendCarousel/${evolutionInstanceName}`, {
-        method: 'POST',
+      await postEvolution(
+        `${cleanUrl}/message/sendCarousel/${evolutionInstanceName}`,
         headers,
-        body: JSON.stringify(carouselPayload),
-      })
-
-      if (res.ok) {
-        return { success: true, modoUtilizado: 'CAROUSEL_NATIVO' }
-      }
-
-      console.warn(
-        `[WhatsApp Gateway] Carrusel nativo retornou status ${res.status}. Ativando fallback para cartões simulados.`
+        montarPayloadCarrossel(input),
+        'sendCarousel',
       )
+      return { success: true, modoUtilizado: 'CAROUSEL_NATIVO' }
     } catch (err: any) {
       console.warn(
-        `[WhatsApp Gateway] Erro ao enviar carrossel nativo: ${err.message}. Ativando fallback para cartões.`
+        `[WhatsApp Gateway] ${err.message}. Ativando fallback para botões.`,
       )
     }
   }
 
-  // 2. Modo B: Fallback de Cartões Simulados com Fotos de Alta Resolução e Legendas
   try {
-    const cards = montarPayloadCardsFallback(input)
-
-    for (const card of cards) {
-      await fetch(`${cleanUrl}/message/sendMedia/${evolutionInstanceName}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          number: input.telefone,
-          media: card.imageUrl,
-          mediatype: 'image',
-          caption: card.caption,
-        }),
-      })
-    }
-
-    return { success: true, modoUtilizado: 'CARDS_FALLBACK' }
+    await postEvolution(
+      `${cleanUrl}/message/sendButtons/${evolutionInstanceName}`,
+      headers,
+      montarPayloadBotoes(input),
+      'sendButtons',
+    )
+    return { success: true, modoUtilizado: 'BUTTONS_FALLBACK' }
   } catch (err: any) {
-    console.error(`[WhatsApp Gateway] Erro no fallback de cartões:`, err)
+    console.warn(`[WhatsApp Gateway] ${err.message}. Ativando fallback para lista.`)
+  }
+
+  try {
+    await postEvolution(
+      `${cleanUrl}/message/sendList/${evolutionInstanceName}`,
+      headers,
+      montarPayloadLista(input),
+      'sendList',
+    )
+    return { success: true, modoUtilizado: 'LIST_FALLBACK' }
+  } catch (err: any) {
+    console.warn(`[WhatsApp Gateway] ${err.message}. Ativando fallback para texto.`)
+  }
+
+  try {
+    await postEvolution(
+      `${cleanUrl}/message/sendText/${evolutionInstanceName}`,
+      headers,
+      montarPayloadTexto(input),
+      'sendText',
+    )
+    return { success: true, modoUtilizado: 'TEXT_FALLBACK' }
+  } catch (err: any) {
+    console.error('[WhatsApp Gateway] Nenhum modo conseguiu entregar o cardápio:', err)
     return {
       success: false,
       modoUtilizado: 'TEXT_FALLBACK',

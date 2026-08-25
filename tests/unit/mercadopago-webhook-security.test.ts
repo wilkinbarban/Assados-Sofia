@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   obterConfiguracaoSistema: vi.fn(),
   createAdminClient: vi.fn(),
   admitDelivery: vi.fn(),
+  claimDelivery: vi.fn(),
 }))
 
 vi.mock('@/lib/config/sistema', () => ({
@@ -45,11 +46,14 @@ function signedRequest() {
 
 beforeEach(() => {
   vi.spyOn(Date, 'now').mockReturnValue(nowMs)
-  mocks.obterConfiguracaoSistema.mockResolvedValue(secret)
+  mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => (key === 'MERCADO_PAGO_WEBHOOK_SECRET' ? secret : null))
   vi.stubEnv('NODE_ENV', 'production')
   vi.stubEnv('MERCADO_PAGO_ACCESS_TOKEN', '')
-  mocks.createAdminClient.mockReturnValue({ rpc: mocks.admitDelivery })
+  mocks.createAdminClient.mockReturnValue({
+    rpc: (name: string) => name === 'admitir_webhook_mercado_pago' ? mocks.admitDelivery() : mocks.claimDelivery(),
+  })
   mocks.admitDelivery.mockResolvedValue({ data: true, error: null })
+  mocks.claimDelivery.mockResolvedValue({ data: { claimed: true, delivery_status: 'processing', payment_id: paymentId }, error: null })
   vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 500 })))
 })
 
@@ -95,6 +99,25 @@ describe('MercadoPago credential validation', () => {
   })
 })
 
+describe('MercadoPago payment authority result', () => {
+  it('accepts the RPC calendar event identifier as nullable text', async () => {
+    const { normalizarResultadoPagamentoMercadoPago } = await import('@/app/api/webhooks/mercadopago/route')
+
+    expect(normalizarResultadoPagamentoMercadoPago({
+      pedido_id: 'ped-1',
+      status_pagamento: 'aprovado',
+      idempotent: false,
+      google_event_id: 'google-event-1',
+    })).toEqual({ google_event_id: 'google-event-1' })
+    expect(normalizarResultadoPagamentoMercadoPago({
+      pedido_id: 'ped-2',
+      status_pagamento: 'aprovado',
+      idempotent: true,
+      google_event_id: null,
+    })).toEqual({ google_event_id: null })
+  })
+})
+
 describe('MercadoPago webhook endpoint', () => {
   it('rejects unsigned requests before parsing their body', async () => {
     const response = await POST(request())
@@ -109,19 +132,18 @@ describe('MercadoPago webhook endpoint', () => {
     await expect(response.json()).resolves.toEqual({ error: 'payment_processing_unavailable' })
   })
 
-  it('admits a fresh delivery before queueing payment processing', async () => {
+  it('returns a retryable result when a claimed delivery cannot be processed', async () => {
     vi.stubEnv('MERCADO_PAGO_ACCESS_TOKEN', 'APP_USR-configured-token')
 
     const response = await POST(signedRequest())
 
-    expect(response.status).toBe(200)
-    expect(mocks.admitDelivery).toHaveBeenCalledWith('admitir_webhook_mercado_pago', {
-      p_request_id: requestId,
-      p_payment_id: paymentId,
-    })
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: 'payment_processing_retryable' })
+    expect(mocks.admitDelivery).toHaveBeenCalledTimes(1)
+    expect(mocks.claimDelivery).toHaveBeenCalled()
   })
 
-  it('waits for durable admission before queueing payment processing', async () => {
+  it('waits for durable admission before beginning retriable payment processing', async () => {
     vi.stubEnv('MERCADO_PAGO_ACCESS_TOKEN', 'APP_USR-configured-token')
     const admission = Promise.withResolvers<{ data: boolean; error: null }>()
     mocks.admitDelivery.mockReturnValueOnce(admission.promise)
@@ -133,18 +155,46 @@ describe('MercadoPago webhook endpoint', () => {
 
     admission.resolve({ data: true, error: null })
 
-    await expect(responsePromise).resolves.toHaveProperty('status', 200)
+    await expect(responsePromise).resolves.toHaveProperty('status', 503)
   })
 
   it('acknowledges duplicate deliveries without queueing payment processing', async () => {
     vi.stubEnv('MERCADO_PAGO_ACCESS_TOKEN', 'APP_USR-configured-token')
     mocks.admitDelivery.mockResolvedValue({ data: false, error: null })
+    mocks.claimDelivery.mockResolvedValue({
+      data: { claimed: false, delivery_status: 'completed', payment_id: paymentId },
+      error: null,
+    })
 
     const response = await POST(signedRequest())
 
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ status: 'duplicate' })
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('returns retryable while another worker owns an active lease', async () => {
+    vi.stubEnv('MERCADO_PAGO_ACCESS_TOKEN', 'APP_USR-configured-token')
+    mocks.claimDelivery.mockResolvedValue({
+      data: { claimed: false, delivery_status: 'processing', payment_id: paymentId },
+      error: null,
+    })
+
+    const response = await POST(signedRequest())
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ status: 'processing' })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('returns retryable when durable claim throws', async () => {
+    vi.stubEnv('MERCADO_PAGO_ACCESS_TOKEN', 'APP_USR-configured-token')
+    mocks.claimDelivery.mockRejectedValueOnce(new Error('database unavailable'))
+
+    const response = await POST(signedRequest())
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: 'payment_delivery_unavailable' })
   })
 
   it('returns a retriable error when delivery admission is unavailable', async () => {

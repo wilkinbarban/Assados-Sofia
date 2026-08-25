@@ -47,13 +47,11 @@ describe('Fase 3: Atomic Finalization & Idempotent GoTrue Sagas', () => {
         challengeId: 'desafio-1',
         phone: '41999998888',
         code: '123456',
-        userId: 'user-1',
         nome: 'Cliente Teste'
       })
 
       expect(result.success).toBe(true)
       expect(mocks.verifyOtpChallenge).toHaveBeenCalledWith('desafio-1', '41999998888', 'signup', '123456', {
-        userId: 'user-1',
         nome: 'Cliente Teste',
         origemVerificacao: 'whatsapp'
       })
@@ -69,7 +67,6 @@ describe('Fase 3: Atomic Finalization & Idempotent GoTrue Sagas', () => {
         challengeId: 'desafio-1',
         phone: '41999998888',
         code: '000000',
-        userId: 'user-1'
       })
 
       expect(result.success).toBe(false)
@@ -88,7 +85,6 @@ describe('Fase 3: Atomic Finalization & Idempotent GoTrue Sagas', () => {
         challengeId: 'desafio-1',
         phone: '41999998888',
         code: '123456',
-        userId: 'user-1'
       })
 
       expect(result.success).toBe(false)

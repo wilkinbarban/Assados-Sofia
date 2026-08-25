@@ -41,6 +41,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { BrandLogo } from '@/components/ui/BrandLogo'
 import { createClient } from '@/lib/supabase/client'
+import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante'
 import {
   atualizarPerfilUsuario,
   criarUsuarioAdmin,
@@ -122,6 +123,7 @@ interface AdminDashboardProps {
     WHATSAPP_PROVIDER?: string
     MERCADO_PAGO_ACCESS_TOKEN?: string
     MERCADO_PAGO_PUBLIC_KEY?: string
+    MERCADO_PAGO_WEBHOOK_SECRET?: string
     TELEGRAM_BOT_TOKEN?: string
     SOFIA_SYSTEM_PROMPT?: string
   }
@@ -333,30 +335,35 @@ export default function AdminDashboard({
     }
   }, [activeTab, carregarReconciliacoesImagemOrfa])
 
-  const handleSelectComprovante = async (comp: any) => {
+  const handleSelectComprovante = (comp: any) => {
     setSelectedComprovante(comp)
-    setCarregandoPreview(true)
-    setSignedUrlPreview(null)
+  }
+
+  const handleDownloadComprovante = async (comp: any) => {
     try {
       const supabase = createClient()
       const { data, error } = await supabase.storage
         .from('chat-midias')
         .createSignedUrl(comp.url_arquivo, 3600)
 
-      if (error) {
-        throw error
+      if (error || !data?.signedUrl) {
+        throw error || new Error('URL assinada não encontrada')
       }
 
-      if (data?.signedUrl) {
-        setSignedUrlPreview(data.signedUrl)
-      } else {
-        showToast('error', 'Não foi possível gerar a URL de visualização.')
-      }
+      const res = await fetch(data.signedUrl)
+      const blob = await res.blob()
+      const blobUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = blobUrl
+      a.download = comp.nome_arquivo || 'comprovante'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      window.URL.revokeObjectURL(blobUrl)
+      showToast('success', 'Download iniciado com sucesso!')
     } catch (err: any) {
-      console.error('Erro ao gerar URL assinada para visualização:', err)
-      showToast('error', 'Erro ao carregar pré-visualização do PDF.')
-    } finally {
-      setCarregandoPreview(false)
+      console.error('Erro ao baixar comprovante:', err)
+      showToast('error', 'Falha ao baixar o arquivo do comprovante.')
     }
   }
 
@@ -1387,7 +1394,7 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
       </aside>
 
       {/* Main Content Area */}
-      <section className="flex-1 flex flex-col overflow-hidden bg-zinc-950 p-8">
+      <section className="flex-1 min-w-0 flex flex-col overflow-hidden bg-zinc-950 p-4 md:p-8">
         {/* Top Operational Quick Bar */}
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl bg-gradient-to-r from-zinc-900/80 via-zinc-900/40 to-zinc-900/80 p-4 border border-zinc-800/80 backdrop-blur-md shrink-0">
           <div className="flex items-center gap-3">
@@ -2231,13 +2238,26 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                             {dataFormatada}
                           </td>
                           <td className="px-6 py-4 text-right">
-                            <button
-                              onClick={() => handleSelectComprovante(comp)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-800 hover:border-zinc-700 bg-zinc-900/40 text-zinc-300 hover:text-zinc-100 text-xs font-semibold transition-all cursor-pointer"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              Visualizar
-                            </button>
+                            <div className="flex items-center justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleSelectComprovante(comp)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-800 hover:border-amber-500/50 bg-zinc-900/60 hover:bg-zinc-800 text-zinc-200 hover:text-amber-400 text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
+                                title="Visualizar comprovante no aplicativo"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                Visualizar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadComprovante(comp)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-zinc-800 hover:border-amber-500/50 bg-zinc-900/60 hover:bg-zinc-800 text-zinc-300 hover:text-amber-400 text-xs font-bold transition-all shadow-sm active:scale-95 cursor-pointer"
+                                title="Baixar arquivo do comprovante"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Baixar
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       )
@@ -2247,67 +2267,16 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
               )}
             </div>
 
-            {/* Side-Drawer Preview Panel */}
-            {selectedComprovante && (
-              <div className="fixed inset-y-0 right-0 w-[500px] z-50 bg-zinc-900 border-l border-zinc-800 shadow-2xl flex flex-col transform transition-transform duration-300 ease-in-out p-6">
-                <div className="flex items-center justify-between pb-4 border-b border-zinc-800 mb-4">
-                  <div className="flex items-center gap-2 text-amber-500">
-                    <FileText className="h-5 w-5" />
-                    <h3 className="text-sm font-bold text-zinc-100">Visualização de Comprovante</h3>
-                  </div>
-                  <button
-                    onClick={() => {
-                      setSelectedComprovante(null)
-                      setSignedUrlPreview(null)
-                    }}
-                    className="text-zinc-500 hover:text-zinc-300 p-1.5 rounded-lg hover:bg-zinc-800/40 transition-all"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-
-                <div className="space-y-4 flex-1 flex flex-col min-h-0">
-                  <div className="bg-zinc-950/60 rounded-xl border border-zinc-800/60 p-4 text-xs space-y-2">
-                    <p className="text-zinc-400"><strong className="text-zinc-300">Cliente:</strong> {selectedComprovante.clientes?.nome || 'Cliente Desconhecido'}</p>
-                    <p className="text-zinc-400 truncate"><strong className="text-zinc-300">Arquivo:</strong> {selectedComprovante.nome_arquivo}</p>
-                    <p className="text-zinc-400"><strong className="text-zinc-300">Tamanho:</strong> {(selectedComprovante.tamanho_bytes / 1024).toFixed(1)} KB</p>
-                    <p className="text-zinc-400"><strong className="text-zinc-300">Enviado em:</strong> {new Date(selectedComprovante.data_criacao).toLocaleString('pt-BR')}</p>
-                  </div>
-
-                  <div className="flex-1 min-h-[300px] bg-zinc-950 rounded-xl border border-zinc-800 flex items-center justify-center relative overflow-hidden">
-                    {carregandoPreview ? (
-                      <div className="flex flex-col items-center gap-2 text-zinc-500">
-                        <Loader2 className="h-8 w-8 animate-spin text-amber-500" />
-                        <p className="text-xs">Gerando link seguro...</p>
-                      </div>
-                    ) : signedUrlPreview ? (
-                      <iframe
-                        src={`${signedUrlPreview}#toolbar=0`}
-                        className="w-full h-full border-none"
-                        title="PDF Preview"
-                      />
-                    ) : (
-                      <div className="flex flex-col items-center gap-2 text-zinc-500 p-4 text-center">
-                        <AlertTriangle className="h-8 w-8 text-rose-500" />
-                        <p className="text-xs">Falha ao carregar visualização.</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {signedUrlPreview && (
-                    <a
-                      href={signedUrlPreview}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-zinc-950 font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <Download className="h-4 w-4" />
-                      Baixar PDF
-                    </a>
-                  )}
-                </div>
-              </div>
-            )}
+            {/* Modal de Visualização de Comprovante Integrado */}
+            <ModalVisualizadorComprovante
+              isOpen={!!selectedComprovante}
+              onClose={() => setSelectedComprovante(null)}
+              urlArquivo={selectedComprovante?.url_arquivo || null}
+              nomeArquivo={selectedComprovante?.nome_arquivo}
+              tamanhoBytes={selectedComprovante?.tamanho_bytes}
+              clienteNome={selectedComprovante?.clientes?.nome}
+              dataCriacao={selectedComprovante?.data_criacao}
+            />
           </div>
         )}
 

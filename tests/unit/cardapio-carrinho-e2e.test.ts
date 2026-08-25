@@ -15,13 +15,7 @@ vi.mock('@/lib/horarios/verificar', () => ({
 }))
 
 import { POST as handleEvolutionWebhook } from '@/app/api/webhooks/evolution/route'
-import { processarAcaoInterativaWhatsApp } from '@/lib/whatsapp/action-router'
-import {
-  obterOuCriarCarrinhoAtivo,
-  adicionarItemAoCarrinho,
-  atualizarQuantidadeItemCarrinho,
-  converterCarrinhoEmPedido,
-} from '@/lib/carrinho/service'
+import { converterCarrinhoEmPedido } from '@/lib/carrinho/service'
 import { executarToolSofia } from '@/lib/ai/tools'
 import { enviarCardapioWhatsApp } from '@/lib/whatsapp/gateways/catalog-gateway'
 
@@ -407,7 +401,7 @@ describe('E2E Integration: Cardápio Interativo, Carrinho Persistente, Webhooks 
       })
 
       expect(res.success).toBe(true)
-      expect(res.modoUtilizado).toBe('CARDS_FALLBACK')
+      expect(res.modoUtilizado).toBe('BUTTONS_FALLBACK')
     })
   })
 })

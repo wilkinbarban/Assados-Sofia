@@ -9,6 +9,7 @@ export const viewport: Viewport = {
 }
 
 export const metadata: Metadata = {
+  metadataBase: new URL('https://casadeasados.duckdns.org'),
   title: {
     default: 'Casa de Assados Sofia | O Verdadeiro Sabor do Domingo',
     template: '%s | Casa de Assados Sofia',

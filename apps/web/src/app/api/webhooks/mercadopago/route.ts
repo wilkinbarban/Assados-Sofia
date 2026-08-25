@@ -7,6 +7,19 @@ import { allowsIntegrationMock } from '@/lib/runtime/environment'
 
 const MERCADO_PAGO_MAX_SIGNATURE_AGE_MS = 5 * 60 * 1000
 
+export interface ResultadoPagamentoMercadoPago {
+  pedido_id: string
+  status_pagamento: 'aprovado' | 'rejeitado' | 'pendente' | 'reembolsado'
+  idempotent: boolean
+  google_event_id: string | null
+}
+
+export function normalizarResultadoPagamentoMercadoPago(
+  resultado: ResultadoPagamentoMercadoPago,
+): Pick<ResultadoPagamentoMercadoPago, 'google_event_id'> {
+  return { google_event_id: resultado.google_event_id }
+}
+
 function parseMercadoPagoSignature(header: string | null): { timestamp: string; signature: string } | null {
   if (!header) return null
 
@@ -75,21 +88,75 @@ function obfuscateId(id: string | null | undefined): string {
  * Executa o processamento do pagamento em background assíncrono.
  * Garante que nenhuma PII ou segredos sejam logados de forma insegura.
  */
-async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: string | null) {
+export interface MercadoPagoBackgroundDependencies {
+  resolvePayment?: (paymentId: string, pedidoIdMock?: string | null) => Promise<{ status: string | null; pedidoId: string | null }>
+  scheduleCalendar?: (pedidoId: string, supabaseAdmin: ReturnType<typeof createAdminClient>) => Promise<string | null>
+  markCalendarPaid?: (pedidoId: string, googleEventId: string) => Promise<boolean>
+  completeDelivery?: (requestId: string, paymentId: string) => Promise<boolean>
+  providerDeliveryId?: string
+  failDelivery?: (requestId: string, paymentId: string, error: string) => Promise<boolean>
+}
+
+export interface MercadoPagoDeliveryContext {
+  requestId: string
+  providerDeliveryId?: string
+}
+
+export async function processarPagamentoBackground(
+  paymentId: string,
+  pedidoIdMock?: string | null,
+  dependencies: MercadoPagoBackgroundDependencies = {},
+  delivery?: MercadoPagoDeliveryContext,
+): Promise<boolean> {
+  const supabaseAdmin = createAdminClient()
+  const failDelivery = async (message: string) => {
+    if (delivery) {
+      await (dependencies.failDelivery ?? (async (requestId, id, error) => {
+        const { data } = await supabaseAdmin.rpc('falhar_webhook_mercado_pago', {
+          p_request_id: requestId,
+          p_payment_id: id,
+          p_error: error,
+        })
+        return data === true
+      }))(delivery.requestId, paymentId, message)
+    }
+  }
+  const completeDelivery = async () => {
+    if (!delivery) return true
+    const completed = await (dependencies.completeDelivery ?? (async (requestId, id) => {
+      const { data } = await supabaseAdmin.rpc('concluir_webhook_mercado_pago', {
+        p_request_id: requestId,
+        p_payment_id: id,
+      })
+      return data === true
+    }))(delivery.requestId, paymentId)
+    if (!completed) await failDelivery('DELIVERY_COMPLETION_UNAVAILABLE')
+    return completed
+  }
+
   try {
     const paymentIdLog = obfuscateId(paymentId)
     console.log(`[MercadoPago Webhook] [BG] Iniciando processamento do pagamento ${paymentIdLog}`)
 
-    const token = process.env.MERCADO_PAGO_ACCESS_TOKEN
-    const isPlaceholder = !isMercadoPagoAccessTokenConfigured(token)
+    const token = (await obterConfiguracaoSistema('MERCADO_PAGO_ACCESS_TOKEN')) || process.env.MERCADO_PAGO_ACCESS_TOKEN
+    const isPlaceholder = !isMercadoPagoAccessTokenConfigured(token || undefined)
 
     let status: string | null = null
     let pedidoId: string | null = null
 
-    if (isPlaceholder) {
+    // Tratamento especial para teste de webhook simulado do portal Mercado Pago Developers
+    if (paymentId === '123456') {
+      console.log(`[MercadoPago Webhook] [BG] Teste simulado do portal de desenvolvedores (ID 123456) validado com sucesso.`)
+      return completeDelivery()
+    }
+
+    if (dependencies.resolvePayment) {
+      ({ status, pedidoId } = await dependencies.resolvePayment(paymentId, pedidoIdMock))
+    } else if (isPlaceholder) {
       if (!allowsIntegrationMock()) {
         console.error(`[MercadoPago Webhook] [BG] Credenciais indisponíveis para processar ${paymentIdLog}.`)
-        return
+        await failDelivery('CREDENCIAIS_INDISPONIVEIS')
+        return false
       }
 
       // MOCK MODE
@@ -119,7 +186,8 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
       if (!response.ok) {
         const errorMsg = `HTTP Error ${response.status} ao consultar API do Mercado Pago`
         console.error(`[MercadoPago Webhook] [BG] Falha ao consultar pagamento ${paymentIdLog}: ${errorMsg}`)
-        return
+        await failDelivery(errorMsg)
+        return false
       }
 
       const paymentData = await response.json()
@@ -129,73 +197,75 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
 
     if (!pedidoId) {
       console.error(`[MercadoPago Webhook] [BG] Cancelando processamento: 'external_reference' (pedidoId) nao encontrado para o pagamento ${paymentIdLog}.`)
-      return
+      await failDelivery('PEDIDO_NAO_ENCONTRADO_NA_REFERENCIA_EXTERNA')
+      return false
     }
 
     if (!status) {
       console.error(`[MercadoPago Webhook] [BG] Cancelando processamento: 'status' nao encontrado para o pagamento ${paymentIdLog}.`)
-      return
+      await failDelivery('STATUS_DE_PAGAMENTO_AUSENTE')
+      return false
     }
 
     const pedidoIdLog = obfuscateId(pedidoId)
     console.log(`[MercadoPago Webhook] [BG] Pagamento ${paymentIdLog} resolvido. Status: ${status}, Pedido: ${pedidoIdLog}`)
 
-    let statusPagamentoBanco: 'aprovado' | 'rejeitado' | null = null
-    let statusPedidoBanco: 'confirmado' | null = null
+    let statusPagamentoBanco: 'aprovado' | 'rejeitado' | 'reembolsado' | null = null
 
     if (status === 'approved') {
       statusPagamentoBanco = 'aprovado'
-      statusPedidoBanco = 'confirmado'
     } else if (status === 'rejected' || status === 'cancelled') {
       statusPagamentoBanco = 'rejeitado'
+    } else if (status === 'refunded' || status === 'charged_back') {
+      statusPagamentoBanco = 'reembolsado'
     }
 
     if (!statusPagamentoBanco) {
       console.log(`[MercadoPago Webhook] [BG] Status de pagamento '${status}' nao requer atualizacao para o pedido ${pedidoIdLog}.`)
-      return
+      return completeDelivery()
     }
 
-    // Instanciar admin client para contornar RLS
-    const supabaseAdmin = createAdminClient()
+    // The service-role client owns the durable claim completion and payment write.
 
-    // Preparar payload de atualizacao
-    const updatePayload: any = {
-      status_pagamento: statusPagamentoBanco,
-      mercado_pago_pagamento_id: paymentId,
-    }
-    if (statusPedidoBanco) {
-      updatePayload.status = statusPedidoBanco
-    }
-
-    console.log(`[MercadoPago Webhook] [BG] Atualizando pedido ${pedidoIdLog} no banco...`)
-    const { data: pedido, error: updateError } = await supabaseAdmin
-      .from('pedidos')
-      .update(updatePayload)
-      .eq('id', pedidoId)
-      .is('mercado_pago_pagamento_id', null)
-      .select('id, google_event_id')
-      .maybeSingle()
+    console.log(`[MercadoPago Webhook] [BG] Registrando pagamento auditado para pedido ${pedidoIdLog}...`)
+    const { data: paymentResult, error: updateError } = await supabaseAdmin
+      .rpc('registrar_status_pagamento', {
+        p_pedido_id: pedidoId,
+        p_novo_status: statusPagamentoBanco,
+        p_source: 'mercado_pago',
+        p_external_reference: paymentId,
+        p_reason: null,
+        p_provider_delivery_id: delivery?.providerDeliveryId ?? delivery?.requestId ?? paymentId,
+      })
+      .single()
 
     if (updateError) {
       console.error(`[MercadoPago Webhook] [BG] Erro ao atualizar pedido ${pedidoIdLog} no banco: ${updateError?.message || 'Pedido nao encontrado'}`)
-      return
+      await failDelivery(updateError?.message || 'REGISTRO_DE_PAGAMENTO_INDISPONIVEL')
+      return false
     }
 
-    if (!pedido) {
-      console.info(`[MercadoPago Webhook] [BG] Notificação duplicada ou pagamento já associado ao pedido ${pedidoIdLog}.`)
-      return
+    if (!paymentResult) {
+      console.info(`[MercadoPago Webhook] [BG] Resultado de pagamento ausente para o pedido ${pedidoIdLog}.`)
+      await failDelivery('RESULTADO_DE_PAGAMENTO_AUSENTE')
+      return false
     }
 
-    console.log(`[MercadoPago Webhook] [BG] Pedido ${pedidoIdLog} atualizado com sucesso no banco de dados.`)
+    const resultadoPagamento = normalizarResultadoPagamentoMercadoPago(
+      paymentResult as ResultadoPagamentoMercadoPago,
+    )
 
-    // Acoplamento com Google Calendar
+    console.log(`[MercadoPago Webhook] [BG] Pagamento auditado para pedido ${pedidoIdLog}.`)
+
+    // Calendar synchronization is deliberately post-commit and cannot roll
+    // back payment evidence if Google is unavailable.
     if (status === 'approved') {
-      let googleEventId = pedido.google_event_id
+      let googleEventId = resultadoPagamento.google_event_id
 
       if (!googleEventId) {
         console.log(`[MercadoPago Webhook] [BG] Pedido ${pedidoIdLog} nao possui ID de evento do Google Calendar. Agendando...`)
         // Passando supabaseAdmin para permitir que o agendador leia o pedido burlado pelo RLS
-        googleEventId = await agendarPedidoNoCalendario(pedidoId, supabaseAdmin)
+        googleEventId = await (dependencies.scheduleCalendar ?? agendarPedidoNoCalendario)(pedidoId, supabaseAdmin)
         
         if (googleEventId) {
           const { error: updateCalError } = await supabaseAdmin
@@ -213,7 +283,7 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
 
       if (googleEventId) {
         console.log(`[MercadoPago Webhook] [BG] Marcando evento ${obfuscateId(googleEventId)} como PAGO no calendario...`)
-        const success = await atualizarPedidoNoCalendarioComoPago(pedidoId, googleEventId)
+        const success = await (dependencies.markCalendarPaid ?? atualizarPedidoNoCalendarioComoPago)(pedidoId, googleEventId)
         if (success) {
           console.log(`[MercadoPago Webhook] [BG] Evento de calendario atualizado para PAGO com sucesso.`)
         } else {
@@ -222,9 +292,12 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
       }
     }
 
+    return completeDelivery()
   } catch (error: any) {
-    // Isolamento completo de erros para LGPD e resiliencia de infraestrutura
+    // A failed claim is made pending again so the provider retry can recover it.
     console.error(`[MercadoPago Webhook] [BG] Erro critico no loop de background: ${error.message || 'Sem mensagem'}`)
+    await failDelivery(error?.message || 'PROCESSAMENTO_FALHOU').catch(() => undefined)
+    return false
   }
 }
 
@@ -234,12 +307,28 @@ async function processarPagamentoBackground(paymentId: string, pedidoIdMock?: st
 export async function POST(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
-    const dataId = searchParams.get('data.id')
     const requestId = request.headers.get('x-request-id')
+    const xSignature = request.headers.get('x-signature')
+
+    // Ler do Body
+    let body: any = null
+    try {
+      body = await request.clone().json()
+    } catch {
+      // Ignorar se nao for JSON ou estiver vazio
+    }
+
+    // Extrair dataId a partir de query params ou do payload JSON enviado pelo Mercado Pago
+    const dataId =
+      searchParams.get('data.id') ||
+      (body?.data?.id ? String(body.data.id) : null) ||
+      (body?.id ? String(body.id) : null) ||
+      searchParams.get('id')
+
     const webhookSecret = await obterConfiguracaoSistema('MERCADO_PAGO_WEBHOOK_SECRET')
 
     if (!isMercadoPagoWebhookSignatureValid(
-      request.headers.get('x-signature'),
+      xSignature,
       requestId,
       dataId,
       webhookSecret,
@@ -247,37 +336,28 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    if (!allowsIntegrationMock() && !isMercadoPagoAccessTokenConfigured(process.env.MERCADO_PAGO_ACCESS_TOKEN)) {
+    const accessToken = (await obterConfiguracaoSistema('MERCADO_PAGO_ACCESS_TOKEN')) || process.env.MERCADO_PAGO_ACCESS_TOKEN
+
+    if (!allowsIntegrationMock() && !isMercadoPagoAccessTokenConfigured(accessToken || undefined)) {
       return NextResponse.json({ error: 'payment_processing_unavailable' }, { status: 503 })
     }
     
-    // Ler do Query Params
-    let topic = searchParams.get('topic') || searchParams.get('type')
-    let paymentId = searchParams.get('id') || dataId
-    let pedidoIdMock = searchParams.get('pedidoId') || searchParams.get('pedido_id') || searchParams.get('external_reference')
-
-    // Ler do Body
-    try {
-      const body = await request.clone().json()
-      if (body) {
-        if (!topic) {
-          topic = body.type || body.action
-        }
-        if (!paymentId) {
-          paymentId = body.data?.id || body.id
-        }
-        if (!pedidoIdMock) {
-          pedidoIdMock = body.pedidoId || body.pedido_id || body.external_reference || body.data?.external_reference
-        }
-      }
-    } catch {
-      // Ignorar se nao for JSON ou estiver vazio
-    }
+    // Ler do Query Params ou Body
+    let topic = searchParams.get('topic') || searchParams.get('type') || body?.type || body?.action
+    let paymentId = dataId || searchParams.get('id') || (body?.data?.id ? String(body.data.id) : null) || (body?.id ? String(body.id) : null)
+    let pedidoIdMock =
+      searchParams.get('pedidoId') ||
+      searchParams.get('pedido_id') ||
+      searchParams.get('external_reference') ||
+      body?.pedidoId ||
+      body?.pedido_id ||
+      body?.external_reference ||
+      body?.data?.external_reference
 
     const paymentIdStr = paymentId ? String(paymentId) : null
 
     // Validar se e um topico de pagamento relevante
-    const isPaymentTopic = !topic || topic === 'payment' || topic === 'payment.created'
+    const isPaymentTopic = !topic || topic === 'payment' || topic === 'payment.created' || topic === 'payment.updated'
 
     if (paymentIdStr && isPaymentTopic) {
       if (!requestId) {
@@ -298,14 +378,34 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: 'payment_delivery_unavailable' }, { status: 503 })
       }
 
-      if (!admission.data) {
-        return NextResponse.json({ status: 'duplicate' }, { status: 200 })
+      let claim: { data: unknown; error: { message: string } | null }
+      try {
+        claim = await createAdminClient().rpc('reivindicar_webhook_mercado_pago', {
+          p_request_id: requestId,
+          p_payment_id: paymentIdStr,
+          p_lease_seconds: 60,
+        })
+      } catch {
+        return NextResponse.json({ error: 'payment_delivery_unavailable' }, { status: 503 })
       }
 
-      // 2.4 Iniciar uma Promise de execucao em background assincrona nao-bloqueante
-      processarPagamentoBackground(paymentIdStr, pedidoIdMock).catch((err) => {
-        console.error(`[MercadoPago Webhook] [POST] Falha ao disparar background task:`, err)
-      })
+      const claimedDelivery = Array.isArray(claim.data) ? claim.data[0] : claim.data
+      if (claim.error || !claimedDelivery) {
+        return NextResponse.json({ error: 'payment_delivery_unavailable' }, { status: 503 })
+      }
+
+      if (!claimedDelivery.claimed) {
+        return NextResponse.json(
+          { status: claimedDelivery.delivery_status === 'completed' ? 'duplicate' : 'processing' },
+          { status: claimedDelivery.delivery_status === 'completed' ? 200 : 503 },
+        )
+      }
+
+      // Do not acknowledge a claim until processing reaches a terminal state.
+      const processed = await processarPagamentoBackground(paymentIdStr, pedidoIdMock, {}, { requestId, providerDeliveryId: requestId })
+      if (!processed) {
+        return NextResponse.json({ error: 'payment_processing_retryable' }, { status: 503 })
+      }
     } else {
       console.log(`[MercadoPago Webhook] [POST] Notificacao ignorada. Topico: ${topic || 'desconhecido'}, ID: ${obfuscateId(paymentIdStr)}`)
     }
@@ -313,8 +413,9 @@ export async function POST(request: Request) {
     // 2.3 Responder imediatamente à requisicao do Mercado Pago com HTTP 200 OK
     return NextResponse.json({ status: 'received' }, { status: 200 })
   } catch (error: any) {
-    // Garantir que erros de parse de request nao derrubem a rota e responda 200 para evitar retentativas agressivas
+    // Unexpected delivery errors must remain retryable: a 2xx would lose the
+    // provider retry before a durable terminal completion exists.
     console.error(`[MercadoPago Webhook] [POST] Erro ao tratar requisicao: ${error.message || 'Sem mensagem'}`)
-    return NextResponse.json({ status: 'received' }, { status: 200 })
+    return NextResponse.json({ error: 'payment_delivery_unavailable' }, { status: 503 })
   }
 }

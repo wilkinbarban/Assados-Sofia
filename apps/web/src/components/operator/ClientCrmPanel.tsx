@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { User, Tag, FileText, MapPin, Plus, X, Save, Loader2, Star, ShoppingCart, Package } from 'lucide-react'
 import { atualizarClienteCrm } from '@/app/actions/clientes'
 import { Cliente } from './ConversationsQueue'
@@ -12,11 +12,18 @@ interface ClientCrmPanelProps {
   onClienteUpdated?: (clienteId: string, updatedData: Partial<Cliente>) => void
 }
 
+type ClientPanelTab = 'carrinho' | 'pedidos' | 'crm'
+
 export default function ClientCrmPanel({
   cliente,
   onClienteUpdated
 }: ClientCrmPanelProps) {
-  const [activeTab, setActiveTab] = useState<'carrinho' | 'pedidos' | 'crm'>('carrinho')
+  const [activeTab, setActiveTab] = useState<ClientPanelTab>('carrinho')
+  const tabRefs = useRef<Record<ClientPanelTab, HTMLButtonElement | null>>({
+    carrinho: null,
+    pedidos: null,
+    crm: null,
+  })
   const [endereco, setEndereco] = useState('')
   const [notas, setNotas] = useState('')
   const [score, setScore] = useState(0)
@@ -41,7 +48,7 @@ export default function ClientCrmPanel({
 
   if (!cliente) {
     return (
-      <div className="flex h-full w-80 flex-col items-center justify-center border-l border-zinc-800 bg-zinc-950/20 text-zinc-500 p-6 text-center">
+      <div className="flex h-full w-full xl:w-[22rem] 2xl:w-[27rem] flex-col items-center justify-center border-l border-zinc-800 bg-zinc-950/20 text-zinc-500 p-6 text-center">
         <User className="h-12 w-12 mb-3 stroke-zinc-700 animate-pulse" />
         <p className="text-sm">Selecione uma conversa para ver as informações de CRM do cliente</p>
       </div>
@@ -97,17 +104,56 @@ export default function ClientCrmPanel({
     }
   }
 
+  const handleTabKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, currentTab: ClientPanelTab) => {
+    const tabs: ClientPanelTab[] = ['carrinho', 'pedidos', 'crm']
+    const currentIndex = tabs.indexOf(currentTab)
+    let nextTab: ClientPanelTab | null = null
+
+    if (event.key === 'ArrowRight') nextTab = tabs[(currentIndex + 1) % tabs.length]
+    if (event.key === 'ArrowLeft') nextTab = tabs[(currentIndex - 1 + tabs.length) % tabs.length]
+    if (event.key === 'Home') nextTab = tabs[0]
+    if (event.key === 'End') nextTab = tabs[tabs.length - 1]
+    if (!nextTab) return
+
+    event.preventDefault()
+    setActiveTab(nextTab)
+    tabRefs.current[nextTab]?.focus()
+  }
+
   return (
-    <div className="w-80 md:w-96 shrink-0 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden">
-      {/* Barra de Abas Superiores */}
-      <div className="flex h-14 border-b border-zinc-800 bg-zinc-900/60 p-1.5 shrink-0 gap-1">
+    <aside className="w-full xl:w-[22rem] 2xl:w-[27rem] shrink-0 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden shadow-2xl shadow-black/20">
+      <div className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-zinc-900 via-zinc-900/95 to-amber-950/20 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-400">
+            <ShoppingCart className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-400">
+              Venda em andamento
+            </p>
+            <p className="truncate text-sm font-semibold text-zinc-100">{cliente.nome}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Carrinho e pedidos formam o fluxo principal; CRM é informação de apoio. */}
+      <div
+        className="grid grid-cols-[1fr_1fr_auto] gap-1.5 border-b border-zinc-800 bg-zinc-900/60 p-2 shrink-0"
+        role="tablist"
+        aria-label="Áreas do atendimento ao cliente"
+      >
         <button
           type="button"
           onClick={() => setActiveTab('carrinho')}
-          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+          onKeyDown={(event) => handleTabKeyDown(event, 'carrinho')}
+          ref={(element) => { tabRefs.current.carrinho = element }}
+          role="tab"
+          aria-selected={activeTab === 'carrinho'}
+          tabIndex={activeTab === 'carrinho' ? 0 : -1}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'carrinho'
-              ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
-              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+              ? 'border border-amber-400 bg-amber-500 text-zinc-950 shadow-lg shadow-amber-500/15'
+              : 'border border-zinc-800 bg-zinc-950/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800/70'
           }`}
           title="Carrinho aberto e seleção de itens"
         >
@@ -118,10 +164,15 @@ export default function ClientCrmPanel({
         <button
           type="button"
           onClick={() => setActiveTab('pedidos')}
-          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+          onKeyDown={(event) => handleTabKeyDown(event, 'pedidos')}
+          ref={(element) => { tabRefs.current.pedidos = element }}
+          role="tab"
+          aria-selected={activeTab === 'pedidos'}
+          tabIndex={activeTab === 'pedidos' ? 0 : -1}
+          className={`flex min-h-11 items-center justify-center gap-2 rounded-xl px-3 text-xs font-bold transition-all cursor-pointer ${
             activeTab === 'pedidos'
-              ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
-              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+              ? 'border border-amber-400 bg-amber-500 text-zinc-950 shadow-lg shadow-amber-500/15'
+              : 'border border-zinc-800 bg-zinc-950/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-800/70'
           }`}
           title="Histórico de pedidos confirmados deste cliente"
         >
@@ -132,10 +183,16 @@ export default function ClientCrmPanel({
         <button
           type="button"
           onClick={() => setActiveTab('crm')}
-          className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg text-[11px] font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+          onKeyDown={(event) => handleTabKeyDown(event, 'crm')}
+          ref={(element) => { tabRefs.current.crm = element }}
+          role="tab"
+          aria-selected={activeTab === 'crm'}
+          tabIndex={activeTab === 'crm' ? 0 : -1}
+          aria-label="Dados do cliente (CRM)"
+          className={`flex min-h-11 items-center justify-center gap-1.5 rounded-xl border px-3 text-[11px] font-semibold transition-all cursor-pointer ${
             activeTab === 'crm'
-              ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
-              : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+              ? 'border-zinc-600 bg-zinc-700 text-zinc-100'
+              : 'border-zinc-800 bg-zinc-950/40 text-zinc-500 hover:border-zinc-700 hover:bg-zinc-800/70 hover:text-zinc-300'
           }`}
           title="Informações de cadastro e notas do cliente"
         >
@@ -320,6 +377,6 @@ export default function ClientCrmPanel({
       </div>
         </div>
       )}
-    </div>
+    </aside>
   )
 }

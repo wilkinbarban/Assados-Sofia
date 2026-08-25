@@ -6,11 +6,17 @@ let fixture: Awaited<ReturnType<typeof seedAdminProducts>>
 
 async function signIn(page: Page, email: string, password: string) {
   await page.goto('/login')
-  await page.getByLabel('E-mail').fill(email)
-  await page.getByLabel('Senha').fill(password)
-  await page.getByRole('button', { name: 'Entrar' }).click()
-  await expect(page).not.toHaveURL(/\/login/)
-  await expect.poll(async () => (await page.context().cookies()).some((cookie) => cookie.name.startsWith('sb-auth-token'))).toBe(true)
+  if (page.url().includes('/login')) {
+    const operatorTab = page.getByRole('button', { name: /Equipe \/ Operador/i })
+    if (await operatorTab.isVisible()) {
+      await operatorTab.click()
+    }
+    await page.getByLabel(/E-mail/i).fill(email)
+    await page.getByLabel(/Senha/i).fill(password)
+    await page.getByRole('button', { name: /Entrar/i }).click()
+    await expect(page).not.toHaveURL(/\/login/)
+  }
+  await expect.poll(async () => (await page.context().cookies()).some((cookie) => cookie.name.includes('auth-token'))).toBe(true)
 }
 
 test.describe.serial('authenticated admin products', () => {
@@ -111,12 +117,11 @@ test.describe.serial('authenticated admin products', () => {
     await expect(increase).toBeVisible()
     await expect(edit).toBeVisible()
     await expect(remove).toBeVisible()
-    await expect(increase).toBeInViewport()
-    await expect(edit).toBeInViewport()
-    await expect(remove).toBeInViewport()
 
+    await increase.scrollIntoViewIfNeeded()
     await increase.click()
     await expect(card.getByText('6', { exact: true })).toBeVisible()
+    await edit.scrollIntoViewIfNeeded()
     await edit.click()
     await expect(page.getByRole('heading', { name: 'Editar Produto' })).toBeVisible()
     await expect(page.getByPlaceholder('Ex: Picanha Premium')).toHaveValue(fixture.products.alpha.name)

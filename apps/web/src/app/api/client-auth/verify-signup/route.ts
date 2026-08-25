@@ -7,7 +7,6 @@ const verifySignupSchema = z.object({
   challengeId: z.string().min(1, 'ID de desafio é obrigatório'),
   telefone: z.string().min(1, 'O telefone é obrigatório'),
   codigo: z.string().length(6, 'O código deve ter 6 dígitos'),
-  userId: z.string().min(1, 'ID de usuário é obrigatório'),
   nome: z.string().optional(),
 })
 
@@ -23,7 +22,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const { challengeId, telefone, codigo, userId, nome } = parsed.data
+    const { challengeId, telefone, codigo, nome } = parsed.data
 
     const canonicalPhone = normalizeCuritibaPhone(telefone)
     if (!canonicalPhone) {
@@ -37,7 +36,6 @@ export async function POST(request: Request) {
       challengeId,
       phone: canonicalPhone,
       code: codigo,
-      userId,
       nome
     })
 

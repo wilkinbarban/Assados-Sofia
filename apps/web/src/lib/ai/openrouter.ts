@@ -83,6 +83,21 @@ function obterRespostaMock(mensagemCliente: string): string {
     return 'Ficamos no bairro Umbará, em Curitiba - PR, piá! Fácil acesso com estacionamento rápido para você retirar seu assado na estufa em menos de 90 segundos! 📍 Daí, vai retirar no balcão ou prefere delivery? 🛵'
   }
 
+  if (
+    texto.includes('cancelar') ||
+    texto.includes('cancelamento') ||
+    texto.includes('cancela') ||
+    texto.includes('alterar pedido') ||
+    texto.includes('modificar pedido') ||
+    texto.includes('mudar pedido') ||
+    texto.includes('mudar horário') ||
+    texto.includes('mudar horario') ||
+    texto.includes('trocar item') ||
+    texto.includes('trocar pedido')
+  ) {
+    return 'Compreendo perfeitamente, piá! Como seu pedido já foi registrado na nossa cozinha, vou repassar imediatamente sua solicitação de alteração/cancelamento para nossa equipe de atendimento humano assumir no balcão e cuidar de tudo para você com todo o carinho. Um de nossos atendentes entrará em contato em instantes! 🙏✨'
+  }
+
   if (texto.includes('reserva') || texto.includes('reservar') || texto.includes('encomenda') || texto.includes('agendar') || texto.includes('pedido')) {
     return 'Quer garantir seu combo quentinho pro domingo, piá? Excelente escolha! Daí, me diz qual combo você escolheu e qual janela de horário você prefere para a retirada (ex: 11h45, 12h00, 12h30)! 📅🍗'
   }
@@ -236,6 +251,29 @@ export async function processarRagPipeline(
     console.error('[RAG Pipeline] Erro ao buscar contexto do carrinho:', err)
   }
 
+  // 5.2 Buscar contexto de pedidos ativos do cliente (para suporte a dúvidas e alterações)
+  let contextoPedidosAtivos = ''
+  try {
+    const pedidosQuery = supabase
+      ?.from?.('pedidos')
+      ?.select?.('id, status, status_pagamento, total_centavos, tipo_entrega, data_criacao, itens_pedido(quantidade, preco_unitario_centavos, produtos(nome))')
+      ?.eq?.('cliente_id', (conversa as any).cliente_id)
+
+    const { data: pedidosRes } = typeof pedidosQuery?.in === 'function'
+      ? await pedidosQuery.in('status', ['novo', 'confirmado']).order?.('data_criacao', { ascending: false }).limit?.(3)
+      : { data: [] }
+
+    if (pedidosRes && pedidosRes.length > 0) {
+      const pedidosTxt = pedidosRes.map((p: any) => {
+        const itens = p.itens_pedido?.map((it: any) => `${it.quantidade}x ${it.produtos?.nome || 'Item'}`).join(', ')
+        return `• Pedido #${p.id.substring(0, 8)} | Status: ${p.status.toUpperCase()} | Pagamento: ${p.status_pagamento.toUpperCase()} | Total: R$ ${(p.total_centavos / 100).toFixed(2).replace('.', ',')} | Itens: ${itens || 'Diversos'}`
+      }).join('\n')
+      contextoPedidosAtivos = `PEDIDOS ATIVOS DO CLIENTE EM PROCESSAMENTO:\n${pedidosTxt}`
+    }
+  } catch (err) {
+    console.error('[RAG Pipeline] Erro ao buscar pedidos ativos do cliente:', err)
+  }
+
   // 6. Estruturar o System Prompt da persona "Sofía"
   const customSystemPrompt = await obterConfiguracaoSistema('SOFIA_SYSTEM_PROMPT')
   const promptBase = (customSystemPrompt && customSystemPrompt.trim())
@@ -253,7 +291,13 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
 ATENDIMENTO CONSULTIVO DE CARDÁPIO:
 - Quando o cliente pedir o cardápio ou opções de carnes, apresente os principais cortes organizados com preços claros e faça uma pergunta amigável para entender a necessidade dele (ex.: "Quantas pessoas vão comer hoje, piá? Preferem um corte bem macio como Picanha ou um kit família completo?").
 - Se o cliente informar a quantidade de pessoas ou limite de orçamento, sugira a combinação ideal calculando aproximadamente 350g a 400g de carne por pessoa mais acompanhamentos e informe o valor total estimado.
-- Ao explicar sobre um corte (ex.: Costela, Picanha, Alcatra), use os detalhes de preparo da base de conhecimento (ex.: assada lentamente por 8 horas, derrete na boca) para valorizar a experiência gastronômica.`
+- Ao explicar sobre um corte (ex.: Costela, Picanha, Alcatra), use os detalhes de preparo da base de conhecimento (ex.: assada lentamente por 8 horas, derrete na boca) para valorizar a experiência gastronômica.
+
+MODIFICAÇÃO OU CANCELAMENTO DE PEDIDOS:
+- Se o cliente solicitar cancelamento, alteração de itens, mudança de horário de retirada ou alteração de endereço de um pedido já enviado ou em processamento:
+  1. Responda com extrema cordialidade, serenidade e respeito de forma acolhedora (ex.: "Compreendo perfeitamente. Como seu pedido já foi registrado na nossa cozinha, vou repassar agora mesmo sua solicitação de alteração/cancelamento para nossa equipe de atendimento humano assumir no balcão e cuidar de tudo para você com todo o carinho.").
+  2. NUNCA tente cancelar ou alterar pedidos no banco de dados por conta própria.
+  3. Deixe claro que a equipe humana já está sendo acionada.`
 
   // Regra de idioma hardcoded: SEMPRE no topo, imune a edições do prompt no Dashboard
   const regraIdiomaTopo = `🚨 REGRA CRÍTICA — LEIA ANTES DE TUDO 🚨
@@ -262,6 +306,7 @@ VOCÊ DEVE RESPONDER EXCLUSIVAMENTE EM PORTUGUÊS DO BRASIL (pt-BR). Esta é a r
 
 REGRAS SOBRE PEDIDOS:
 - NUNCA confirme pedidos automaticamente sem conferência de estoque. Se o cliente quiser fazer um pedido, anote os itens e informe que um atendente humano confirmará no balcão ou ajude a montar o carrinho.
+- Se o cliente quiser alterar ou cancelar um pedido já enviado/confirmado, responda com cordialidade acolhedora e confirme que o caso está sendo repassado para um atendente humano da equipe.
 - Você pode listar produtos, preços e disponibilidade, mas a confirmação final de qualquer pedido é feita exclusivamente pelo CRM/atendente.
 
 Exemplo CORRETO: Cliente escreve "Hola, ¿cómo estás?" → Você responde "Olá, como vai você?"
@@ -283,6 +328,7 @@ CONTEXTO DE SUPORTE:
 ${contextoHorarios ? contextoHorarios + '\n\n' : ''}${contextoArtigos || 'Nenhuma informação específica adicional da base de conhecimento foi encontrada.'}
 ${contextoProdutos ? '\n\n' + contextoProdutos : ''}
 ${contextoCarrinho ? '\n\n' + contextoCarrinho : ''}
+${contextoPedidosAtivos ? '\n\n' + contextoPedidosAtivos : ''}
 
 HISTÓRICO DA CONVERSA:
 ${historicoMensagens || 'Sem histórico anterior.'}
@@ -383,6 +429,38 @@ ${regraIdiomaRodape}`
     }
 
     respostaIa = obterRespostaMock(mensagemCliente)
+  }
+
+  // 6.3 Handoff Humano Proativo para Alteração ou Cancelamento de Pedido
+  const msgLower = mensagemCliente.toLowerCase()
+  const isSolicitacaoCancelamentoOuMod =
+    msgLower.includes('cancelar') ||
+    msgLower.includes('cancelamento') ||
+    msgLower.includes('cancela') ||
+    msgLower.includes('alterar pedido') ||
+    msgLower.includes('modificar pedido') ||
+    msgLower.includes('mudar pedido') ||
+    msgLower.includes('mudar horário') ||
+    msgLower.includes('mudar horario') ||
+    msgLower.includes('trocar item') ||
+    msgLower.includes('trocar pedido')
+
+  if (isSolicitacaoCancelamentoOuMod) {
+    try {
+      console.info(`[RAG Pipeline] Solicitação de alteração/cancelamento detectada para cliente ${(conversa as any).cliente_id}. Acionando Handoff Humano...`)
+      await supabase.rpc('silenciar_sofia_cliente', {
+        p_cliente_id: (conversa as any).cliente_id,
+        p_minutos: 60,
+        p_motivo: 'solicitacao_cliente_alteracao_cancelamento',
+        p_usuario_id: null,
+      })
+      await supabase
+        .from('conversas')
+        .update({ status: 'aberta', ia_ativa: false })
+        .eq('id', conversaId)
+    } catch (handoffErr) {
+      console.warn('[RAG Pipeline] Falha não-bloqueante ao acionar handoff humano de cancelamento:', handoffErr)
+    }
   }
 
   // 7. Despacho final da mensagem — respeita canal de origem
