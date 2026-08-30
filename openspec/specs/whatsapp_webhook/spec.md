@@ -185,4 +185,3 @@ WhatsApp/Evolution PDF documents MUST use shared admission with delivery idempot
 - GIVEN no unique customer match
 - WHEN a PDF arrives
 - THEN it awaits identification outside chats.
-

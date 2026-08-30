@@ -44,4 +44,3 @@ The panel MUST support identity, review, 10-day quarantine countdown, restore, l
 - GIVEN quarantine has time remaining
 - WHEN an admin restores it
 - THEN review resumes and one correction notification is queued.
-

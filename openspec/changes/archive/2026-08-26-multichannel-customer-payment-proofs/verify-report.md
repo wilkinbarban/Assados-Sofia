@@ -74,8 +74,8 @@ The runtime evidence confirms the design's canonical service-authoritative ledge
 | Assertion quality | ✅ | No tautologies, ghost loops, or type-only assertions found |
 
 ### Issues Found
-**CRITICAL**: None.  
-**WARNING**: None.  
+**CRITICAL**: None.
+**WARNING**: None.
 **SUGGESTION**: Coverage was not collected because no change-scoped coverage threshold is configured.
 
 ### Cleanup / Process Evidence

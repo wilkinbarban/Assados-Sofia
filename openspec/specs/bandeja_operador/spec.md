@@ -248,4 +248,3 @@ Operator chat MUST show admitted proofs once as PNG and MUST hide pending, quara
 - GIVEN an admitted customer proof
 - WHEN the operator opens the conversation
 - THEN one PNG is shown without PDF access.
-

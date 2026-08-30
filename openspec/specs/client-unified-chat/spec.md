@@ -45,4 +45,3 @@ Customer history MUST show one faithful PNG for an admitted proof and MUST hide 
 - GIVEN identity remains unresolved
 - WHEN history loads
 - THEN no proof message or attachment exists.
-

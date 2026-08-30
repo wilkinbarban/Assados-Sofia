@@ -50,4 +50,3 @@ Web chat MUST submit valid bounded PDF bytes to canonical admission instead of d
 - GIVEN malformed, oversized, or non-PDF bytes
 - WHEN submitted
 - THEN no storage-backed proof, message, or LLM job is admitted.
-
