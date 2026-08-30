@@ -38,4 +38,17 @@ describe('payment-proof-driven order lock', () => {
     expect(dashboard).toContain('Comprovante recebido')
     expect(dashboard).toContain('payment_review?.locked')
   })
+
+  it('keeps order-intent RESTRICT semantics while total purge removes intents first', () => {
+    const purge = readFileSync(
+      'supabase/migrations/20260828330000_total_purge_payment_proof_dependents.sql',
+      'utf8',
+    )
+
+    expect(migration).toContain('references public.payment_proofs(id) on delete restrict')
+    expect(purge.match(/delete from public\.payment_proof_order_intents/g)?.length).toBe(2)
+    expect(purge.indexOf('delete from public.payment_proof_order_intents')).toBeLessThan(
+      purge.indexOf('delete from public.payment_proofs'),
+    )
+  })
 })

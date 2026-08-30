@@ -6,8 +6,15 @@ select not to_regclass('public.residual_client_purge_jobs') is not null as apply
 \ir ../migrations/20260827100000_residual_manifest_alias_fix.sql
 \ir ../migrations/20260827101000_residual_job_retention_fix.sql
 \endif
+select not to_regclass('public.payment_proof_order_intents') is not null as apply_payment_proof_dependents \gset
+\if :apply_payment_proof_dependents
+\ir ../migrations/20260828230000_payment_proof_order_lock.sql
+\ir ../migrations/20260828300000_payment_proof_operational_metrics.sql
+\ir ../migrations/20260828320000_payment_proof_processing_queue.sql
+\endif
 \ir ../migrations/20260828183000_total_purge_sales_receipt_authority.sql
-select plan(32);
+\ir ../migrations/20260828330000_total_purge_payment_proof_dependents.sql
+select plan(35);
 set role postgres;
 -- All identifiers are disposable-only and the runner executes inside a cloned DB.
 insert into auth.users(id,instance_id,aud,role,email,encrypted_password,created_at,updated_at) values
@@ -45,6 +52,12 @@ insert into public.payment_proofs(id,customer_id,channel,delivery_key,status,ori
 on conflict do nothing;
 insert into public.payment_proof_events(proof_id,event_type,source,result_status) values
  ('4a000000-0000-4000-8000-000000000031','fixture','web','received') on conflict do nothing;
+insert into public.payment_proof_order_intents(proof_id,pedido_id,requested_via) values
+ ('4a000000-0000-4000-8000-000000000031','4a000000-0000-4000-8000-000000000022','migration') on conflict do nothing;
+insert into private.payment_proof_operational_failures(proof_id,stage) values
+ ('4a000000-0000-4000-8000-000000000031','render');
+insert into private.payment_proof_processing_queue(proof_id) values
+ ('4a000000-0000-4000-8000-000000000031') on conflict do nothing;
 insert into public.payment_proof_hash_tombstones(sha256,canonical_proof_id) values
  ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','4a000000-0000-4000-8000-000000000031') on conflict do nothing;
 reset role;
@@ -80,7 +93,10 @@ select ok(not exists(select 1 from public.clientes where id='4a000000-0000-4000-
 select ok(not exists(select 1 from public.pedidos where id='4a000000-0000-4000-8000-000000000022'),'purge deletes target-derived order');
 select ok(not exists(select 1 from public.conversas where id='4a000000-0000-4000-8000-000000000041'),'purge deletes target-derived conversation/messages');
 select ok(not exists(select 1 from public.payment_proofs where id='4a000000-0000-4000-8000-000000000031'),'purge deletes target proof and dependent ledger rows');
+select ok(not exists(select 1 from public.payment_proof_order_intents where proof_id='4a000000-0000-4000-8000-000000000031'),'total purge clears RESTRICT payment-proof order intents');
 reset role;
+select ok(not exists(select 1 from private.payment_proof_operational_failures where proof_id='4a000000-0000-4000-8000-000000000031'),'total purge clears RESTRICT private operational failures');
+select ok(not exists(select 1 from private.payment_proof_processing_queue where proof_id='4a000000-0000-4000-8000-000000000031'),'total purge clears RESTRICT private processing queue rows');
 select ok(exists(select 1 from public.payment_proof_hash_tombstones where sha256='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' and canonical_proof_id is null),'purge retains only detached global SHA-256 tombstone');
 reset role;
 select is((select status from public.admin_user_deletion_jobs where id=(select job_id from purge_manifest)),'auth_pending','SQL purge records pending Auth phase');
