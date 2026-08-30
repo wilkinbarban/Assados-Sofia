@@ -6,6 +6,7 @@ umask 077
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 state_root="${ASADOS_DEPLOY_STATE_ROOT:-/var/lib/asados/deploy}"
 smoke="$root/scripts/smoke-production-readonly.sh"
+preflight="$root/scripts/workspace-preflight.sh"
 health_timeout="${ASADOS_WEB_HEALTH_TIMEOUT_SECONDS:-180}"
 
 usage() {
@@ -68,8 +69,7 @@ load_state() {
   source "$state_root/release.env"
 }
 
-mkdir -p -- "$state_root"
-chmod 0700 "$state_root"
+"$preflight" check "$state_root"
 exec 9>"$state_root/deploy.lock"
 flock -n 9 || { printf '%s\n' 'Another Web deployment is active' >&2; exit 1; }
 
