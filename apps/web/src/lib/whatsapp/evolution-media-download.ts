@@ -103,7 +103,7 @@ export async function downloadEvolutionPdf(input: DownloadInput) {
         Origin: process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org',
       },
       body: JSON.stringify({ message: input.message, convertToMp4: false }),
-      redirect: 'manual',
+      redirect: 'error',
       signal: controller.signal,
     })
     if (!response.ok) return classifyHttpFailure(response.status)
