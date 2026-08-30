@@ -1,0 +1,1 @@
+select plan(1);select ok(exists(select 1 from storage.buckets where id='payment-proofs' and not public and file_size_limit=5242880 and allowed_mime_types@>array['application/pdf','image/png']),'proof bucket is private and bounded');select * from finish();
