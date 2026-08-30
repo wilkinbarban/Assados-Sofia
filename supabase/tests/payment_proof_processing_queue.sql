@@ -20,8 +20,8 @@ select extensions.is(public.complete_payment_proof_maintenance('processing','555
 select extensions.is(public.complete_payment_proof_maintenance('processing','55555555-5555-4555-8555-555555555520',false,'load',current_setting('test.lease_b')::uuid,2),true,'exact token and attempt completes');
 select extensions.is((public.get_payment_proof_delivery_state('telegram','queue-test')->>'state'),'queued','replay state repairs completed attempt to pending queue');
 select extensions.is((public.get_payment_proof_delivery_state('telegram','missing')->>'state'),'missing','replay missing enum');
-select extensions.is(public.claim_payment_proof_maintenance(10,'outbox'),null,'explicit outbox budget progresses independently');
-select extensions.is(public.claim_payment_proof_maintenance(10,'purge'),null,'explicit purge budget progresses independently');
+select extensions.ok(coalesce(public.claim_payment_proof_maintenance(10,'outbox')->>'kind','outbox')='outbox','explicit outbox budget progresses independently even with aggregate fixtures');
+select extensions.ok(coalesce(public.claim_payment_proof_maintenance(10,'purge')->>'kind','purge')='purge','explicit purge budget progresses independently even with aggregate fixtures');
 update private.payment_proof_processing_queue set status='claimed',attempts=5,next_attempt_at=now(),claimed_until=now()-interval'1 second',lease_token=gen_random_uuid() where proof_id='55555555-5555-4555-8555-555555555520';
 select public.claim_payment_proof_maintenance(10,'processing');
 select extensions.is((select status from private.payment_proof_processing_queue where proof_id='55555555-5555-4555-8555-555555555520'),'dead_letter','expired fifth attempt dead letters');

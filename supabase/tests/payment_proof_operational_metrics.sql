@@ -6,14 +6,15 @@ select has_function('public','record_payment_proof_operational_failure',array['u
 select has_function('public','begin_payment_proof_maintenance',array[]::text[],'heartbeat begin exists');
 select has_function('public','finish_payment_proof_maintenance',array['boolean'],'heartbeat finish exists');
 select has_function('public','get_payment_proof_operational_metrics',array[]::text[],'aggregate metrics exists');
-select function_privs_are('public','complete_payment_proof_maintenance',array['text','text','boolean','text'],'service_role',array['EXECUTE'],'replacement completion RPC remains service-only');
-select function_privs_are('public','complete_payment_proof_maintenance',array['text','text','boolean','text'],'authenticated',array[]::text[],'authenticated cannot execute replacement completion RPC');
+select function_privs_are('public','complete_payment_proof_maintenance',array['text','text','boolean','text','uuid','integer'],'service_role',array['EXECUTE'],'lease-owned completion RPC remains service-only');
+select function_privs_are('public','complete_payment_proof_maintenance',array['text','text','boolean','text','uuid','integer'],'authenticated',array[]::text[],'authenticated cannot execute lease-owned completion RPC');
 select function_privs_are('public','dead_letter_payment_proof_outbox',array['bigint','text'],'service_role',array['EXECUTE'],'replacement dead-letter RPC remains service-only');
 select function_privs_are('public','dead_letter_payment_proof_outbox',array['bigint','text'],'authenticated',array[]::text[],'authenticated cannot execute replacement dead-letter RPC');
 select function_privs_are('public','get_payment_proof_operational_metrics',array[]::text[],'service_role',array['EXECUTE'],'metrics are service-only');
 select function_privs_are('public','get_payment_proof_operational_metrics',array[]::text[],'authenticated',array[]::text[],'authenticated cannot read metrics');
 select function_privs_are('public','record_payment_proof_operational_failure',array['uuid','text'],'anon',array[]::text[],'anonymous cannot record failures');
 
+update private.payment_proof_maintenance_health set running=false,last_started_at=null,last_finished_at=null,last_success_at=null,consecutive_failures=0 where singleton;
 set local role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
 select throws_ok($$select * from private.payment_proof_maintenance_health$$,'42501',null,'service role cannot directly inspect private heartbeat state');
@@ -42,14 +43,22 @@ insert into public.payment_proofs(id,channel,delivery_key,status,original_storag
  ('91919191-9191-4191-8191-919191919103','web','metrics-purge-success','purging','synthetic/success.pdf','synthetic/success-preview.pdf',1,now()-interval '2 days',now()-interval '1 day'),
  ('91919191-9191-4191-8191-919191919104','web','metrics-purge-failure','purging','synthetic/failure.pdf','synthetic/failure-preview.pdf',1,now()-interval '2 days',now()-interval '1 day'),
  ('91919191-9191-4191-8191-919191919105','web','metrics-outbox','review','synthetic/outbox.pdf',null,1,null,null);
-insert into public.payment_proof_outbox(proof_id,event_type,channel,payload,status,attempts,claimed_until,next_attempt_at) values
- ('91919191-9191-4191-8191-919191919105','synthetic-auto-dead','web','{}','claimed',5,now()+interval '1 minute',now()),
- ('91919191-9191-4191-8191-919191919101','synthetic-manual-dead','web','{}','claimed',1,now()+interval '1 minute',now());
+insert into public.payment_proof_outbox(proof_id,event_type,channel,payload,status,attempts,next_attempt_at) values
+ ('91919191-9191-4191-8191-919191919105','synthetic-auto-dead','web','{}','pending',4,now()),
+ ('91919191-9191-4191-8191-919191919101','synthetic-manual-dead','web','{}','pending',1,now());
 reset role;
 set local role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
-select ok(public.complete_payment_proof_maintenance('outbox','1',false,'sensitive arbitrary worker detail'),'automatic terminal failure completes');
-select ok(public.dead_letter_payment_proof_outbox(2,'different sensitive worker detail'),'permanent dead-letter completes');
+do $$declare job jsonb;begin
+ job:=public.claim_payment_proof_maintenance(60,'outbox');
+ perform set_config('test.auto_outbox_id',job->>'id',false);
+ perform set_config('test.auto_outbox_token',job->>'lease_token',false);
+ perform set_config('test.auto_outbox_attempt',job->>'attempt',false);
+ job:=public.claim_payment_proof_maintenance(60,'outbox');
+ perform set_config('test.manual_outbox_id',job->>'id',false);
+end$$;
+select ok(public.complete_payment_proof_maintenance('outbox',current_setting('test.auto_outbox_id'),false,'sensitive arbitrary worker detail',current_setting('test.auto_outbox_token')::uuid,current_setting('test.auto_outbox_attempt')::integer),'lease owner may complete automatic terminal failure');
+select ok(public.dead_letter_payment_proof_outbox(current_setting('test.manual_outbox_id')::bigint,'different sensitive worker detail'),'permanent dead-letter completes');
 reset role;
 select ok((select bool_and(dead_lettered_at is not null) from public.payment_proof_outbox),'automatic and permanent dead-letter transitions set timestamps');
 select is((select string_agg(last_error,',' order by id) from public.payment_proof_outbox),'operation_failed,operation_failed','arbitrary errors are replaced by fixed operation_failed');
@@ -58,8 +67,8 @@ reset role;
 
 set local role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
-select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919103',true,'ignored success detail'),'successful purge completes');
-select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919104',false,'sensitive storage provider detail'),'failed purge completes with retry');
+select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919103',true,'ignored success detail',null,null),'successful purge completes through current completion API');
+select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919104',false,'sensitive storage provider detail',null,null),'failed purge completes with retry through current completion API');
 reset role;
 select is((select status from public.payment_proofs where delivery_key='metrics-purge-success'),'purged','successful purge has exact fixed status');
 select is((select event_type||'/'||result_status from public.payment_proof_events where proof_id='91919191-9191-4191-8191-919191919103'),'purged/purged','successful purge emits exact fixed event and result');
