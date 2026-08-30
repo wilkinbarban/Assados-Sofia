@@ -1,6 +1,7 @@
 'use client'
 
 import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { Download, Loader2, Printer, ReceiptText, X } from 'lucide-react'
 import { actionEmitirComprovanteVenda } from '@/app/actions/pedidos'
 import {
@@ -174,69 +175,123 @@ export function ReceiptOutputActions({ pedidoId, disabled = false }: ReceiptOutp
       <span>{loading ? 'Preparando...' : 'Comprovante'}</span>
     </button>
 
-    {receipt && <div
-      aria-labelledby={titleId}
-      aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-3 backdrop-blur-sm"
-      onKeyDown={handleDialogKeyDown}
-      ref={dialogRef}
-      role="dialog"
-      tabIndex={-1}
-    >
-      <div className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-950 shadow-2xl">
-        <header className="flex items-start justify-between gap-4 border-b border-zinc-800 p-4">
-          <div>
-            <div className="flex items-center gap-2 text-amber-400">
-              <ReceiptText className="h-5 w-5" aria-hidden="true" />
-              <h2 className="text-base font-bold text-zinc-100" id={titleId}>Pré-visualizar comprovante</h2>
+    {receipt && typeof document !== 'undefined' && createPortal(
+      <div
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/85 p-4 backdrop-blur-md animate-in fade-in duration-200"
+        onKeyDown={handleDialogKeyDown}
+        onMouseDown={(event) => {
+          if (event.target === event.currentTarget) closePreview()
+        }}
+        ref={dialogRef}
+        role="dialog"
+        tabIndex={-1}
+      >
+        <div className="relative flex max-h-[94vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-amber-500/30 bg-zinc-950 shadow-2xl shadow-black/90">
+          <header className="flex items-start justify-between gap-4 border-b border-zinc-800/80 bg-zinc-950 p-4 shrink-0">
+            <div>
+              <div className="flex items-center gap-2 text-amber-400">
+                <ReceiptText className="h-5 w-5" aria-hidden="true" />
+                <h2 className="text-base font-bold text-zinc-100" id={titleId}>Pré-visualizar comprovante</h2>
+              </div>
+              <p className="mt-1 text-xs text-zinc-400">Confira as duas vias antes de imprimir ou baixar.</p>
             </div>
-            <p className="mt-1 text-xs text-zinc-400">Confira as duas vias antes de imprimir ou baixar.</p>
-          </div>
-          <button ref={closeRef} type="button" onClick={closePreview} aria-label="Fechar pré-visualização" className="rounded-lg border border-zinc-700 p-2 text-zinc-300 hover:border-amber-500 hover:text-amber-300 focus-visible:outline-2 focus-visible:outline-amber-400">
-            <X className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </header>
+            <button
+              ref={closeRef}
+              type="button"
+              onClick={closePreview}
+              aria-label="Fechar pré-visualização"
+              className="rounded-full p-2 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition-colors cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400"
+            >
+              <X className="h-5 w-5" aria-hidden="true" />
+            </button>
+          </header>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 bg-zinc-900/60 p-4">
-          <fieldset className="flex items-center gap-2">
-            <legend className="sr-only">Largura térmica</legend>
-            {([58, 80] as const).map((option) => <label key={option} className={`cursor-pointer rounded-lg border px-3 py-2 text-xs font-bold ${width === option ? 'border-amber-400 bg-amber-500/15 text-amber-300' : 'border-zinc-700 text-zinc-300'}`}>
-              <input className="sr-only" type="radio" name={`${titleId}-width`} value={option} checked={width === option} onChange={() => setWidth(option)} />
-              {option} mm
-            </label>)}
-          </fieldset>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" onClick={printReceipt} className="inline-flex items-center gap-2 rounded-lg bg-amber-500 px-3 py-2 text-xs font-bold text-zinc-950 hover:bg-amber-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400">
-              <Printer className="h-4 w-4" aria-hidden="true" /> Imprimir comprovante
-            </button>
-            <button type="button" onClick={downloadPdf} className="inline-flex items-center gap-2 rounded-lg border border-zinc-700 px-3 py-2 text-xs font-bold text-zinc-100 hover:border-amber-500 hover:text-amber-300 focus-visible:outline-2 focus-visible:outline-amber-400">
-              <Download className="h-4 w-4" aria-hidden="true" /> Baixar PDF
-            </button>
-            <button type="button" onClick={downloadPng} className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs font-bold text-amber-300 hover:border-amber-400 hover:bg-amber-500/20 focus-visible:outline-2 focus-visible:outline-amber-400">
-              <Download className="h-4 w-4" aria-hidden="true" /> Baixar PNG (2ª Via)
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 bg-zinc-900/60 p-4 shrink-0">
+            <fieldset className="flex items-center gap-2">
+              <legend className="sr-only">Largura térmica</legend>
+              {([58, 80] as const).map((option) => (
+                <label
+                  key={option}
+                  className={`cursor-pointer rounded-xl border px-3 py-1.5 text-xs font-bold transition-all ${
+                    width === option
+                      ? 'border-amber-400 bg-amber-500/15 text-amber-300 shadow-sm'
+                      : 'border-zinc-700 text-zinc-300 hover:border-zinc-600'
+                  }`}
+                >
+                  <input
+                    className="sr-only"
+                    type="radio"
+                    name={`${titleId}-width`}
+                    value={option}
+                    checked={width === option}
+                    onChange={() => setWidth(option)}
+                  />
+                  {option} mm
+                </label>
+              ))}
+            </fieldset>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={printReceipt}
+                className="inline-flex items-center gap-2 rounded-xl bg-amber-500 px-3.5 py-2 text-xs font-bold text-zinc-950 hover:bg-amber-400 shadow-md shadow-amber-500/10 transition-all active:scale-95 cursor-pointer focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-400"
+              >
+                <Printer className="h-4 w-4" aria-hidden="true" /> Imprimir comprovante
+              </button>
+              <button
+                type="button"
+                onClick={downloadPdf}
+                className="inline-flex items-center gap-2 rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 py-2 text-xs font-bold text-zinc-100 hover:border-amber-500 hover:text-amber-300 transition-all active:scale-95 cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400"
+              >
+                <Download className="h-4 w-4" aria-hidden="true" /> Baixar PDF
+              </button>
+              <button
+                type="button"
+                onClick={downloadPng}
+                className="inline-flex items-center gap-2 rounded-xl border border-amber-500/50 bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-amber-300 hover:border-amber-400 hover:bg-amber-500/20 transition-all active:scale-95 cursor-pointer focus-visible:outline-2 focus-visible:outline-amber-400"
+              >
+                <Download className="h-4 w-4" aria-hidden="true" /> Baixar PNG (2ª Via)
+              </button>
+            </div>
+          </div>
+
+          <div className="overflow-auto bg-zinc-900/90 p-6 flex-1 min-h-[300px]">
+            <div className="mx-auto flex w-fit flex-col gap-6">
+              {copies.map((copy) => (
+                <article
+                  key={copy.label}
+                  style={{ width: `${width}mm` }}
+                  className="max-w-full overflow-hidden rounded-md bg-white p-[4mm] font-mono text-[9px] leading-tight text-black shadow-2xl"
+                >
+                  <div className="border-y border-black py-2 text-center">
+                    <strong className="block text-sm uppercase font-black">{receipt.snapshot.establishment.name}</strong>
+                    <span className="block font-bold">COMPROVANTE DE VENDA</span>
+                    <strong className="mt-1 block border-t border-dashed border-black pt-1">{copy.label}</strong>
+                  </div>
+                  <div className="mt-2 max-w-full whitespace-pre-wrap break-all font-mono text-[9px] leading-tight">
+                    {copy.commercialData.split('\n').slice(2).map((line, index) => (
+                      <span className="block" key={`${copy.label}-${index}`}>
+                        {line}
+                      </span>
+                    ))}
+                  </div>
+                </article>
+              ))}
+            </div>
           </div>
         </div>
-
-        <div className="overflow-auto bg-zinc-900 p-4">
-          <div className="mx-auto flex w-fit flex-col gap-5">
-            {copies.map((copy) => <article key={copy.label} style={{ width: `${width}mm` }} className="max-w-full overflow-hidden bg-white p-[3mm] font-mono text-[9px] leading-tight text-black shadow-xl">
-              <div className="border-y border-black py-2 text-center">
-                <strong className="block text-sm uppercase">{receipt.snapshot.establishment.name}</strong>
-                <span className="block font-bold">COMPROVANTE DE VENDA</span>
-                <strong className="mt-1 block border-t border-dashed border-black pt-1">{copy.label}</strong>
-              </div>
-              <div className="mt-2 max-w-full whitespace-pre-wrap break-all font-mono text-[9px] leading-tight">
-                {copy.commercialData.split('\n').slice(2).map((line, index) => (
-                  <span className="block" key={`${copy.label}-${index}`}>{line}</span>
-                ))}
-              </div>
-            </article>)}
-          </div>
-        </div>
-      </div>
-      <iframe ref={printFrameRef} title="Área de impressão do comprovante" srcDoc={printDocument} className="fixed -left-[10000px] top-0 h-px w-px" aria-hidden="true" />
-    </div>}
+        <iframe
+          ref={printFrameRef}
+          title="Área de impressão do comprovante"
+          srcDoc={printDocument}
+          className="fixed -left-[10000px] top-0 h-px w-px"
+          aria-hidden="true"
+        />
+      </div>,
+      document.body
+    )}
     {message && <p className="mt-2 text-xs text-amber-200" role="status">{message}</p>}
   </div>
 }

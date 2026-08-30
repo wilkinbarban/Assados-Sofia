@@ -1,4 +1,10 @@
 declare module 'pdf-parse' {
-  function pdf(dataBuffer: Buffer, options?: any): Promise<any>;
-  export = pdf;
+  export class PDFParse {
+    constructor(options: Record<string, unknown>)
+    getScreenshot(options: Record<string, unknown>): Promise<{
+      pages: Array<{ data: Uint8Array; width: number; height: number }>
+    }>
+    getText(options?: Record<string, unknown>): Promise<{ text: string }>
+    destroy(): Promise<void>
+  }
 }

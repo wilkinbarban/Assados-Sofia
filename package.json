@@ -11,11 +11,11 @@
   },
   "scripts": {
     "dev": "npm run dev --workspace @asados/web",
-    "build": "npm run build --workspace @asados/web",
+    "build": "scripts/workspace-preflight.sh run -- npm run build --workspace @asados/web",
     "start": "npm run start --workspace @asados/web",
     "lint": "eslint apps/web/src apps/web/proxy.ts tests",
     "lin": "npm run lint",
-    "test": "vitest run",
+    "test": "scripts/workspace-preflight.sh run -- vitest run",
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
     "test:coverage": "vitest run --coverage tests/unit/integration-mode-policy.test.ts tests/unit/mercadopago-webhook-security.test.ts tests/unit/telegram-webhook-security.test.ts tests/unit/webhook-global-gates.test.ts tests/unit/safe-redirect.test.ts",
