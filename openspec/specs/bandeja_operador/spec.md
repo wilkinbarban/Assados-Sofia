@@ -238,3 +238,14 @@ If the provider is unavailable or the balance cannot be refreshed, the indicator
 - WHEN the indicator is updated
 - THEN the UI MUST show a stale or unknown state
 - AND the last known numeric balance MUST NOT be presented as current
+
+## Requirements added by `multichannel-customer-payment-proofs`
+
+## ADDED Requirements
+### Requirement: Operator proof projection
+Operator chat MUST show admitted proofs once as PNG and MUST hide pending, quarantined, duplicate, or purged proofs. Original PDF actions MUST NOT appear in chat.
+#### Scenario: Operator history
+- GIVEN an admitted customer proof
+- WHEN the operator opens the conversation
+- THEN one PNG is shown without PDF access.
+

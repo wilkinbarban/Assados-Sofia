@@ -30,3 +30,18 @@ A aba de comprovantes MUST listar os registros permitindo filtrar por cliente e 
 - GIVEN a listagem de comprovantes
 - WHEN o usuário clica em um comprovante
 - THEN o PDF correspondente é renderizado em tela em um modal ou painel de visualização
+
+## Requirements added by `multichannel-customer-payment-proofs`
+
+## ADDED Requirements
+### Requirement: Secure proof workflow
+The panel MUST support identity, review, 10-day quarantine countdown, restore, links, value confirmation, provenance, and failure state. Sellers MUST NOT access original PDFs; active admins/supervisors MAY access them.
+#### Scenario: Seller review
+- GIVEN an admitted proof
+- WHEN a seller reviews it
+- THEN workflow actions and PNG are shown without PDF access.
+#### Scenario: Admin restoration
+- GIVEN quarantine has time remaining
+- WHEN an admin restores it
+- THEN review resumes and one correction notification is queued.
+
