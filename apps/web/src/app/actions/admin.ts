@@ -2,6 +2,9 @@
 
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
+import { getSupabaseServerUrl } from '@/lib/supabase/url'
+import { z } from 'zod'
 import { google } from 'googleapis'
 import {
   getEvolutionConnectionState,
@@ -10,6 +13,7 @@ import {
 import { revalidatePath } from 'next/cache'
 import { consolidateAdminUsers } from '@/lib/admin/user-list'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
+import { resolveOmniRouteAdminTarget } from '@/lib/ai/omniroute-admin-target'
 
 /**
  * Helper para validar se o usuário atual está autenticado, ativo
@@ -583,6 +587,129 @@ export async function salvarConfiguracaoAdmin(chave: string, valor: string) {
   }
 }
 
+const totalPurgeRequestSchema = z.object({
+  usuarioAlvoId: z.string().uuid(),
+  senhaAtual: z.string().min(1),
+  confirmacao: z.literal('PURGAR DEFINITIVAMENTE'),
+})
+const residualClientPurgeRequestSchema = z.object({
+  clienteId: z.string().uuid(),
+  senhaAtual: z.string().min(1),
+  confirmacao: z.literal('PURGAR RESIDUAL DEFINITIVAMENTE'),
+})
+
+function authUserAlreadyAbsent(error: { status?: number; message?: string } | null | undefined) {
+  return error?.status === 404 || /user.*not found|not found.*user/i.test(error?.message || '')
+}
+
+async function verifyCurrentAdminPassword(actor: { id: string; email?: string | null; phone?: string | null }, password: string) {
+  const credential = actor.email ? { email: actor.email, password } : actor.phone ? { phone: actor.phone, password } : null
+  if (!credential) return false
+
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  if (!anonKey) return false
+  const temporaryAuth = createSupabaseClient(getSupabaseServerUrl(), anonKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+  const { data, error } = await temporaryAuth.auth.signInWithPassword(credential)
+  // This client neither persists nor refreshes the temporary session. Let its
+  // credentials expire locally: a server-side logout could revoke the active
+  // browser session for this same administrator.
+  return !error && data.user?.id === actor.id
+}
+
+/** Performs the durable total-purge workflow. The password only lives in this invocation. */
+export async function purgarUsuarioAdminTotal(input: unknown) {
+  const parsed = totalPurgeRequestSchema.safeParse(input)
+  if (!parsed.success) return { success: false as const, error: 'CONFIRMACAO_DE_PURGA_INVALIDA' }
+
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized || !check.user) return { success: false as const, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    if (check.perfil?.funcao !== 'admin') return { success: false as const, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
+
+    const passwordValid = await verifyCurrentAdminPassword(check.user, parsed.data.senhaAtual)
+    if (!passwordValid) return { success: false as const, error: 'SENHA_ATUAL_INVALIDA' }
+
+    const { data: manifest, error: startError } = await check.supabase.rpc('iniciar_purga_total_usuario_admin', {
+      p_usuario_alvo_id: parsed.data.usuarioAlvoId,
+    })
+    if (startError) return { success: false as const, error: startError.message }
+
+    const rows = Array.isArray(manifest) ? manifest : []
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || typeof row.job_id !== 'string' || typeof row.bucket_id !== 'string' || typeof row.object_path !== 'string') {
+        return { success: false as const, error: 'MANIFESTO_DE_PURGA_INVALIDO' }
+      }
+      const { error: storageError } = await createAdminClient().storage.from(row.bucket_id).remove([row.object_path])
+      const { error: progressError } = await check.supabase.rpc('registrar_storage_purga_usuario_admin', {
+        p_job_id: row.job_id, p_bucket_id: row.bucket_id, p_object_path: row.object_path,
+        p_sucesso: !storageError, p_erro: storageError ? 'STORAGE_DELETE_FAILED' : null,
+      })
+      if (storageError || progressError) return { success: false as const, error: 'ERRO_STORAGE_PURGA_PENDENTE' }
+    }
+
+    const jobId = rows[0]?.job_id
+    if (!jobId) {
+      const { data: job, error: lookupError } = await createAdminClient().from('admin_user_deletion_jobs')
+        .select('id').eq('target_user_id', parsed.data.usuarioAlvoId).eq('mode', 'purge').single()
+      if (lookupError || !job?.id) return { success: false as const, error: 'JOB_DE_PURGA_INDISPONIVEL' }
+      rows.push({ job_id: job.id })
+    }
+    const activeJobId = rows[0].job_id
+    const { error: sqlError } = await check.supabase.rpc('executar_sql_purga_total_usuario_admin', { p_job_id: activeJobId })
+    if (sqlError) return { success: false as const, error: sqlError.message }
+
+    const { error: authError } = await createAdminClient().auth.admin.deleteUser(parsed.data.usuarioAlvoId)
+    if (authError && !authUserAlreadyAbsent(authError)) return { success: false as const, error: 'ERRO_AUTH_DELETE_PENDENTE' }
+    const { error: completionError } = await check.supabase.rpc('concluir_purga_total_usuario_admin', { p_job_id: activeJobId })
+    if (completionError) return { success: false as const, error: completionError.message }
+    revalidatePath('/atendimento/admin')
+    return { success: true as const }
+  } catch (error: any) {
+    console.error('Erro na Server Action purgarUsuarioAdminTotal:', error)
+    return { success: false as const, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/** Purges the records left after a prior client anonymization; it never deletes Auth. */
+export async function purgarResidualClienteAdmin(input: unknown) {
+  const parsed = residualClientPurgeRequestSchema.safeParse(input)
+  if (!parsed.success) return { success: false as const, error: 'CONFIRMACAO_DE_PURGA_INVALIDA' }
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized || !check.user) return { success: false as const, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    if (check.perfil?.funcao !== 'admin') return { success: false as const, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
+    if (!await verifyCurrentAdminPassword(check.user, parsed.data.senhaAtual)) return { success: false as const, error: 'SENHA_ATUAL_INVALIDA' }
+
+    const { data: manifest, error: startError } = await check.supabase.rpc('iniciar_purga_residual_cliente_admin', { p_cliente_id: parsed.data.clienteId })
+    if (startError) return { success: false as const, error: startError.message }
+    const rows = Array.isArray(manifest) ? manifest : []
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || typeof row.job_id !== 'string' || typeof row.bucket_id !== 'string' || typeof row.object_path !== 'string') return { success: false as const, error: 'MANIFESTO_DE_PURGA_INVALIDO' }
+      const { error: storageError } = await createAdminClient().storage.from(row.bucket_id).remove([row.object_path])
+      const { error: progressError } = await check.supabase.rpc('registrar_storage_purga_residual_cliente_admin', {
+        p_job_id: row.job_id, p_bucket_id: row.bucket_id, p_object_path: row.object_path, p_sucesso: !storageError, p_erro: storageError ? 'STORAGE_DELETE_FAILED' : null,
+      })
+      if (storageError || progressError) return { success: false as const, error: 'ERRO_STORAGE_PURGA_PENDENTE' }
+    }
+    let jobId = rows[0]?.job_id
+    if (!jobId) {
+      const { data: job, error: lookupError } = await createAdminClient().from('residual_client_purge_jobs')
+        .select('id').eq('client_id', parsed.data.clienteId).single()
+      if (lookupError || !job?.id) return { success: false as const, error: 'JOB_DE_PURGA_INDISPONIVEL' }
+      jobId = job.id
+    }
+    const { error: purgeError } = await check.supabase.rpc('executar_purga_residual_cliente_admin', { p_job_id: jobId })
+    if (purgeError) return { success: false as const, error: purgeError.message }
+    revalidatePath('/atendimento/admin')
+    return { success: true as const }
+  } catch (error: any) {
+    console.error('Erro na Server Action purgarResidualClienteAdmin:', error)
+    return { success: false as const, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
 /**
  * Server Action 2.1: deletarUsuarioAdmin
  * Realiza a remoção lógica e física completa de todos os dados gerados por um usuário (cliente ou operador),
@@ -608,8 +735,8 @@ export async function deletarUsuarioAdmin(usuarioAlvoId: string) {
     // Auth deletion is deliberately after the committed DB authority. If it
     // fails, the inactive/anonymised state remains safe and can be retried.
     const { error: authDeleteError } = await createAdminClient().auth.admin.deleteUser(usuarioAlvoId)
-    const authUserAlreadyAbsent = authDeleteError?.status === 404 || /user.*not found|not found.*user/i.test(authDeleteError?.message || '')
-    if (authDeleteError && !authUserAlreadyAbsent) {
+    const authAlreadyAbsent = authUserAlreadyAbsent(authDeleteError)
+    if (authDeleteError && !authAlreadyAbsent) {
       return { success: false, error: `ERRO_AUTH_DELETE_PENDENTE: ${authDeleteError.message}` }
     }
 
@@ -726,7 +853,7 @@ export async function testarConexaoLLM(apiKey: string, model: string) {
 
     if (!isDeepSeek) {
       headers['HTTP-Referer'] = 'https://github.com/wilkin/proyectos/Asados'
-      headers['X-Title'] = 'Sofia CRM Asados Test'
+      headers['X-Title'] = 'CRM Casa de Assados Brasa & Sabor Test'
     }
 
     const response = await fetch(apiUrl, {
@@ -781,8 +908,12 @@ export async function testarConexaoOmniRoute(baseUrl: string, apiKey: string, mo
       return { success: false, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
     }
 
-    const host = (baseUrl && baseUrl.trim()) || process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128'
-    const key = (apiKey && apiKey.trim()) || process.env.OMNIROUTE_API_KEY || ''
+    const { baseUrl: host, apiKey: key } = await resolveOmniRouteAdminTarget({
+      callerBaseUrl: baseUrl,
+      callerApiKey: apiKey,
+      configuredBaseUrl: process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128',
+      configuredApiKey: process.env.OMNIROUTE_API_KEY,
+    })
     const targetModel = modelOrTier || 'business-economy'
 
     if (!key || key.toLowerCase().includes('placeholder')) {
@@ -807,6 +938,7 @@ export async function testarConexaoOmniRoute(baseUrl: string, apiKey: string, mo
         max_tokens: 150,
         temperature: 0.1
       }),
+      redirect: 'error',
       signal: AbortSignal.timeout(15000)
     })
 
@@ -858,8 +990,12 @@ export async function obterCombosOmniRoute(baseUrl: string, apiKey: string) {
       return { success: false, error: check.error || 'ACESSO_NEGADO_NAO_AUTENTICADO' }
     }
 
-    const host = (baseUrl && baseUrl.trim()) || process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128'
-    const key = (apiKey && apiKey.trim()) || process.env.OMNIROUTE_API_KEY || ''
+    const { baseUrl: host, apiKey: key } = await resolveOmniRouteAdminTarget({
+      callerBaseUrl: baseUrl,
+      callerApiKey: apiKey,
+      configuredBaseUrl: process.env.OMNIROUTE_BASE_URL || 'http://127.0.0.1:20128',
+      configuredApiKey: process.env.OMNIROUTE_API_KEY,
+    })
 
     if (!key || key.toLowerCase().includes('placeholder')) {
       return {
@@ -879,6 +1015,7 @@ export async function obterCombosOmniRoute(baseUrl: string, apiKey: string) {
         'Authorization': `Bearer ${key}`,
         'Content-Type': 'application/json'
       },
+      redirect: 'error',
       signal: AbortSignal.timeout(5000)
     })
 
@@ -1186,4 +1323,25 @@ export async function obterComprovantes(filtros: {
     console.error('Erro na action obterComprovantes:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
+}
+
+export type AnonymizedResidualClient = { id: string; conversations: number; messages: number; orders: number; paymentProofs: number; legacyReceipts: number; retentionStatus: 'preserved' }
+export async function listarRegistrosAnonimizadosPreservados(): Promise<{ success: true; data: AnonymizedResidualClient[] } | { success: false; error: string }> {
+  const check = await verificarPermissaoOperador()
+  if (!check.authorized || check.perfil?.funcao !== 'admin') return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
+  const db = createAdminClient()
+  const { data: clients, error } = await db.from('clientes').select('id').is('usuario_id', null).eq('nome', 'Deleted customer').order('id')
+  if (error || !clients) return { success: false, error: 'REGISTROS_ANONIMIZADOS_INDISPONIVEIS' }
+  const data = await Promise.all(clients.map(async ({ id }) => {
+    const [conversations, orders, proofs, receipts] = await Promise.all([
+      db.from('conversas').select('*', { count: 'exact', head: true }).eq('cliente_id', id),
+      db.from('pedidos').select('*', { count: 'exact', head: true }).eq('cliente_id', id),
+      db.from('payment_proofs').select('*', { count: 'exact', head: true }).eq('customer_id', id),
+      db.from('comprovantes').select('*', { count: 'exact', head: true }).eq('cliente_id', id),
+    ])
+    const conversationIds = (await db.from('conversas').select('id').eq('cliente_id', id)).data?.map((row) => row.id) ?? []
+    const messages = conversationIds.length ? await db.from('mensagens').select('*', { count: 'exact', head: true }).in('conversa_id', conversationIds) : { count: 0 }
+    return { id, conversations: conversations.count ?? 0, messages: messages.count ?? 0, orders: orders.count ?? 0, paymentProofs: proofs.count ?? 0, legacyReceipts: receipts.count ?? 0, retentionStatus: 'preserved' as const }
+  }))
+  return { success: true, data }
 }

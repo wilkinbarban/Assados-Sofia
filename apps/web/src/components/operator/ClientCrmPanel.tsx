@@ -121,8 +121,8 @@ export default function ClientCrmPanel({
   }
 
   return (
-    <aside className="w-full xl:w-[22rem] 2xl:w-[27rem] shrink-0 h-full border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden shadow-2xl shadow-black/20">
-      <div className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-zinc-900 via-zinc-900/95 to-amber-950/20 px-4 py-3">
+    <aside className="w-full h-full border-l border-zinc-800 bg-zinc-950 flex flex-col overflow-hidden shadow-2xl shadow-black/20">
+      <div className="shrink-0 border-b border-zinc-800 bg-gradient-to-br from-zinc-900 via-zinc-900/95 to-amber-950/20 px-4 py-3.5">
         <div className="flex items-center gap-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 text-amber-400">
             <ShoppingCart className="h-4 w-4" />
@@ -131,7 +131,7 @@ export default function ClientCrmPanel({
             <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-400">
               Venda em andamento
             </p>
-            <p className="truncate text-sm font-semibold text-zinc-100">{cliente.nome}</p>
+            <div className="flex items-center gap-2"><p className="truncate text-sm font-semibold text-zinc-100">{cliente.nome}</p><span className="rounded-full border border-zinc-700 bg-zinc-950/60 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-zinc-400">Cliente</span></div>
           </div>
         </div>
       </div>

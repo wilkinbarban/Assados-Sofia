@@ -9,6 +9,8 @@ import {
   obterEstatisticasMensagens,
   obterLogsAuditoria,
   obterComprovantes,
+  purgarResidualClienteAdmin,
+  listarRegistrosAnonimizadosPreservados,
 } from '@/app/actions/admin'
 
 vi.mock('next/link', () => ({
@@ -41,6 +43,8 @@ vi.mock('@/app/actions/admin', () => ({
   }),
   editarUsuarioAdmin: vi.fn().mockResolvedValue({ success: true }),
   deletarUsuarioAdmin: vi.fn().mockResolvedValue({ success: true }),
+  purgarResidualClienteAdmin: vi.fn().mockResolvedValue({ success: true }),
+  listarRegistrosAnonimizadosPreservados: vi.fn().mockResolvedValue({ success: true, data: [{ id: 'residual-11111111-1111-4111-8111-111111111111', conversations: 1, messages: 2, orders: 1, paymentProofs: 1, legacyReceipts: 1, retentionStatus: 'preserved' }] }),
   obterEstatisticasMensagens: vi.fn().mockResolvedValue({
     success: true,
     data: {
@@ -92,6 +96,7 @@ vi.mock('@/app/actions/storage-orphan-reconciliation', () => ({
 vi.mock('@/components/operator/KnowledgeCRUD', () => ({ default: () => <div /> }))
 vi.mock('@/components/operator/BusinessHoursManager', () => ({ default: () => <div /> }))
 vi.mock('@/components/operator/InventoryManager', () => ({ default: () => <div /> }))
+vi.mock('@/components/operator/PaymentProofAdminPanel', () => ({ default: () => <div><h2>Comprovantes de Pagamento</h2><input placeholder="Filtrar por nome do cliente..." /></div> }))
 
 const defaultProps = {
   usuarioLogado: { id: 'admin-1', nome: 'Admin Principal', funcao: 'admin', ativo: true },
@@ -183,6 +188,40 @@ describe('AdminDashboard — Gestão de Usuários, Métricas, Logs e Comprovante
     })
   })
 
+  it('lists preserved anonymized residuals and requires password plus typed confirmation before purge', async () => {
+    render(<AdminDashboard {...defaultProps} />)
+    const disclosure = await screen.findByRole('button', { name: /Registros anonimizados preservados/i })
+    fireEvent.click(disclosure)
+    expect(screen.getByText('residual-11111111-1111-4111-8111-111111111111')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Purgar registro anonimizado de teste' }))
+    expect(screen.getByRole('heading', { name: 'Purgar registro anonimizado de teste' })).toBeInTheDocument()
+    const confirm = screen.getByRole('button', { name: 'Confirmar purga residual' })
+    expect(confirm).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Senha atual do administrador para residual'), { target: { value: 'current-password' } })
+    fireEvent.change(screen.getByLabelText('Confirmação de purga residual'), { target: { value: 'PURGAR RESIDUAL DEFINITIVAMENTE' } })
+    fireEvent.click(confirm)
+    await waitFor(() => expect(purgarResidualClienteAdmin).toHaveBeenCalledWith({ clienteId: 'residual-11111111-1111-4111-8111-111111111111', senhaAtual: 'current-password', confirmacao: 'PURGAR RESIDUAL DEFINITIVAMENTE' }))
+    await waitFor(() => expect(screen.queryByText('residual-11111111-1111-4111-8111-111111111111')).not.toBeInTheDocument())
+  })
+
+  it('keeps preserved anonymized records inside the user-management flow as a compact responsive disclosure', async () => {
+    render(<AdminDashboard {...defaultProps} />)
+
+    const panel = await screen.findByTestId('anonymized-records-panel')
+    const managementFlow = screen.getByTestId('user-management-flow')
+    const disclosure = screen.getByRole('button', { name: /Registros anonimizados preservados/i })
+
+    expect(managementFlow).toContainElement(panel)
+    expect(panel).toHaveClass('min-w-0', 'overflow-hidden')
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByText('residual-11111111-1111-4111-8111-111111111111')).not.toBeInTheDocument()
+
+    fireEvent.click(disclosure)
+
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('residual-11111111-1111-4111-8111-111111111111')).toHaveClass('break-all')
+  })
+
   it('2. Gestão de Usuários: abre modal de edição e atualiza dados do operador', async () => {
     render(<AdminDashboard {...defaultProps} />)
 
@@ -257,5 +296,14 @@ describe('AdminDashboard — Gestão de Usuários, Métricas, Logs e Comprovante
     await waitFor(() => {
       expect(obterComprovantes).toHaveBeenCalled()
     })
+  })
+})
+
+describe('AdminDashboard — initial admin tab deep links', () => {
+  it('renders a valid initial tab on the first render without waiting for a client effect', () => {
+    render(<AdminDashboard {...defaultProps} initialTab="estoque" />)
+
+    expect(screen.getByRole('button', { name: 'Estoque & Combos' })).toHaveClass('bg-amber-500/15')
+    expect(screen.queryByRole('button', { name: /Novo Membro/i })).not.toBeInTheDocument()
   })
 })

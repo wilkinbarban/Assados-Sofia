@@ -10,7 +10,6 @@ import {
   Loader2,
   CheckCircle2,
   AlertTriangle,
-  ChevronLeft,
   Eye,
   EyeOff
 } from 'lucide-react'
@@ -108,17 +107,8 @@ export default function PerfilForm({ operatorInfo }: PerfilFormProps) {
     }
   }
 
-  // Direciona o botão de voltar dependendo do perfil
-  const handleVoltar = () => {
-    if (['admin', 'supervisor'].includes(operatorInfo.funcao)) {
-      router.push('/atendimento/admin')
-    } else {
-      router.push('/atendimento')
-    }
-  }
-
   return (
-    <div className="mx-auto w-full max-w-4xl px-4 py-8 md:py-12">
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 md:py-8">
       {/* Toast Alert */}
       {toast && (
         <div
@@ -139,26 +129,18 @@ export default function PerfilForm({ operatorInfo }: PerfilFormProps) {
         </div>
       )}
 
-      {/* Cabeçalho de Navegação e Título */}
-      <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <section className="mb-6 rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900/80 to-zinc-950/40 p-5 sm:p-6">
         <div>
-          <button
-            onClick={handleVoltar}
-            className="group mb-2 flex items-center gap-1.5 text-xs font-bold text-zinc-400 hover:text-amber-500 transition-colors"
-          >
-            <ChevronLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" />
-            Voltar ao painel
-          </button>
           <h1 className="text-2xl font-extrabold tracking-tight text-zinc-100 md:text-3xl">
             Meu Perfil de Operador
           </h1>
           <p className="mt-1 text-xs text-zinc-400">
-            Gerencie suas informações de acesso e configurações de segurança na Casa de Assados Sofia.
+            Gerencie suas informações de acesso e configurações de segurança na Casa de Assados Brasa & Sabor.
           </p>
         </div>
-      </div>
+      </section>
 
-      <div className="grid gap-6 md:grid-cols-3">
+      <div className="grid gap-6 lg:grid-cols-3">
         {/* Coluna de informações estáticas (Leitura Apenas) */}
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6 backdrop-blur">
           <div className="flex flex-col items-center text-center">
@@ -196,7 +178,7 @@ export default function PerfilForm({ operatorInfo }: PerfilFormProps) {
         </div>
 
         {/* Coluna de formulários editáveis */}
-        <div className="space-y-6 md:col-span-2">
+        <div className="space-y-6 lg:col-span-2">
           {/* Form Nome */}
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-6 backdrop-blur">
             <h3 className="flex items-center gap-2 font-bold text-zinc-200">
