@@ -39,6 +39,6 @@ describe('OperatorInboxContainer responsive workspace', () => {
     expect(screen.getByTestId('operator-workspace')).toHaveClass('flex-col', 'xl:flex-row')
     expect(screen.getByTestId('queue-region')).toHaveClass('h-64', 'xl:h-full')
     expect(screen.getByTestId('chat-region')).toHaveClass('min-h-[24rem]', 'xl:min-h-0')
-    expect(screen.getByTestId('commercial-region')).toHaveClass('h-[32rem]', 'xl:h-full')
+    expect(screen.getByTestId('commercial-region')).toHaveClass('h-[36rem]', 'xl:h-full', 'xl:w-[24rem]', '2xl:w-[30rem]')
   })
 })

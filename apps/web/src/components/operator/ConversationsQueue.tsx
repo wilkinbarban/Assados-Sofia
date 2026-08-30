@@ -32,6 +32,7 @@ export interface Mensagem {
   remetente: 'cliente' | 'operador' | 'ia';
   conteudo: string | null;
   url_anexo: string | null;
+  payment_proof_id?: string | null;
   data_criacao: string;
 }
 

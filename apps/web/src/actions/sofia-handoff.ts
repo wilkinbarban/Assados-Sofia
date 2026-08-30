@@ -1,31 +1,33 @@
 'use server'
 
 import { createAdminClient } from '@/lib/supabase/admin'
-import { SupabaseClient } from '@supabase/supabase-js'
+import { createClient } from '@/lib/supabase/server'
 
 export interface SilenciarSofiaInput {
   clienteId: string
   minutos?: number
   motivo?: string
-  supabaseClient?: SupabaseClient
-  usuarioId?: string
 }
 
 export interface ReativarSofiaInput {
   clienteId: string
-  supabaseClient?: SupabaseClient
-  usuarioId?: string
 }
 
-function getSupabase(client?: SupabaseClient): SupabaseClient {
-  return client ?? createAdminClient()
+async function authorizedOperator() {
+  const session = await createClient()
+  const { data: { user } } = await session.auth.getUser()
+  if (!user) return null
+  const { data: profile } = await session.from('perfis').select('funcao,ativo').eq('id', user.id).single()
+  return profile?.ativo && ['admin', 'supervisor', 'vendedor'].includes(profile.funcao) ? user : null
 }
 
 /**
  * Silencia ou pausa a IA Sofía para um cliente específico por um período de tempo (cooldown)
  */
 export async function silenciarSofiaClienteAction(input: SilenciarSofiaInput) {
-  const supabase = getSupabase(input.supabaseClient)
+  const actor = await authorizedOperator()
+  if (!actor) return { sucesso: false, error: 'ACESSO_NEGADO', dormindo: true }
+  const supabase = createAdminClient()
   const minutos = input.minutos ?? 60
   const motivo = input.motivo ?? 'cooldown_operador'
 
@@ -34,7 +36,7 @@ export async function silenciarSofiaClienteAction(input: SilenciarSofiaInput) {
       p_cliente_id: input.clienteId,
       p_minutos: minutos,
       p_motivo: motivo,
-      p_usuario_id: input.usuarioId || null,
+      p_usuario_id: actor.id,
     })
 
     if (error) {
@@ -53,12 +55,14 @@ export async function silenciarSofiaClienteAction(input: SilenciarSofiaInput) {
  * Reativa a IA Sofía para um cliente específico
  */
 export async function reativarSofiaClienteAction(input: ReativarSofiaInput) {
-  const supabase = getSupabase(input.supabaseClient)
+  const actor = await authorizedOperator()
+  if (!actor) return { sucesso: false, error: 'ACESSO_NEGADO', dormindo: false }
+  const supabase = createAdminClient()
 
   try {
     const { data, error } = await supabase.rpc('reativar_sofia_cliente', {
       p_cliente_id: input.clienteId,
-      p_usuario_id: input.usuarioId || null,
+      p_usuario_id: actor.id,
     })
 
     if (error) {
@@ -77,10 +81,11 @@ export async function reativarSofiaClienteAction(input: ReativarSofiaInput) {
  * Obtém o status de silenciamento e cooldown da IA Sofía para um cliente
  */
 export async function obterStatusSofiaClienteAction(
-  clienteId: string,
-  supabaseClient?: SupabaseClient
+  clienteId: string
 ) {
-  const supabase = getSupabase(supabaseClient)
+  const actor = await authorizedOperator()
+  if (!actor) return { silenciada: false, error: 'ACESSO_NEGADO' }
+  const supabase = createAdminClient()
 
   try {
     const { data: silenciada, error } = await supabase.rpc('verificar_sofia_silenciada', {

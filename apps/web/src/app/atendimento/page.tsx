@@ -1,13 +1,10 @@
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import OperatorInboxContainer from '@/components/operator/OperatorInboxContainer'
-import { OperatorLogoutButton } from '@/components/operator/OperatorLogoutButton'
-import { BrandLogo } from '@/components/ui/BrandLogo'
+import { OperatorWorkspaceHeader } from '@/components/operator/OperatorWorkspaceHeader'
 import { obterStatusSofiaAtendimento } from '@/app/actions/atendimento'
 import type { SofiaAtendimentoStatus } from '@/app/actions/atendimento'
 import type { Cliente, Conversa, Mensagem } from '@/components/operator/ConversationsQueue'
-import { ClipboardList, Settings, ShoppingBag } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -127,74 +124,7 @@ export default async function AtendimentoPage() {
 
   return (
     <div className="flex h-screen w-full flex-col bg-zinc-950 text-zinc-50 overflow-hidden font-sans">
-      {/* Cabeçalho do Operador */}
-      <header className="flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-900/60 px-6 shrink-0 backdrop-blur-md">
-        <div className="flex items-center gap-6">
-          <BrandLogo size="md" href="/atendimento" />
-          
-          <div className="hidden md:flex items-center gap-1 border-l border-zinc-800 pl-6">
-            <span className="text-xs font-semibold uppercase tracking-wider text-amber-500/90 bg-amber-500/10 px-2.5 py-1 rounded-md border border-amber-500/20">
-              Console de Atendimento
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          {['admin', 'supervisor'].includes(perfil.funcao) && (
-            <Link
-              href="/atendimento/admin"
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 rounded-lg text-xs font-bold shadow-md shadow-amber-500/10 transition-all cursor-pointer select-none active:scale-95"
-            >
-              <span>Painel Administrativo</span>
-            </Link>
-          )}
-
-          <Link
-            href="/atendimento/pedidos"
-            className="inline-flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2 text-xs font-bold text-amber-300 shadow-sm shadow-amber-500/5 transition-all hover:border-amber-400/50 hover:bg-amber-500/15 hover:text-amber-200 cursor-pointer select-none"
-          >
-            <ClipboardList className="h-4 w-4" />
-            <span>Gestão de Pedidos</span>
-          </Link>
-
-          <Link
-            href="/atendimento/produtos"
-            className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
-          >
-            <ShoppingBag className="h-3.5 w-3.5" />
-            Estoque
-          </Link>
-
-          <div className="hidden lg:flex items-center gap-1 rounded-xl border border-zinc-800 bg-zinc-950/30 p-1">
-            <Link
-              href="/atendimento/conhecimento"
-              className="inline-flex items-center px-2.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 rounded-lg text-[11px] font-semibold transition-all cursor-pointer select-none"
-            >
-              Base RAG
-            </Link>
-
-            <Link
-              href="/atendimento/perfil"
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100 rounded-lg text-[11px] font-semibold transition-all cursor-pointer select-none"
-            >
-              <Settings className="h-3.5 w-3.5" />
-              Meu Perfil
-            </Link>
-          </div>
-
-          <OperatorLogoutButton />
-
-          <div className="flex items-center gap-2 pl-2 border-l border-zinc-800">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-            </span>
-            <span className="text-xs text-zinc-300 font-medium capitalize">
-              {perfil.funcao === 'admin' ? 'Administrador' : perfil.funcao === 'supervisor' ? 'Supervisor' : 'Atendente'}
-            </span>
-          </div>
-        </div>
-      </header>
+      <OperatorWorkspaceHeader active="atendimento" role={perfil.funcao} />
 
       {/* Área de Trabalho */}
       <main className="flex-1 overflow-hidden">

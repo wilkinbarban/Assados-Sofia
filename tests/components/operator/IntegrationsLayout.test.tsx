@@ -12,6 +12,7 @@ vi.mock('@/app/actions/admin', () => ({
   atualizarPerfilUsuario: vi.fn(), obterEstatisticasMensagens: vi.fn(), obterLogsAuditoria: vi.fn(),
   deletarUsuarioAdmin: vi.fn(), obterComprovantes: vi.fn(), salvarConfiguracaoAdmin: vi.fn(),
   testarConexaoMeta: vi.fn(), testarConexaoEvolution: vi.fn(), obterQrCodeEvolution: vi.fn(),
+  listarRegistrosAnonimizadosPreservados: vi.fn().mockResolvedValue({ success: true, data: [] }),
 }))
 vi.mock('@/app/actions/storage-orphan-reconciliation', () => ({
   aprovarReconciliacaoImagemOrfa: vi.fn(), executarReconciliacaoImagemOrfa: vi.fn(),

@@ -582,7 +582,8 @@ export default function OperatorInboxContainer({
         <section
           data-testid="queue-region"
           aria-label="Fila de atendimento"
-          className="h-64 w-full shrink-0 overflow-hidden border-b border-zinc-800 xl:h-full xl:w-80 xl:border-b-0 2xl:w-96"
+          data-workspace-label="Atendimento"
+          className="h-64 w-full shrink-0 overflow-hidden border-b border-zinc-800 xl:h-full xl:w-72 xl:border-b-0 2xl:w-[22rem]"
         >
           {sofiaToggleError && (
             <div className="border-b border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400">
@@ -615,7 +616,8 @@ export default function OperatorInboxContainer({
         <section
           data-testid="commercial-region"
           aria-label="Carrinho, pedidos e dados do cliente"
-          className="h-[32rem] w-full shrink-0 overflow-hidden xl:h-full xl:w-auto"
+          data-workspace-label="Venda e relacionamento"
+          className="h-[36rem] w-full shrink-0 overflow-hidden xl:h-full xl:w-[24rem] 2xl:w-[30rem]"
         >
           <ClientCrmPanel
             cliente={activeConversa?.clientes || null}
