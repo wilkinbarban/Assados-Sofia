@@ -14,6 +14,7 @@ import { notificarClienteAtualizacaoPedido } from '@/lib/orders/orderNotificatio
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
 import { enviarMensagemTelegram } from '@/lib/telegram/send'
+import { processCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 import QRCode from 'qrcode'
 
 function safeRevalidatePath(path: string) {
@@ -535,7 +536,7 @@ export async function actionCriarPedidoCliente(data: {
       .map((it) => `• ${it.quantidade}x ${it.nome} (${formatarMoeda(it.preco_unitario_centavos * it.quantidade)})`)
       .join('\n')
 
-    const mensagemTexto = `🛒 *Pedido #${pedido.id.substring(0, 8).toUpperCase()} Registrado!*\n\n${itensTexto}\n\n💰 *Total:* ${formatarMoeda(totalProdutosCentavos)}\n🕒 *Horário de Retirada:* ${horarioEfetivo}\n📍 *Local:* Balcão Umbará (Casa de Assados Sofia)\n\nOlá! Acabei de enviar esse pedido para o atendimento!`
+    const mensagemTexto = `🛒 *Pedido #${pedido.id.substring(0, 8).toUpperCase()} Registrado!*\n\n${itensTexto}\n\n💰 *Total:* ${formatarMoeda(totalProdutosCentavos)}\n🕒 *Horário de Retirada:* ${horarioEfetivo}\n📍 *Local:* Balcão Umbará (Casa de Assados Brasa & Sabor)\n\nOlá! Acabei de enviar esse pedido para o atendimento!`
 
     let novaMensagem = null
     if (data.conversaId) {
@@ -635,7 +636,33 @@ export async function actionListarMeusPedidosCliente() {
       return { success: false, error: pedidosError.message, data: [] }
     }
 
-    return { success: true, data: pedidos || [] }
+    const orderIds = (pedidos || []).map((pedido: any) => pedido.id)
+    const { data: locks, error: locksError } = orderIds.length
+      ? await admin.rpc('list_order_payment_proof_locks', { p_order_ids: orderIds })
+      : { data: [], error: null }
+    if (locksError) {
+      console.error('[actionListarMeusPedidosCliente] Erro ao projetar revisão:', locksError)
+      return { success: false, error: locksError.message, data: [] }
+    }
+    const lockByOrder = new Map(
+      (locks || []).map((lock: any) => [lock.pedido_id, lock]),
+    )
+    const data = (pedidos || []).map((pedido: any) => {
+      const lock = lockByOrder.get(pedido.id) as any
+      return {
+        ...pedido,
+        payment_review: lock
+          ? {
+              locked: true,
+              status: lock.proof_status,
+              proofId: lock.proof_id,
+              lockedAt: lock.locked_at,
+            }
+          : { locked: false, status: null, proofId: null, lockedAt: null },
+      }
+    })
+
+    return { success: true, data }
   } catch (error: any) {
     console.error('[actionListarMeusPedidosCliente] Erro inesperado:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO', data: [] }
@@ -653,6 +680,12 @@ function mapearErroEstoquePedido(error: { code?: string; message?: string }) {
 }
 
 function mapearErroStatusPagamento(error: { code?: string; message?: string }) {
+  if (error.message?.includes('ORDER_PAYMENT_PROOF_ALREADY_PENDING')) {
+    return {
+      error: 'ORDER_PAYMENT_PROOF_ALREADY_PENDING',
+      continuation: 'REJEITAR_OU_CONCILIAR_COMPROVANTE_ATIVO',
+    }
+  }
   if (error.message?.includes('MANUAL_PAYMENT_REASON_REQUIRED')) {
     return { error: 'MOTIVO_APROVACAO_MANUAL_OBRIGATORIO', continuation: 'INFORMAR_MOTIVO_APROVACAO_MANUAL' }
   }
@@ -828,6 +861,18 @@ export async function gerarPreferenciaPagamento(pedidoId: string) {
 
     if (!isOperador && !isDono) {
       return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
+    }
+
+    const availability = await createAdminClient().rpc('assert_order_payment_available', {
+      p_pedido_id: pedidoId,
+    })
+    if (availability.error) {
+      return {
+        success: false,
+        error: availability.error.message?.includes('ORDER_PAYMENT_PROOF_ALREADY_PENDING')
+          ? 'ORDER_PAYMENT_PROOF_ALREADY_PENDING'
+          : availability.error.message,
+      }
     }
 
     // 5. Validar credencial do Mercado Pago e ativar modo mock se necessário
@@ -1176,6 +1221,14 @@ export async function actionAtualizarStatusPagamento(params: {
         continuation: 'INFORMAR_MOTIVO_APROVACAO_MANUAL',
       }
     }
+    if (statusPagamento === 'aprovado') {
+      const availability = await supabase.rpc('assert_order_payment_available', {
+        p_pedido_id: pedidoId,
+      })
+      if (availability.error) {
+        return { success: false, ...mapearErroStatusPagamento(availability.error) }
+      }
+    }
 
     const { data, error } = await supabase.rpc('registrar_status_pagamento', {
       p_pedido_id: pedidoId,
@@ -1210,6 +1263,31 @@ export async function actionAtualizarStatusPagamento(params: {
     console.error('Erro na action actionAtualizarStatusPagamento:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
+}
+
+export async function actionAprovarPagamentoExterno(params: {
+  orderIds: string[]
+  confirmedCents: number
+  method: 'cash' | 'pix_external' | 'card_external' | 'bank_transfer_external'
+  note: string
+  idempotencyKey: string
+}) {
+  const check = await verificarPermissaoOperador()
+  if (!check.authorized) return { success: false, error: check.error }
+  const note = params.note.trim()
+  if (!params.orderIds.length || note.length < 4 || note.length > 500 || !Number.isSafeInteger(params.confirmedCents) || params.confirmedCents <= 0) {
+    return { success: false, error: 'DADOS_PAGAMENTO_EXTERNO_INVALIDOS' }
+  }
+  const { data, error } = await check.supabase.rpc('approve_manual_external_payment', {
+    p_order_ids: params.orderIds,
+    p_confirmed_cents: params.confirmedCents,
+    p_method: params.method,
+    p_note: note,
+    p_idempotency_key: params.idempotencyKey,
+  }).single()
+  if (error) return { success: false, error: error.message }
+  safeRevalidatePath('/atendimento/pedidos')
+  return { success: true, data }
 }
 
 function mapearErroEmissaoComprovante(error: { code?: string; message?: string }) {
@@ -1314,6 +1392,18 @@ export async function gerarCobrancaPixPedido(pedidoId: string) {
       return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
     }
 
+    const availability = await createAdminClient().rpc('assert_order_payment_available', {
+      p_pedido_id: pedidoId,
+    })
+    if (availability.error) {
+      return {
+        success: false,
+        error: availability.error.message?.includes('ORDER_PAYMENT_PROOF_ALREADY_PENDING')
+          ? 'ORDER_PAYMENT_PROOF_ALREADY_PENDING'
+          : availability.error.message,
+      }
+    }
+
     const valorCentavos = pedido.total_pedido_centavos || pedido.total_produtos_centavos
     const valorReais = Number((valorCentavos / 100).toFixed(2))
 
@@ -1327,7 +1417,7 @@ export async function gerarCobrancaPixPedido(pedidoId: string) {
 
     if (isPlaceholder) {
       const mockPaymentId = `mock_pix_${pedidoId.slice(0, 8)}`
-      const mockCopiaCola = `00020126580014br.gov.bcb.pix0136${pedidoId}520400005303986540${valorReais.toFixed(2)}5802BR5922CASA DE ASSADOS SOFIA6008CURITIBA62070503***6304MOCK`
+      const mockCopiaCola = `00020126580014br.gov.bcb.pix0136${pedidoId}520400005303986540${valorReais.toFixed(2)}5802BR5928CASA DE ASSADOS BRASA E SABOR6008CURITIBA62070503***6304MOCK`
       const mockQrCodeDataUrl = await QRCode.toDataURL(mockCopiaCola, { width: 320, margin: 1 })
       const mockQrCodeBase64 = mockQrCodeDataUrl.replace(/^data:image\/png;base64,/, '')
 
@@ -1407,7 +1497,7 @@ export async function gerarCobrancaPixPedido(pedidoId: string) {
       if (isLiveCredsError) {
         console.warn('[gerarCobrancaPixPedido] Usando modo de simulação PIX Sandbox devido a credenciais de teste não homologadas no BACEN.')
         const mockPaymentId = `mock_pix_${pedidoId.slice(0, 8)}`
-        const mockCopiaCola = `00020126580014br.gov.bcb.pix0136${pedidoId}520400005303986540${valorReais.toFixed(2)}5802BR5922CASA DE ASSADOS SOFIA6008CURITIBA62070503***6304MOCK`
+        const mockCopiaCola = `00020126580014br.gov.bcb.pix0136${pedidoId}520400005303986540${valorReais.toFixed(2)}5802BR5928CASA DE ASSADOS BRASA E SABOR6008CURITIBA62070503***6304MOCK`
         const mockQrCodeDataUrl = await QRCode.toDataURL(mockCopiaCola, { width: 320, margin: 1 })
         const mockQrCodeBase64 = mockQrCodeDataUrl.replace(/^data:image\/png;base64,/, '')
 
@@ -1529,7 +1619,7 @@ export async function despacharCobrancaPixMulticanal(
       currency: 'BRL',
     })
 
-    const textoMensagem = `Olá, *${nomeCliente}*! 🥩\n\nSeu pedido *#${pedidoShort}* na Casa de Assados Sofia está pronto para pagamento!\n\n💰 *Valor Total:* ${valorFormatado}\n\n🔑 *Chave PIX (Copia e Cola):*\n\`\`\`\n${dadosPix.qrCodeCopiaCola}\n\`\`\`\n\n📲 *Como pagar:* Copie o código acima e cole no app do seu banco na opção "PIX Copia e Cola", ou acesse o seu Painel de Pedidos para escanear o QR Code.\n\nApós o pagamento, você pode anexar seu comprovante aqui mesmo na conversa!`
+    const textoMensagem = `Olá, *${nomeCliente}*! 🥩\n\nSeu pedido *#${pedidoShort}* na Casa de Assados Brasa & Sabor está pronto para pagamento!\n\n💰 *Valor Total:* ${valorFormatado}\n\n🔑 *Chave PIX (Copia e Cola):*\n\`\`\`\n${dadosPix.qrCodeCopiaCola}\n\`\`\`\n\n📲 *Como pagar:* Copie o código acima e cole no app do seu banco na opção "PIX Copia e Cola", ou acesse o seu Painel de Pedidos para escanear o QR Code.\n\nApós o pagamento, você pode anexar seu comprovante aqui mesmo na conversa!`
 
     const canaisNotificados: string[] = []
     let conversaId = pedido.conversa_id
@@ -1655,42 +1745,41 @@ export async function enviarComprovantePagamentoCliente(
       conversaId = conversa?.id || null
     }
 
-    // 1. Se houver anexo de arquivo no storage, registrar na tabela oficial de comprovantes
-    if (pedido.cliente_id && payload.urlComprovante) {
-      try {
-        const { error: insertCompError } = await supabaseAdmin
-          .from('comprovantes')
-          .insert({
-            cliente_id: pedido.cliente_id,
-            url_arquivo: payload.urlComprovante,
-            nome_arquivo: payload.nomeArquivo || 'comprovante.pdf',
-            tamanho_bytes: payload.tamanhoBytes || 0,
-          })
-
-        if (insertCompError) {
-          console.warn('[enviarComprovantePagamentoCliente] Erro ao inserir na tabela comprovantes:', insertCompError)
-        }
-      } catch (compErr) {
-        console.warn('[enviarComprovantePagamentoCliente] Exceção ao gravar comprovante no banco:', compErr)
-      }
+    if (!pedido.cliente_id || !payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
+      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
     }
 
-    // 2. Enviar a mensagem para a conversa e alertar o atendente
-    const isPdf = payload.nomeArquivo?.toLowerCase().endsWith('.pdf')
-    const nomeExibicao = payload.nomeArquivo || (isPdf ? 'comprovante.pdf' : 'comprovante')
-    const conteudoMensagem = payload.texto
-      ? `📄 *Comprovante de Pagamento Anexado:* ${payload.texto}\n📎 *Arquivo:* ${nomeExibicao}`
-      : `📄 *Comprovante de Pagamento Anexado pelo Cliente.*\n📎 *Arquivo:* ${nomeExibicao}`
+    const { data: fileBlob, error: downloadError } = await supabaseAdmin.storage
+      .from('chat-midias')
+      .download(payload.urlComprovante)
+    if (downloadError || !fileBlob) return { success: false, error: 'COMPROVANTE_ARQUIVO_INACESSIVEL' }
 
-    if (conversaId) {
-      await supabaseAdmin.from('mensagens').insert({
-        conversa_id: conversaId,
-        remetente: 'cliente',
-        conteudo: conteudoMensagem,
-        url_anexo: payload.urlComprovante || null,
-      })
+    const deliveryId = `web-${pedidoId}-${payload.urlComprovante}`
+    const [apiKey, model] = await Promise.all([
+      obterConfiguracaoSistema('OPENROUTER_API_KEY'),
+      obterConfiguracaoSistema('OPENROUTER_MODEL'),
+    ])
+    const processed = await processCanonicalPaymentProof({
+      channel: 'web',
+      deliveryId,
+      customerId: pedido.cliente_id,
+      orderId: pedidoId,
+      sender: user.id,
+      bytes: new Uint8Array(await fileBlob.arrayBuffer()),
+      mimeType: fileBlob.type || 'application/pdf',
+      db: supabaseAdmin,
+      storage: supabaseAdmin.storage.from('payment-proofs'),
+      apiKey,
+      model,
+    })
+    if (processed.status === 'disabled') return { success: false, error: 'COMPROVANTE_PIPELINE_DESATIVADO' }
+    if (processed.status === 'rejected') return { success: false, error: processed.error }
+    if (processed.status === 'retryable') return { success: false, error: processed.error }
+    await supabaseAdmin.storage.from('chat-midias').remove([payload.urlComprovante])
 
-      // Abre a conversa para atendimento humano prioritário
+    // The admitted chat projection is created only after human review. Until then,
+    // the original PDF remains private in Comprovantes PIX and absent from both chats.
+    if (conversaId && processed.status !== 'duplicate') {
       await supabaseAdmin
         .from('conversas')
         .update({
@@ -1706,10 +1795,9 @@ export async function enviarComprovantePagamentoCliente(
     safeRevalidatePath('/cliente/pedidos')
     safeRevalidatePath('/cliente/chat')
 
-    return { success: true }
+    return { success: true, status: processed.status }
   } catch (error: any) {
     console.error('Erro na action enviarComprovantePagamentoCliente:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
   }
 }
-

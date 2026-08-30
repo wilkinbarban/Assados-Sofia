@@ -35,6 +35,7 @@ export interface ModalPagamentoClienteProps {
   statusPagamento: 'pendente' | 'aprovado' | 'rejeitado' | 'reembolsado'
   abaInicial?: 'pix' | 'cartao' | 'comprovante'
   onPagamentoConfirmado?: () => void
+  onComprovanteEnviado?: () => void
 }
 
 export default function ModalPagamentoCliente({
@@ -45,6 +46,7 @@ export default function ModalPagamentoCliente({
   statusPagamento: statusInicial,
   abaInicial = 'pix',
   onPagamentoConfirmado,
+  onComprovanteEnviado,
 }: ModalPagamentoClienteProps) {
   const [abaAtiva, setAbaAtiva] = useState<'pix' | 'cartao' | 'comprovante'>(abaInicial)
   const [statusPagamento, setStatusPagamento] = useState(statusInicial)
@@ -201,8 +203,8 @@ export default function ModalPagamentoCliente({
 
   const handleEnviarComprovante = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!arquivoComprovante && !textoComprovante.trim()) {
-      setErroComprovante('Selecione o arquivo PDF/imagem do comprovante ou digite os detalhes do pagamento.')
+    if (!arquivoComprovante) {
+      setErroComprovante('Selecione o arquivo PDF do comprovante.')
       return
     }
 
@@ -214,8 +216,13 @@ export default function ModalPagamentoCliente({
       let tamanhoBytes: number | undefined = undefined
 
       if (arquivoComprovante) {
-        if (arquivoComprovante.size > 10 * 1024 * 1024) {
-          setErroComprovante('O arquivo selecionado excede o limite máximo permitido de 10MB.')
+        if (arquivoComprovante.type !== 'application/pdf' || !arquivoComprovante.name.toLowerCase().endsWith('.pdf')) {
+          setErroComprovante('Somente comprovantes em formato PDF são aceitos.')
+          setEnviandoComprovante(false)
+          return
+        }
+        if (arquivoComprovante.size > 5 * 1024 * 1024) {
+          setErroComprovante('O arquivo selecionado excede o limite máximo permitido de 5MB.')
           setEnviandoComprovante(false)
           return
         }
@@ -249,12 +256,17 @@ export default function ModalPagamentoCliente({
 
       if (res.success) {
         setComprovanteEnviado(true)
+        onComprovanteEnviado?.()
         setArquivoComprovante(null)
         setTextoComprovante('')
         if (fileInputRef.current) fileInputRef.current.value = ''
         setTimeout(() => setComprovanteEnviado(false), 6000)
       } else {
-        setErroComprovante(res.error || 'Erro ao registrar comprovante.')
+        setErroComprovante(
+          res.error === 'ORDER_PAYMENT_PROOF_ALREADY_PENDING'
+            ? 'Este pedido já possui um comprovante aguardando verificação.'
+            : res.error || 'Erro ao registrar comprovante.',
+        )
       }
     } catch (err: any) {
       setErroComprovante(err.message || 'Erro técnico ao enviar comprovante.')
@@ -485,7 +497,7 @@ export default function ModalPagamentoCliente({
             <input
               type="file"
               ref={fileInputRef}
-              accept=".pdf,application/pdf,image/png,image/jpeg,image/webp"
+              accept=".pdf,application/pdf"
               onChange={(e) => {
                 const file = e.target.files?.[0]
                 if (file) {
@@ -506,7 +518,7 @@ export default function ModalPagamentoCliente({
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                        {arquivoComprovante.name.toLowerCase().endsWith('.pdf') ? 'PDF' : 'IMAGEM'}
+                        PDF
                       </span>
                       <p className="text-xs font-bold text-zinc-100 truncate max-w-[220px]">
                         {arquivoComprovante.name}
@@ -557,10 +569,10 @@ export default function ModalPagamentoCliente({
                   <UploadCloud className="h-5 w-5" />
                 </div>
                 <p className="text-xs font-bold text-zinc-200">
-                  Clique para selecionar ou arraste o comprovante (PDF / Imagem)
+                  Clique para selecionar ou arraste o comprovante em PDF
                 </p>
                 <p className="text-[10px] text-zinc-400 mt-1">
-                  Baixado no Mercado Pago ou App do seu Banco (PDF, PNG, JPG até 10MB)
+                  Baixado no Mercado Pago ou app do seu banco (PDF até 5MB)
                 </p>
               </div>
             )}
@@ -595,7 +607,7 @@ export default function ModalPagamentoCliente({
 
             <button
               type="submit"
-              disabled={enviandoComprovante || (!arquivoComprovante && !textoComprovante.trim())}
+              disabled={enviandoComprovante || !arquivoComprovante}
               className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 text-xs font-black shadow-md shadow-amber-500/10 transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
             >
               {enviandoComprovante ? (

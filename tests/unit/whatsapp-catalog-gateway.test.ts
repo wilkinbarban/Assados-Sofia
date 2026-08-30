@@ -19,7 +19,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
   const mockProdutos: ProdutoCardapioItem[] = [
     {
       id: 'prod-1',
-      nome: 'Combo 1 - O Clássico da Sofia',
+      nome: 'Combo 1 - O Clássico Brasa & Sabor',
       descricao: 'Frango Assado + Farofa + Maionese Especial',
       precoCentavos: 6990,
       urlImagem: 'https://casadeasados.duckdns.org/combo1.jpg',
@@ -53,7 +53,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
     expect(payload.number).toBe('5541999998888')
     expect(payload.body).toContain('O que vai querer hoje')
     expect(payload.cards).toHaveLength(2)
-    expect(payload.cards[0].title).toBe('🍗 Combo 1 - O Clássico da Sofia')
+    expect(payload.cards[0].title).toBe('🍗 Combo 1 - O Clássico Brasa & Sabor')
     expect(payload.cards[0].imageUrl).toBe('https://casadeasados.duckdns.org/combo1.jpg')
     expect(payload.cards[0].buttons[0].id).toBe('cart:add:prod-1')
     expect(payload.cards[0].buttons[0].displayText).toContain('Adicionar')
@@ -67,7 +67,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
 
     expect(cards).toHaveLength(2)
     expect(cards[0].imageUrl).toBe('https://casadeasados.duckdns.org/combo1.jpg')
-    expect(cards[0].caption).toContain('COMBO 1 - O CLÁSSICO DA SOFIA')
+    expect(cards[0].caption).toContain('COMBO 1 - O CLÁSSICO BRASA & SABOR')
     expect(cards[0].caption).toContain('69,90')
     expect(cards[0].caption).toContain('1️⃣ Adicionar ao pedido')
   })

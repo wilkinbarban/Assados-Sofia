@@ -27,7 +27,7 @@ function formatarMensagemNotificacao(params: NotificacaoPedidoParams, nomeClient
   if (params.tipo === 'status_pedido') {
     switch (params.novoStatus) {
       case 'confirmado':
-        return `${saudacao}\n\n🥩 *Pedido Confirmado!*\nSeu pedido foi aceito pela nossa equipe e já está sendo preparado com todo o carinho e sabor da Casa de Assados Sofia.\n\n⏰ Avisaremos assim que estiver pronto para retirada ou sair para entrega!`
+        return `${saudacao}\n\n🥩 *Pedido Confirmado!*\nSeu pedido foi aceito pela nossa equipe e já está sendo preparado com todo o carinho e sabor da Casa de Assados Brasa & Sabor.\n\n⏰ Avisaremos assim que estiver pronto para retirada ou sair para entrega!`
       case 'entregue':
         return `${saudacao}\n\n✨ *Pedido Concluído!*\nSeu pedido foi finalizado com sucesso. Que Deus abençoe a mesa da sua família e tenham uma excelente refeição!\n\nSeu comprovante de venda digital (2ª Via) está disponível no seu painel.`
       case 'cancelado':
@@ -51,7 +51,7 @@ function formatarMensagemNotificacao(params: NotificacaoPedidoParams, nomeClient
     }
   }
 
-  return `${saudacao}\n\nHá uma nova atualização no seu pedido na Casa de Assados Sofia.`
+  return `${saudacao}\n\nHá uma nova atualização no seu pedido na Casa de Assados Brasa & Sabor.`
 }
 
 /**
@@ -113,8 +113,44 @@ export async function notificarClienteAtualizacaoPedido(
 
     const mensagemTexto = formatarMensagemNotificacao(params, cliente?.nome)
 
-    // 2. Canal Web Chat (inserção de mensagem no chat)
-    if (conversaId) {
+    // 2. Canal WhatsApp (se houver telefone cadastrado)
+    if (conversaId && cliente?.telefone) {
+      try {
+        const resWhatsapp = await enviarMensagemWhatsapp(conversaId, {
+          texto: mensagemTexto,
+          remetente: 'operador',
+          categoria: 'REACTIVE',
+        })
+        if (resWhatsapp.sucesso) {
+          resultado.whatsapp = true
+          resultado.web = true
+        } else if (resWhatsapp.motivo) {
+          resultado.erros?.push(`WHATSAPP_SKIPPED: ${resWhatsapp.motivo}`)
+        }
+      } catch (err: any) {
+        resultado.erros?.push(`WHATSAPP_EXCEPTION: ${err.message}`)
+      }
+    }
+
+    // 3. Canal Telegram (se houver telegram_chat_id)
+    if (conversaId && cliente?.telegram_chat_id) {
+      try {
+        const resTelegram = await enviarMensagemTelegram(conversaId, {
+          texto: mensagemTexto,
+          remetente: 'operador',
+          salvarNoBanco: !resultado.web,
+        })
+        if (resTelegram.success) {
+          resultado.telegram = true
+          if (!resultado.web) resultado.web = true
+        }
+      } catch (err: any) {
+        resultado.erros?.push(`TELEGRAM_EXCEPTION: ${err.message}`)
+      }
+    }
+
+    // 4. Canal Web Chat (se nenhum canal externo tiver gravado a mensagem no banco)
+    if (conversaId && !resultado.web) {
       try {
         const { error: msgError } = await supabase.from('mensagens').insert({
           conversa_id: conversaId,
@@ -130,39 +166,6 @@ export async function notificarClienteAtualizacaoPedido(
         }
       } catch (err: any) {
         resultado.erros?.push(`WEB_EXCEPTION: ${err.message}`)
-      }
-    }
-
-    // 3. Canal WhatsApp
-    if (conversaId && cliente?.telefone) {
-      try {
-        const resWhatsapp = await enviarMensagemWhatsapp(conversaId, {
-          texto: mensagemTexto,
-          remetente: 'operador',
-          categoria: 'REACTIVE',
-        })
-        if (resWhatsapp.sucesso) {
-          resultado.whatsapp = true
-        } else if (resWhatsapp.motivo) {
-          resultado.erros?.push(`WHATSAPP_SKIPPED: ${resWhatsapp.motivo}`)
-        }
-      } catch (err: any) {
-        resultado.erros?.push(`WHATSAPP_EXCEPTION: ${err.message}`)
-      }
-    }
-
-    // 4. Canal Telegram
-    if (conversaId && cliente?.telegram_chat_id) {
-      try {
-        const resTelegram = await enviarMensagemTelegram(conversaId, {
-          texto: mensagemTexto,
-          remetente: 'operador',
-        })
-        if (resTelegram.success) {
-          resultado.telegram = true
-        }
-      } catch (err: any) {
-        resultado.erros?.push(`TELEGRAM_EXCEPTION: ${err.message}`)
       }
     }
 

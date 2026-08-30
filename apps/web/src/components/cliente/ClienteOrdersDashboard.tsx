@@ -2,21 +2,15 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import Image from 'next/image'
 import {
   Package,
-  Clock,
-  CheckCircle2,
-  AlertCircle,
   ReceiptText,
-  ExternalLink,
   Lock,
   MessageSquare,
   Sparkles,
   ShoppingBag,
   Loader2,
   RefreshCw,
-  CreditCard,
   QrCode,
   FileCheck,
 } from 'lucide-react'
@@ -57,6 +51,12 @@ export interface PedidoClienteRecord {
   data_criacao: string
   data_atualizacao: string
   itens_pedido?: PedidoItemCliente[]
+  payment_review?: {
+    locked: boolean
+    status: string | null
+    proofId: string | null
+    lockedAt: string | null
+  }
 }
 
 export interface ClienteOrdersDashboardProps {
@@ -242,6 +242,7 @@ export default function ClienteOrdersDashboard({
                 }[pedido.status_pagamento] || { label: pedido.status_pagamento, bg: 'bg-zinc-800 text-zinc-400 border-zinc-700' }
 
                 const isLocked = pedido.status === 'novo' || pedido.status === 'confirmado'
+                const paymentReviewLocked = pedido.payment_review?.locked === true
 
                 return (
                   <div
@@ -312,6 +313,20 @@ export default function ClienteOrdersDashboard({
                       </div>
                     )}
 
+                    {paymentReviewLocked && (
+                      <div
+                        role="status"
+                        className="flex items-start gap-2.5 rounded-2xl border border-sky-500/25 bg-sky-500/10 p-3 text-xs leading-relaxed text-sky-200"
+                      >
+                        <FileCheck className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" />
+                        <div>
+                          <strong>Comprovante recebido — aguardando verificação.</strong>{' '}
+                          O pagamento deste pedido está protegido enquanto o atendente confere o
+                          documento. Se ele for rejeitado, você poderá enviar outro PDF.
+                        </div>
+                      </div>
+                    )}
+
                     {/* Ações do Pedido */}
                     <div className="pt-3 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-3">
                       <Link
@@ -323,7 +338,9 @@ export default function ClienteOrdersDashboard({
                       </Link>
 
                       <div className="flex flex-wrap items-center gap-2">
-                        {pedido.status_pagamento === 'pendente' && pedido.status !== 'cancelado' && (
+                        {pedido.status_pagamento === 'pendente' &&
+                          pedido.status !== 'cancelado' &&
+                          !paymentReviewLocked && (
                           <>
                             <button
                               type="button"
@@ -393,6 +410,10 @@ export default function ClienteOrdersDashboard({
           valorCentavos={modalPagamento.valorCentavos}
           statusPagamento={modalPagamento.statusPagamento}
           onPagamentoConfirmado={() => {
+            carregarPedidos()
+          }}
+          onComprovanteEnviado={() => {
+            setModalPagamento(null)
             carregarPedidos()
           }}
         />

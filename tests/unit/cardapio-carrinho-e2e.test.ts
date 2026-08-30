@@ -52,7 +52,7 @@ describe('E2E Integration: Cardápio Interativo, Carrinho Persistente, Webhooks 
 
       const mockProduto = {
         id: 'prod-combo-1',
-        nome: 'Combo 1 - O Clássico da Sofia',
+        nome: 'Combo 1 - O Clássico Brasa & Sabor',
         preco_centavos: 6990,
         ativo: true,
       }
@@ -392,7 +392,7 @@ describe('E2E Integration: Cardápio Interativo, Carrinho Persistente, Webhooks 
         produtos: [
           {
             id: 'prod-1',
-            nome: 'Combo 1 - O Clássico da Sofia',
+            nome: 'Combo 1 - O Clássico Brasa & Sabor',
             descricao: 'Frango + Farofa + Maionese',
             precoCentavos: 6990,
             urlImagem: 'https://casadeasados.duckdns.org/combo1.jpg',

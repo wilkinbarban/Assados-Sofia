@@ -35,6 +35,7 @@ import { novaMensagemSchema } from '@/lib/validation/chat';
 import { processarIaChat } from '@/app/actions/chat';
 import { BrandLogo } from '@/components/ui/BrandLogo';
 import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante';
+import { PaymentProofChatCard } from '@/components/chat/PaymentProofChatCard';
 import ModalPagamentoCliente from '@/components/cliente/ModalPagamentoCliente';
 import {
   actionObterCarrinhoAtivo,
@@ -68,6 +69,7 @@ interface Mensagem {
   data_criacao: string;
   whatsapp_mensagem_id?: string | null;
   telegram_mensagem_id?: string | null;
+  payment_proof_id?: string | null;
 }
 
 interface Produto {
@@ -1046,7 +1048,7 @@ export default function ChatContainer({
               </div>
               <h3 className="text-zinc-200 font-semibold">Olá, {clienteNome}!</h3>
               <p className="text-sm text-zinc-500 max-w-xs">
-                Seja bem-vindo à Casa de Assados Sofia! Escolha seus assados no cardápio ao lado para montar seu pedido personalizado.
+                Seja bem-vindo à Casa de Assados Brasa & Sabor! Escolha seus assados no cardápio ao lado para montar seu pedido personalizado.
               </p>
             </div>
           ) : (
@@ -1113,7 +1115,7 @@ export default function ChatContainer({
                           />
                         )}
 
-                        {hasAnexo && displayUrl && (
+                        {msg.payment_proof_id ? <PaymentProofChatCard proofId={msg.payment_proof_id} /> : hasAnexo && displayUrl && (
                           <div className={`mt-2 ${msg.conteudo ? 'pt-2 border-t' : ''} 
                             ${isCliente ? 'border-red-500/30' : isIa ? 'border-zinc-800' : 'border-blue-900/30'}
                           `}>
@@ -1140,37 +1142,36 @@ export default function ChatContainer({
                                 </div>
                               </div>
                             ) : (
-                              <div className="flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={() => setModalVisualizador({
-                                    isOpen: true,
-                                    urlArquivo: msg.url_anexo,
-                                    nomeArquivo: msg.url_anexo?.split('/').pop() || 'comprovante.pdf'
-                                  })}
-                                  className={`flex-1 flex items-center gap-2 p-2.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer text-left
-                                    ${isCliente 
-                                      ? 'bg-red-700/30 hover:bg-red-700/50 border-red-500/30 text-white' 
-                                      : isIa 
-                                        ? 'bg-zinc-950 hover:bg-zinc-950/60 border-zinc-800 text-zinc-300'
-                                        : 'bg-blue-950 hover:bg-blue-900/50 border-blue-900/40 text-blue-200'
-                                    }
-                                  `}
-                                >
-                                  <FileText className="h-4 w-4 shrink-0 text-amber-400" />
-                                  <span className="truncate max-w-[150px]">{msg.url_anexo?.split('/').pop() || 'Ver arquivo'}</span>
-                                  <Eye className="h-3.5 w-3.5 ml-auto text-zinc-400 hover:text-white" />
-                                </button>
-                                <a
-                                  href={displayUrl}
-                                  download={msg.url_anexo?.split('/').pop() || 'arquivo'}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="p-2.5 rounded-lg border border-zinc-800 bg-zinc-900/60 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-colors cursor-pointer"
-                                  title="Baixar arquivo"
-                                >
-                                  <Download className="h-4 w-4" />
-                                </a>
+                              <div
+                                onClick={() => setModalVisualizador({
+                                  isOpen: true,
+                                  urlArquivo: msg.url_anexo,
+                                  nomeArquivo: msg.url_anexo?.split('/').pop() || 'comprovante.pdf'
+                                })}
+                                className={`group flex items-center justify-between gap-3 p-3 rounded-xl border text-xs font-medium transition-all cursor-pointer shadow-md
+                                  ${isCliente
+                                    ? 'bg-red-700/20 hover:bg-red-700/30 border-red-500/30 text-white'
+                                    : isIa
+                                      ? 'bg-zinc-950/90 hover:bg-zinc-900 border-zinc-800 text-zinc-300'
+                                      : 'bg-blue-950/40 hover:bg-blue-900/40 border-blue-900/40 text-blue-200'
+                                  }
+                                `}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                                    <ImageIcon className="h-4 w-4" />
+                                  </div>
+                                  <div className="min-w-0">
+                                    <span className="block truncate text-xs font-bold text-zinc-100 max-w-[160px]">
+                                      {msg.url_anexo?.split('/').pop() || 'Comprovante'}
+                                    </span>
+                                    <span className="text-[10px] text-zinc-400">Prévia do comprovante</span>
+                                  </div>
+                                </div>
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 text-[11px] font-bold border border-amber-500/30 group-hover:bg-amber-500/30 transition-colors shrink-0">
+                                  <Eye className="h-3.5 w-3.5" />
+                                  Visualizar
+                                </span>
                               </div>
                             )}
                           </div>
@@ -1307,12 +1308,14 @@ export default function ChatContainer({
         data-testid="customer-commerce-panel"
         onDragOver={handleDragOver}
         onDrop={handleDropOnCart}
-        className="lg:w-[min(46vw,560px)] xl:w-[min(42vw,620px)] border-l border-zinc-800 bg-zinc-950/95 flex-col h-full hidden lg:flex shrink-0 z-10 shadow-2xl shadow-black/30"
+        className="lg:w-[min(48vw,640px)] xl:w-[min(44vw,680px)] border-l border-zinc-800 bg-zinc-950/95 flex-col h-full hidden lg:flex shrink-0 z-10 shadow-2xl shadow-black/30"
       >
         {/* Abas Superiores */}
-        <div className="p-3 border-b border-zinc-800 bg-gradient-to-b from-zinc-900/80 to-zinc-950 flex gap-1.5">
+        <div className="border-b border-zinc-800 bg-gradient-to-b from-zinc-900/90 to-zinc-950 p-3"><div className="mb-2 flex items-center justify-between px-1"><div><p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-400">Seu pedido</p><p className="text-xs text-zinc-400">Cardápio, carrinho e acompanhamento</p></div>{carrinho && carrinho.total_centavos > 0 && <span className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-xs font-black text-amber-300">{formatarMoeda(carrinho.total_centavos)}</span>}</div><div role="tablist" aria-label="Área do pedido" className="flex gap-1.5">
           <button
             type="button"
+            role="tab"
+            aria-selected={sidebarTab === 'cardapio'}
             onClick={() => setSidebarTab('cardapio')}
             className={`flex-1 py-2.5 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               sidebarTab === 'cardapio'
@@ -1326,6 +1329,8 @@ export default function ChatContainer({
 
           <button
             type="button"
+            role="tab"
+            aria-selected={sidebarTab === 'carrinho'}
             onClick={() => setSidebarTab('carrinho')}
             className={`flex-1 py-2.5 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               sidebarTab === 'carrinho'
@@ -1339,6 +1344,8 @@ export default function ChatContainer({
 
           <button
             type="button"
+            role="tab"
+            aria-selected={sidebarTab === 'pedidos'}
             onClick={() => setSidebarTab('pedidos')}
             className={`flex-1 py-2.5 px-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
               sidebarTab === 'pedidos'
@@ -1349,7 +1356,7 @@ export default function ChatContainer({
             <Package className="h-3.5 w-3.5" />
             <span>Pedidos ({pedidosCliente.length})</span>
           </button>
-        </div>
+        </div></div>
 
         {/* Conteúdo da Aba Selecionada */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
