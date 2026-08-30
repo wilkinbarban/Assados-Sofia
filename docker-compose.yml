@@ -56,6 +56,46 @@ services:
     networks:
       - app-private
 
+  payment-proof-maintenance:
+    image: alpine:3.20
+    container_name: asados-payment-proof-maintenance
+    restart: always
+    environment:
+      - PAYMENT_PROOF_MAINTENANCE_SECRET=${PAYMENT_PROOF_MAINTENANCE_SECRET:?set PAYMENT_PROOF_MAINTENANCE_SECRET}
+      - PAYMENT_PROOF_MAINTENANCE_URL=http://web:3000/api/internal/payment-proofs/maintenance
+      - PAYMENT_PROOF_METRICS_SECRET=${PAYMENT_PROOF_METRICS_SECRET:?set PAYMENT_PROOF_METRICS_SECRET}
+      - PAYMENT_PROOF_ALERT_URL=http://web:3000/api/internal/payment-proofs/alerts
+      - PAYMENT_PROOF_MAINTENANCE_INTERVAL_SECONDS=${PAYMENT_PROOF_MAINTENANCE_INTERVAL_SECONDS:-60}
+    command: ["/bin/sh","-c","apk add --no-cache curl >/dev/null && exec /scheduler/payment-proof-maintenance-scheduler.sh"]
+    depends_on:
+      web: { condition: service_healthy }
+    volumes:
+      - ./ops/payment-proof-maintenance-scheduler.sh:/scheduler/payment-proof-maintenance-scheduler.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          interval=$${PAYMENT_PROOF_MAINTENANCE_INTERVAL_SECONDS:-60};
+          case "$$interval" in ''|*[!0-9]*) interval=60;; *)
+          if [ "$$interval" -lt 1 ] || [ "$$interval" -gt 715827882 ]; then interval=60; fi;; esac;
+          tolerance=$$((interval * 3));
+          if [ "$$tolerance" -lt 180 ]; then tolerance=180; fi;
+          now=$$(date +%s) || exit 1;
+          for path in /tmp/payment-proof-maintenance-last-success /tmp/payment-proof-alert-last-success; do
+          test -s "$$path" || exit 1;
+          marker=$$(cat "$$path") || exit 1;
+          case "$$marker" in ''|*[!0-9]*) exit 1;; esac;
+          test "$$marker" -le $$((now + 5)) || exit 1;
+          age=$$((now - marker));
+          test "$$age" -le "$$tolerance" || exit 1;
+          done
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 70s
+    networks: [app-private]
+
+
   evolution-api:
     # Production remains on the latest verified stable release by default.
     # Use EVOLUTION_API_VERSION=2.4.0-rc2 only in the compatibility laboratory;
@@ -81,6 +121,7 @@ services:
       - DATABASE_ENABLED=true
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://evolution:${EVOLUTION_DB_PASSWORD:?set EVOLUTION_DB_PASSWORD}@evolution-db:5432/evolution?schema=public
+      - DATABASE_CONNECTION_CLIENT_NAME=${EVOLUTION_DATABASE_CLIENT_NAME:-evolution}
       - DATABASE_SAVE_DATA_INSTANCE=true
       - CACHE_REDIS_ENABLED=true
       - CACHE_REDIS_URI=redis://evolution-redis:6379/0
@@ -88,8 +129,9 @@ services:
       - CACHE_REDIS_PREFIX_KEY=asados_evolution
       - CACHE_REDIS_SAVE_INSTANCES=false
       - CACHE_LOCAL_ENABLED=false
-      - WEBHOOK_GLOBAL_ENABLED=true
-      - WEBHOOK_GLOBAL_URL=https://casadeasados.duckdns.org/api/webhooks/evolution?webhook_secret=${EVOLUTION_WEBHOOK_SECRET:?set EVOLUTION_WEBHOOK_SECRET}
+      # Evolution 2.3.7 cannot attach headers to the global webhook.
+      # The authenticated instance webhook is provisioned after startup.
+      - WEBHOOK_GLOBAL_ENABLED=false
       - WEBHOOK_GLOBAL_WEBHOOK_BY_EVENTS=false
       - WEBHOOK_EVENTS_MESSAGES_UPSERT=true
       - WEBHOOK_EVENTS_CONNECTION_UPDATE=true
