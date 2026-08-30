@@ -1,0 +1,28 @@
+{
+  "event": "messages.upsert",
+  "instance": "sanitized-instance",
+  "data": {
+    "key": {
+      "id": "sanitized-message-id",
+      "fromMe": false,
+      "addressingMode": "lid",
+      "remoteJid": "5541000000000@s.whatsapp.net",
+      "remoteJidAlt": "5541000000000@s.whatsapp.net"
+    },
+    "pushName": "Sanitized Contact",
+    "message": {
+      "documentMessage": {
+        "mimetype": "application/pdf",
+        "fileLength": {
+          "low": 128,
+          "high": 0,
+          "unsigned": true
+        },
+        "fileName": "sanitized-proof.pdf",
+        "mediaKey": "sanitized-opaque-value",
+        "directPath": "/sanitized/path",
+        "url": "https://sanitized.invalid/media"
+      }
+    }
+  }
+}

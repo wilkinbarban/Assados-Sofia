@@ -296,6 +296,7 @@ export async function POST(request: Request) {
         try {
           // Consultar a URL de download na Meta API
           const mediaResponse = await fetch(`https://graph.facebook.com/v18.0/${mediaId}`, {
+            signal: AbortSignal.timeout(WHATSAPP_MEDIA_TIMEOUT_MS),
             headers: {
               'Authorization': `Bearer ${accessToken}`
             }
@@ -314,6 +315,7 @@ export async function POST(request: Request) {
 
           // Efetuar download
           const downloadResponse = await fetch(downloadUrl, {
+            signal: AbortSignal.timeout(WHATSAPP_MEDIA_TIMEOUT_MS),
             headers: {
               'Authorization': `Bearer ${accessToken}`
             }
@@ -326,8 +328,7 @@ export async function POST(request: Request) {
           // Efetuar download na memória do servidor
           // LGPD compliance: NENHUM arquivo físico é escrito no disco rígido do servidor.
           // Todo o fluxo de download e upload é realizado em memória utilizando ArrayBuffer e Buffer.
-          const arrayBuffer = await downloadResponse.arrayBuffer()
-          const buffer = Buffer.from(arrayBuffer)
+          const buffer = Buffer.from(await readBoundedResponseBody(downloadResponse))
 
           // Upload no storage privado 'chat-midias'
           const { error: uploadError } = await supabaseAdmin
@@ -344,6 +345,10 @@ export async function POST(request: Request) {
 
           urlAnexo = filename
         } catch (err: any) {
+          if (err?.message === 'WHATSAPP_MEDIA_TOO_LARGE') {
+            console.warn('[WhatsApp Webhook] Mídia rejeitada por exceder 5 MiB.')
+            urlAnexo = null
+          } else {
           console.error('[WhatsApp Webhook] Erro ao obter/enviar mídia real. Fazendo fallback para mock:', err)
           const fallbackContent = `Fallback mock media content due to error: ${err.message}`
           const buffer = Buffer.from(fallbackContent, 'utf-8')
@@ -357,6 +362,7 @@ export async function POST(request: Request) {
 
           if (!uploadError) {
             urlAnexo = filename
+          }
           }
         }
       }
@@ -434,4 +440,35 @@ export async function POST(request: Request) {
     console.error('[WhatsApp Webhook] Erro crítico no handler POST:', error)
     return NextResponse.json({ error: 'Erro interno do servidor' }, { status: 500 })
   }
+}
+const MAX_WHATSAPP_MEDIA_BYTES = 5 * 1024 * 1024
+const WHATSAPP_MEDIA_TIMEOUT_MS = 10_000
+
+async function readBoundedResponseBody(response: Response): Promise<Uint8Array> {
+  const declared = response.headers.get('content-length')
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > MAX_WHATSAPP_MEDIA_BYTES)) {
+    throw new Error('WHATSAPP_MEDIA_TOO_LARGE')
+  }
+  if (!response.body) return new Uint8Array()
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_WHATSAPP_MEDIA_BYTES) throw new Error('WHATSAPP_MEDIA_TOO_LARGE')
+      chunks.push(value)
+    }
+  } finally {
+    if (total > MAX_WHATSAPP_MEDIA_BYTES) await reader.cancel()
+  }
+  const result = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return result
 }
