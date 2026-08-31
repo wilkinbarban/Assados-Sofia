@@ -427,7 +427,8 @@ export default function ModalVisualizadorComprovante({
                 className="transition-transform duration-200 flex items-center justify-center shadow-2xl rounded-2xl overflow-hidden border border-zinc-800 bg-white"
                 style={{ transform: `scale(${zoom / 100})` }}
               >
-                <img
+                {/* eslint-disable-next-line @next/next/no-img-element -- Preview is a transient blob or data URL generated from private proof content. */}
+                    <img
                   src={pngDataUrl}
                   alt={`Prévia do comprovante - ${nomeArquivo}`}
                   className="max-h-[58vh] max-w-full object-contain select-none"

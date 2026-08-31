@@ -126,7 +126,7 @@ export default function ConversationsQueue({
   }
 
   // Heurística para contar mensagens não respondidas pelo operador ou IA
-  const obterNaoLidasCount = (conversa: Conversa) => {
+  const obterNaoLidasCount = useCallback((conversa: Conversa) => {
     if (conversa.id === selectedConversaId) return 0
     const msgs = conversa.mensagens || []
     if (msgs.length === 0) return 0
@@ -146,7 +146,7 @@ export default function ConversationsQueue({
       }
     }
     return count
-  }
+  }, [selectedConversaId])
 
   // Heurística para tempo de espera em minutos para a fila humana
   const obterTempoEsperaMinutos = (conversa: Conversa) => {
@@ -184,7 +184,7 @@ export default function ConversationsQueue({
     }
 
     return { iaTotal, iaNaoLidas, humanoTotal, humanoNaoLidas, fechadaTotal }
-  }, [conversas, selectedConversaId])
+  }, [conversas, obterNaoLidasCount])
 
   // Detecção de solicitação de alteração ou cancelamento de pedido pelo cliente e se já foi atendida/resolvida
   const detectarSolicitacaoPrioritaria = useCallback((conversa: Conversa): {

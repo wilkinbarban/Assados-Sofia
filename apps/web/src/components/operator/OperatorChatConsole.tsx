@@ -177,8 +177,11 @@ export function AttachmentCard({
               <span>Gerando prévia segura…</span>
             </div>
           ) : preview ? (
-            <img src={preview} alt="Prévia do comprovante enviado pelo cliente" className="max-h-64 w-full object-contain" />
-          ) : previewError ? (
+                <>
+            {/* eslint-disable-next-line @next/next/no-img-element -- Preview is a transient blob or data URL generated from private proof content. */}
+                  <img src={preview} alt="Prévia do comprovante enviado pelo cliente" className="max-h-64 w-full object-contain" />
+                </>
+              ) : previewError ? (
             <div className="p-4 text-center text-[11px] text-amber-700">{previewError}</div>
           ) : null}
         </div>
@@ -217,7 +220,12 @@ export function AttachmentCard({
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-auto rounded-2xl bg-white p-3">
-              {preview && <img src={preview} alt="Comprovante ampliado" className="mx-auto max-h-[78vh] max-w-full object-contain" />}
+              {preview && (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- Preview is a transient blob or data URL generated from private proof content. */}
+                  <img src={preview} alt="Comprovante ampliado" className="mx-auto max-h-[78vh] max-w-full object-contain" />
+                </>
+              )}
             </div>
           </div>
         </div>
