@@ -1,61 +1,108 @@
 'use server'
+
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { createAdminClient } from '@/lib/supabase/admin'
 
-async function staff() {
- const session=await createClient();const {data:{user}}=await session.auth.getUser()
- if(!user)return null
- const {data:profile}=await session.from('perfis').select('funcao,ativo').eq('id',user.id).single()
- return profile?.ativo&&['admin','supervisor'].includes(profile.funcao)?{session,user,role:profile.funcao}:null
+const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const leaseToken = /^[0-9a-f]{64}$/i
+const safeErrors = new Set([
+  'FORBIDDEN', 'INVALID_PROOF', 'INVALID_ORDERS', 'INVALID_AMOUNT', 'INVALID_LEASE',
+  'PAYMENT_PROOF_LEASE_CONFLICT', 'PAYMENT_PROOF_LEASE_EXPIRED', 'PAYMENT_PROOF_LEASE_NOT_OWNED',
+  'PAYMENT_PROOF_AMOUNT_CONFLICT', 'PAYMENT_PROOF_AMOUNT_REQUIRED', 'PAYMENT_PROOF_AMOUNT_MISMATCH',
+  'PAYMENT_PROOF_CONFIRMATION_INVALID_STATE', 'PAYMENT_PROOF_REJECTION_INVALID_STATE',
+  'PAYMENT_PROOF_NOT_RECONCILABLE', 'PAYMENT_PROOF_ALREADY_RECONCILED',
+  'PAYMENT_PROOF_RECONCILIATION_CONFLICT', 'PAYMENT_PROOF_ORDER_CUSTOMER_MISMATCH',
+  'PAYMENT_PROOF_ORDER_INELIGIBLE', 'PAYMENT_PROOF_REQUESTED_ORDER_REQUIRED', 'PAYMENT_PROOF_DUPLICATE_ORDER',
+])
+const MAX_ORDER_IDS = 100
+const MAX_CENTS = 999_999_999_999
+const canonicalCents = /^[1-9]\d{0,11}$/
+
+function validCents(value: unknown): value is number | string {
+  return typeof value === 'number'
+    ? Number.isSafeInteger(value) && value > 0 && value <= MAX_CENTS
+    : typeof value === 'string' && canonicalCents.test(value) && Number(value) <= MAX_CENTS
 }
-export async function listPaymentProofsForAdmin(){
- const actor=await staff();if(!actor)return {success:false as const,error:'FORBIDDEN'}
- const {data,error}=await actor.session.from('payment_proofs').select('id,customer_id,channel,status,suggested_cents,confirmed_cents,extraction_confidence,purge_after,created_at')
-  .order('created_at',{ascending:false}).limit(200)
- if(error)return {success:false as const,error:error.message}
- return {success:true as const,data:(data||[]).map(p=>({
-  ...p,
-  customer_name:p.customer_id?`Cliente …${p.customer_id.slice(-4)}`:null,
-  preview_url:`/api/payment-proofs/${p.id}/preview`,
-  original_url:`/api/payment-proofs/${p.id}/original`,
- }))}
+
+type Actor = { session: Awaited<ReturnType<typeof createClient>>; role: 'admin' | 'supervisor' | 'vendedor' }
+type Operation = 'acquire' | 'release' | 'confirm_amount' | 'reject' | 'restore' | 'reconcile'
+type MutationInput = { operation: Operation; proofId: string; value?: string | number; orderIds?: string[]; leaseToken?: string }
+type MutationResult = { success: true; proof?: { status: string; purge_after: string | null }; lease?: { token: string; expiresAt: string } } | { success: false; error: string }
+
+async function staff(): Promise<Actor | null> {
+  const session = await createClient()
+  const { data: { user }, error } = await session.auth.getUser()
+  if (error || !user) return null
+  const { data: profile, error: profileError } = await session.from('perfis').select('funcao,ativo').eq('id', user.id).single()
+  if (profileError || !profile?.ativo || !['admin', 'supervisor', 'vendedor'].includes(profile.funcao)) return null
+  return { session, role: profile.funcao as Actor['role'] }
 }
-export async function listEligiblePaymentProofOrders(customerId:string){
- const actor=await staff();if(!actor)return {success:false as const,error:'FORBIDDEN'}
- if(!/^[0-9a-f-]{36}$/i.test(customerId))return {success:false as const,error:'INVALID_CUSTOMER'}
- const {data,error}=await actor.session.from('pedidos').select('id,cliente_id,total_pedido_centavos,status,status_pagamento')
-  .eq('cliente_id',customerId).eq('status_pagamento','pendente').neq('status','cancelado').order('data_criacao',{ascending:false}).limit(100)
- if(error)return {success:false as const,error:error.message}
- return {success:true as const,data:(data||[]).map(order=>({...order,customer_id:order.cliente_id}))}
+
+function safeError(error: unknown) {
+  const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : ''
+  return safeErrors.has(message) ? message : 'PAYMENT_PROOF_OPERATION_UNAVAILABLE'
 }
-export async function mutatePaymentProofAdmin(input:{operation:string;proofId:string;value?:string|number;orderIds?:string[]}){
- const actor=await staff();if(!actor)return {success:false,error:'FORBIDDEN'}
- if(!/^[0-9a-f-]{36}$/i.test(input.proofId))return {success:false,error:'INVALID_PROOF'}
- if(input.operation==='reconcile'){
-  if(!input.orderIds?.length||input.orderIds.some(id=>!/^[0-9a-f-]{36}$/i.test(id)))return {success:false,error:'INVALID_ORDERS'}
-  const {error}=await actor.session.rpc('reconcile_payment_proof',{p_proof_id:input.proofId,p_order_ids:input.orderIds,p_idempotency_key:crypto.randomUUID()})
-  if(error)return {success:false,error:error.message};revalidatePath('/atendimento/admin');return {success:true}
- }
- const rpc=input.operation==='restore'?'restore_payment_proof':'manage_payment_proof_review'
- const args=input.operation==='restore'?{p_proof_id:input.proofId,p_reason:'admin workflow'}:
-  {p_proof_id:input.proofId,p_operation:input.operation,p_value:input.value==null?null:String(input.value)}
- const {error}=await actor.session.rpc(rpc,args)
- if(error)return {success:false,error:error.message}
- const {data:updatedProof,error:updatedProofError}=await actor.session
-  .from('payment_proofs').select('status,purge_after').eq('id',input.proofId).single()
- if(updatedProofError)return {success:false,error:updatedProofError.message}
- if(input.operation==='admit'){
-  const admin=createAdminClient()
-  const {data:proof}=await admin.from('payment_proofs').select('customer_id').eq('id',input.proofId).single()
-  const {data:conversation}=proof?.customer_id
-   ?await admin.from('conversas').select('id').eq('cliente_id',proof.customer_id).order('data_atualizacao',{ascending:false}).limit(1).maybeSingle()
-   :{data:null}
-  if(conversation?.id){
-   const {error:projectionError}=await admin.rpc('project_payment_proof_to_chat',{p_proof_id:input.proofId,p_conversa_id:conversation.id})
-   if(projectionError)return {success:false,error:projectionError.message}
+
+export async function listPaymentProofsForAdmin() {
+  const actor = await staff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+  const { data, error } = await actor.session.from('payment_proofs').select('id,customer_id,channel,status,suggested_cents,confirmed_cents,extraction_confidence,purge_after,created_at').order('created_at', { ascending: false }).limit(200)
+  if (error) return { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
+  return { success: true as const, role: actor.role, data: (data || []).map((proof) => ({
+    ...proof, customer_name: proof.customer_id ? `Cliente …${proof.customer_id.slice(-4)}` : null,
+    preview_url: `/api/payment-proofs/${proof.id}/preview`, original_url: `/api/payment-proofs/${proof.id}/original`,
+  })) }
+}
+
+export async function listEligiblePaymentProofOrders(customerId: string) {
+  const actor = await staff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+  if (!uuid.test(customerId)) return { success: false as const, error: 'INVALID_CUSTOMER' }
+  const { data, error } = await actor.session.from('pedidos').select('id,cliente_id,total_pedido_centavos,status,status_pagamento').eq('cliente_id', customerId).eq('status_pagamento', 'pendente').neq('status', 'cancelado').order('data_criacao', { ascending: false }).limit(100)
+  if (error) return { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
+  return { success: true as const, data: (data || []).map((order) => ({ ...order, customer_id: order.cliente_id })) }
+}
+
+export async function mutatePaymentProofAdmin(input: MutationInput): Promise<MutationResult> {
+  if (!input || !uuid.test(input.proofId)) return { success: false, error: 'INVALID_PROOF' }
+  const actor = await staff(); if (!actor) return { success: false, error: 'FORBIDDEN' }
+  if (input.operation === 'restore' && actor.role !== 'admin') return { success: false, error: 'FORBIDDEN' }
+
+  if (input.operation === 'acquire') {
+    const { data, error } = await actor.session.rpc('acquire_payment_proof_lease', { p_proof_id: input.proofId })
+    const lease = Array.isArray(data) ? data[0] : data
+    if (error || !lease || typeof lease !== 'object' || !('lease_token' in lease) || !('expires_at' in lease) || typeof lease.lease_token !== 'string' || typeof lease.expires_at !== 'string') return { success: false, error: safeError(error) }
+    return { success: true, lease: { token: lease.lease_token, expiresAt: lease.expires_at } }
   }
- }
- revalidatePath('/atendimento/admin');revalidatePath('/atendimento');revalidatePath('/cliente/chat')
- return {success:true,proof:updatedProof}
+  if (input.operation === 'restore') {
+    const { error } = await actor.session.rpc('restore_payment_proof', { p_proof_id: input.proofId, p_reason: 'operator workflow' })
+    if (error) return { success: false, error: safeError(error) }
+    const { data: proof, error: proofError } = await actor.session.from('payment_proofs').select('status,purge_after').eq('id', input.proofId).single()
+    if (proofError || !proof) return { success: false, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
+    revalidatePath('/atendimento/admin'); return { success: true, proof }
+  }
+  if (!input.leaseToken || !leaseToken.test(input.leaseToken)) return { success: false, error: 'INVALID_LEASE' }
+  if (input.operation === 'release') {
+    const { error } = await actor.session.rpc('release_payment_proof_lease', { p_proof_id: input.proofId, p_lease_token: input.leaseToken })
+    return error ? { success: false, error: safeError(error) } : { success: true }
+  }
+
+  let rpc: string; let args: Record<string, unknown>
+  if (input.operation === 'confirm_amount') {
+    if (!validCents(input.value)) return { success: false, error: 'INVALID_AMOUNT' }
+    const cents = Number(input.value)
+    rpc = 'confirm_payment_proof_amount'; args = { p_proof_id: input.proofId, p_confirmed_cents: cents, p_lease_token: input.leaseToken }
+  } else if (input.operation === 'reconcile') {
+    const orderIds = input.orderIds
+    if (!Array.isArray(orderIds) || !orderIds.length || orderIds.length > MAX_ORDER_IDS || orderIds.some((id) => typeof id !== 'string' || !uuid.test(id)) || new Set(orderIds).size !== orderIds.length) return { success: false, error: 'INVALID_ORDERS' }
+    rpc = 'reconcile_payment_proof'; args = { p_proof_id: input.proofId, p_order_ids: orderIds, p_idempotency_key: crypto.randomUUID(), p_lease_token: input.leaseToken }
+  } else if (input.operation === 'reject') {
+    rpc = 'manage_payment_proof_review'; args = { p_proof_id: input.proofId, p_operation: 'reject', p_value: null, p_lease_token: input.leaseToken }
+  } else {
+    return { success: false, error: 'FORBIDDEN' }
+  }
+  const { error } = await actor.session.rpc(rpc, args)
+  if (error) return { success: false, error: safeError(error) }
+  const { data: proof, error: proofError } = await actor.session.from('payment_proofs').select('status,purge_after').eq('id', input.proofId).single()
+  if (proofError || !proof) return { success: false, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
+  revalidatePath('/atendimento/admin'); revalidatePath('/atendimento')
+  return { success: true, proof }
 }
