@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   createAdminClient: vi.fn(), obterConfiguracaoSistema: vi.fn(), obterSofiaGlobalChannelConfig: vi.fn(),
   verificarHorarioAtendimento: vi.fn(), processCanonicalPaymentProof: vi.fn(), downloadEvolutionPdf: vi.fn(),
+  gates: { canonicalIngest: { effective: true }, whatsappIngest: { effective: true } },
 }))
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mocks.createAdminClient }))
 vi.mock('@/lib/config/sistema', () => ({ obterConfiguracaoSistema: mocks.obterConfiguracaoSistema, obterSofiaGlobalChannelConfig: mocks.obterSofiaGlobalChannelConfig }))
 vi.mock('@/lib/horarios/verificar', () => ({ verificarHorarioAtendimento: mocks.verificarHorarioAtendimento }))
 vi.mock('@/lib/payment-proofs/canonical-intake', () => ({ processCanonicalPaymentProof: mocks.processCanonicalPaymentProof }))
 vi.mock('@/lib/whatsapp/evolution-media-download', () => ({ downloadEvolutionPdf: mocks.downloadEvolutionPdf }))
+vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: mocks.gates }))
 
 import { POST } from '@/app/api/webhooks/evolution/route'
 import { EVOLUTION_PAYMENT_PROOF_FIXTURE_SHA256, EVOLUTION_PAYMENT_PROOF_PROFILE } from '@/lib/whatsapp/evolution-payment-proof-compatibility'
@@ -50,7 +52,7 @@ function adminClient(options: { customer?: { id: string } | null; customerLookup
   return { client, storageBucket }
 }
 beforeEach(() => {
-  vi.clearAllMocks(); mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => config[key] ?? null)
+  vi.clearAllMocks(); mocks.gates.canonicalIngest.effective = true; mocks.gates.whatsappIngest.effective = true; mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => config[key] ?? null)
   mocks.downloadEvolutionPdf.mockResolvedValue({ ok: true, bytes: PDF, mimeType: 'application/pdf' })
   mocks.processCanonicalPaymentProof.mockResolvedValue({ status: 'accepted', proofId: 'proof-1' })
 })
@@ -171,9 +173,21 @@ describe('Evolution canonical payment-proof intake', () => {
     const response = await POST(request()); expect(response.status).toBe(status); expect(await response.json()).toEqual({ success: status < 300, status: resultStatus })
   })
 
+  it('does not admit a PDF when immutable gates are closed despite DB values being open', async () => {
+    const { client } = adminClient(); mocks.createAdminClient.mockReturnValue(client)
+    mocks.gates.canonicalIngest.effective = false
+    mocks.obterSofiaGlobalChannelConfig.mockResolvedValue({ enabled: false })
+    const response = await POST(request())
+    expect(response.status).toBe(200)
+    expect(mocks.downloadEvolutionPdf).not.toHaveBeenCalled()
+    expect(mocks.processCanonicalPaymentProof).not.toHaveBeenCalled()
+    expect(mocks.obterConfiguracaoSistema).not.toHaveBeenCalledWith('PAYMENT_PROOF_CANONICAL_INGEST_ENABLED')
+    expect(mocks.obterConfiguracaoSistema).not.toHaveBeenCalledWith('WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED')
+  })
+
   it('makes no media request when compatibility is closed and follows the exact legacy path', async () => {
     const { client } = adminClient(); mocks.createAdminClient.mockReturnValue(client)
-    mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => key === 'WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED' ? 'false' : config[key] ?? null)
+    mocks.gates.whatsappIngest.effective = false
     mocks.obterSofiaGlobalChannelConfig.mockResolvedValue({ enabled: false })
     const response = await POST(request()); expect(response.status).toBe(200); expect((await response.json()).message).toBe('Sofia globalmente desativada para WhatsApp')
     expect(mocks.downloadEvolutionPdf).not.toHaveBeenCalled(); expect(mocks.processCanonicalPaymentProof).not.toHaveBeenCalled(); expect(client.from).toHaveBeenCalledWith('mensagens')
@@ -181,7 +195,7 @@ describe('Evolution canonical payment-proof intake', () => {
 
   it('never writes an Evolution payment document to the legacy proof table when canonical compatibility is closed', async () => {
     const { client } = adminClient(); mocks.createAdminClient.mockReturnValue(client)
-    mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => key === 'WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED' ? 'false' : config[key] ?? null)
+    mocks.gates.whatsappIngest.effective = false
     mocks.obterSofiaGlobalChannelConfig.mockResolvedValue({ enabled: true })
     mocks.verificarHorarioAtendimento.mockResolvedValue({ dentro: true })
 

@@ -9,6 +9,8 @@ const expensive = vi.hoisted(() => ({
 vi.mock('@/lib/payment-proofs/render-png', () => ({ renderPaymentProofPageOne: expensive.render }))
 vi.mock('pdf-parse', () => ({ PDFParse: expensive.extract }))
 vi.mock('@/lib/payment-proofs/advisory-extraction', () => ({ classifyPaymentProof: expensive.classify }))
+const gates = vi.hoisted(() => ({ canonicalIngest: { effective: true }, whatsappIngest: { effective: true } }))
+vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: gates }))
 
 import { ingestCanonicalPaymentProof, processCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 
@@ -28,14 +30,30 @@ function input(channel: 'web'|'telegram'|'whatsapp', deliveryId: string, edge = 
 describe('payment proof intake adapters', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.PAYMENT_PROOF_CANONICAL_INGEST_ENABLED = 'true'
-    process.env.WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED = 'true'
+    gates.canonicalIngest.effective = true
+    gates.whatsappIngest.effective = true
   })
 
   it('normalizes Web, Telegram and WhatsApp into stable delivery identities', () => {
     expect(normalizePaymentProofDelivery({channel:'web',deliveryId:' msg-1 ',customerId:'customer-1'})).toEqual({channel:'web',deliveryKey:'msg-1',customerId:'customer-1',senderReference:null})
     expect(normalizePaymentProofDelivery({channel:'telegram',deliveryId:'tg-1',sender:' 5541999999999 '})).toEqual({channel:'telegram',deliveryKey:'tg-1',customerId:null,senderReference:'5541999999999'})
     expect(normalizePaymentProofDelivery({channel:'whatsapp',deliveryId:'wa-1',sender:'+55 (41) 99999-9999'}).senderReference).toBe('5541999999999')
+  })
+
+  it('returns disabled before storage or database effects when canonical intake is closed', async () => {
+    gates.canonicalIngest.effective = false
+    const edge = boundary()
+    await expect(ingestCanonicalPaymentProof(input('web', 'closed', edge))).resolves.toEqual({ status: 'disabled' })
+    expect(edge.upload).not.toHaveBeenCalled()
+    expect(edge.rpc).not.toHaveBeenCalled()
+  })
+
+  it('returns disabled before storage or database effects when WhatsApp intake is closed', async () => {
+    gates.whatsappIngest.effective = false
+    const edge = boundary()
+    await expect(ingestCanonicalPaymentProof(input('whatsapp', 'closed', edge))).resolves.toEqual({ status: 'disabled' })
+    expect(edge.upload).not.toHaveBeenCalled()
+    expect(edge.rpc).not.toHaveBeenCalled()
   })
 
   it('rejects spoofed MIME, bad magic and oversized bytes', () => {

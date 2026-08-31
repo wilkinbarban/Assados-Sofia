@@ -4,6 +4,7 @@ import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { dispatchPaymentProofOutbox } from '@/lib/payment-proofs/outbox-dispatch'
 import { processPaymentProofJob } from '@/lib/payment-proofs/processing-worker'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 
 function matchesBearer(header: string | null, secret: string | null) {
   if (!header || !secret) return false
@@ -26,15 +27,24 @@ export async function POST(request: Request) {
     db = createAdminClient()
     const begun = await db.rpc('begin_payment_proof_maintenance')
     if (begun.error) throw new Error('MAINTENANCE_UNAVAILABLE')
-    const kinds = ['processing', 'outbox', 'purge'] as const
+    const kinds = [
+      ...(paymentProofOperationalGates.processing.effective ? ['processing' as const] : []),
+      'outbox' as const,
+      ...(paymentProofOperationalGates.cleanup.effective ? ['purge' as const] : []),
+    ]
     let emptyKinds = 0
-    for (let i = 0; i < 20 && emptyKinds < kinds.length; i++) {
+    for (let i = 0; kinds.length > 0 && i < 20 && emptyKinds < kinds.length; i++) {
       const kind = kinds[i % kinds.length]
       const claim = await db.rpc('claim_payment_proof_maintenance', { p_lease_seconds: 60, p_kind: kind })
       if (claim.error) throw new Error('MAINTENANCE_UNAVAILABLE')
       const job = claim.data
       if (!job) { emptyKinds++; continue }
       emptyKinds = 0
+      // The claimed row is untrusted: do not execute or transition a kind whose
+      // immutable capability is closed, even if the claim RPC returns it for a
+      // different requested kind.
+      if ((job.kind === 'processing' && !paymentProofOperationalGates.processing.effective) ||
+        (job.kind === 'purge' && !paymentProofOperationalGates.cleanup.effective)) continue
 
       let ok = false
       // A throw before the worker can return a narrower stage is a load-boundary failure.

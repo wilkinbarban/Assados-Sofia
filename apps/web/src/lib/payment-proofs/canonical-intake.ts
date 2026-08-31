@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { normalizePaymentProofDelivery, validatePaymentProofPdf, type PaymentProofChannel } from './intake'
+import { paymentProofOperationalGates } from './operational-gates'
 
 type IntakeInput = {
   channel: PaymentProofChannel
@@ -29,12 +30,8 @@ function proofIdFrom(data: unknown): string | null {
 }
 
 export async function ingestCanonicalPaymentProof(input: IntakeInput) {
-  if (process.env.PAYMENT_PROOF_CANONICAL_INGEST_ENABLED !== 'true') {
-    return { status: 'disabled' as const }
-  }
-  if (input.channel === 'whatsapp' && process.env.WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED !== 'true') {
-    return { status: 'disabled' as const }
-  }
+  if (!paymentProofOperationalGates.canonicalIngest.effective) return { status: 'disabled' as const }
+  if (input.channel === 'whatsapp' && !paymentProofOperationalGates.whatsappIngest.effective) return { status: 'disabled' as const }
 
   const valid = validatePaymentProofPdf(input.bytes, input.mimeType)
   if (!valid.ok) return { status: 'rejected' as const, error: valid.error }

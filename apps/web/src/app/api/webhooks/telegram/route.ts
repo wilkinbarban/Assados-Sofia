@@ -6,6 +6,7 @@ import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { deriveTelegramMessageKey } from '@/lib/telegram/idempotency'
 import { downloadTelegramDocument } from '@/lib/telegram/document-download'
 import { queueCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
+import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
 import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { executarToolSofia } from '@/lib/ai/tools'
@@ -283,9 +284,7 @@ export async function POST(request: Request) {
     // Canonical payment proofs are an intake concern, independent from Sofia's
     // automation and business-hours gates. When disabled, preserve the legacy
     // document path without validation, token lookup, or download side effects.
-    const canonicalPaymentProofEnabled = message.document
-      ? await obterConfiguracaoSistema('PAYMENT_PROOF_CANONICAL_INGEST_ENABLED') === 'true'
-      : false
+    const canonicalPaymentProofEnabled = Boolean(message.document && paymentProofOperationalGates.canonicalIngest.effective)
     if (message.document && canonicalPaymentProofEnabled) {
       const replay = await supabaseAdmin.rpc('get_payment_proof_delivery_state', {
         p_channel: 'telegram',

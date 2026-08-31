@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ createAdminClient: vi.fn(), config: vi.fn(), dispatch: vi.fn(), process: vi.fn() }))
+const mocks = vi.hoisted(() => ({ createAdminClient: vi.fn(), config: vi.fn(), dispatch: vi.fn(), process: vi.fn(), gates: { processing: { effective: true }, cleanup: { effective: true } } }))
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mocks.createAdminClient }))
 vi.mock('@/lib/config/sistema', () => ({ obterConfiguracaoSistema: mocks.config }))
 vi.mock('@/lib/payment-proofs/outbox-dispatch', () => ({ dispatchPaymentProofOutbox: mocks.dispatch }))
 vi.mock('@/lib/payment-proofs/processing-worker', () => ({ processPaymentProofJob: mocks.process }))
+vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: mocks.gates }))
 import { POST } from '@/app/api/internal/payment-proofs/maintenance/route'
 
 const request = () => new Request('http://local/internal', { method: 'POST', headers: { authorization: 'Bearer maintenance-secret' } })
@@ -23,7 +24,38 @@ function client(claims: unknown[], options: { removeError?: unknown; completeErr
 }
 
 describe('payment-proof maintenance route', () => {
-  beforeEach(() => { vi.clearAllMocks(); mocks.config.mockImplementation(async (key:string) => key==='PAYMENT_PROOF_MAINTENANCE_SECRET'?'maintenance-secret':'worker-config');mocks.process.mockResolvedValue({ok:true}) })
+  beforeEach(() => { vi.clearAllMocks(); mocks.gates.processing.effective = true; mocks.gates.cleanup.effective = true; mocks.config.mockImplementation(async (key:string) => key==='PAYMENT_PROOF_MAINTENANCE_SECRET'?'maintenance-secret':'worker-config');mocks.process.mockResolvedValue({ok:true}) })
+
+  it('does not claim or execute a closed processing capability even when DB configuration is open', async () => {
+    mocks.gates.processing.effective = false
+    const { db, rpc } = client([{ kind: 'processing', id: 'proof-1' }])
+    mocks.createAdminClient.mockReturnValue(db)
+
+    const response = await POST(request())
+
+    expect(response.status).toBe(200)
+    expect(mocks.process).not.toHaveBeenCalled()
+    expect(rpc).not.toHaveBeenCalledWith('claim_payment_proof_maintenance', expect.objectContaining({ p_kind: 'processing' }))
+  })
+
+  it.each([
+    ['processing', 'process'],
+    ['purge', 'purge'],
+  ])('does not execute or complete a mismatched closed %s claim', async (kind, capability) => {
+    mocks.gates.processing.effective = false
+    mocks.gates.cleanup.effective = false
+    const { db, rpc, remove } = client([{ kind, id: 'forbidden-1', original_key: 'a' }])
+    mocks.createAdminClient.mockReturnValue(db)
+
+    const response = await POST(request())
+
+    expect(response.status).toBe(200)
+    expect(mocks.process).not.toHaveBeenCalled()
+    expect(mocks.dispatch).not.toHaveBeenCalled()
+    expect(remove).not.toHaveBeenCalled()
+    expect(rpc).not.toHaveBeenCalledWith('complete_payment_proof_maintenance', expect.anything())
+    expect(capability).toBeTruthy()
+  })
 
   it('does not create a client or call RPCs when unauthorized', async () => {
     const response = await POST(new Request('http://local/internal', { method: 'POST' }))

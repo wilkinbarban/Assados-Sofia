@@ -13,6 +13,7 @@ import { downloadEvolutionPdf } from '@/lib/whatsapp/evolution-media-download'
 import { evaluateEvolutionPaymentProofCompatibility } from '@/lib/whatsapp/evolution-payment-proof-compatibility'
 import { resolveEvolutionInboundPhoneLocalPart } from '@/lib/whatsapp/evolution-inbound-sender'
 import { decodeEvolutionDocumentSize } from '@/lib/whatsapp/evolution-document-size'
+import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 
 async function resolveWhatsAppPersistenceConversation(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
@@ -128,22 +129,13 @@ export async function POST(request: Request) {
     const documentMessage = data.message?.documentMessage
     const isCanonicalPdfCandidate = documentMessage?.mimetype === 'application/pdf'
     if (isCanonicalPdfCandidate && hasDedicatedSecretAuth) {
-      const [
-        canonicalEnabled,
-        whatsappEnabled,
-        primaryProvider,
-        fallbackProvider,
-        operationalAttestation,
-      ] = await Promise.all([
-        obterConfiguracaoSistema('PAYMENT_PROOF_CANONICAL_INGEST_ENABLED'),
-        obterConfiguracaoSistema('WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED'),
+      const [primaryProvider, fallbackProvider, operationalAttestation] = await Promise.all([
         obterConfiguracaoSistema('PROVEDOR_WHATSAPP_ATIVO'),
         obterConfiguracaoSistema('WHATSAPP_PROVIDER'),
         obterConfiguracaoSistema('EVOLUTION_PAYMENT_PROOF_ATTESTATION'),
       ])
       const compatibility = evaluateEvolutionPaymentProofCompatibility({
-        canonicalEnabled,
-        whatsappEnabled,
+        gates: paymentProofOperationalGates,
         primaryProvider,
         fallbackProvider,
         operationalAttestation,

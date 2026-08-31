@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   verificarHorarioAtendimento: vi.fn(),
   queueCanonicalPaymentProof: vi.fn(),
   downloadTelegramDocument: vi.fn(),
+  gates: { canonicalIngest: { effective: true } },
 }))
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mocks.createAdminClient }))
@@ -17,6 +18,7 @@ vi.mock('@/lib/config/sistema', () => ({
 vi.mock('@/lib/horarios/verificar', () => ({ verificarHorarioAtendimento: mocks.verificarHorarioAtendimento }))
 vi.mock('@/lib/payment-proofs/canonical-intake', () => ({ queueCanonicalPaymentProof: mocks.queueCanonicalPaymentProof }))
 vi.mock('@/lib/telegram/document-download', () => ({ downloadTelegramDocument: mocks.downloadTelegramDocument }))
+vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: mocks.gates }))
 
 import { POST } from '@/app/api/webhooks/telegram/route'
 
@@ -65,9 +67,9 @@ function adminClient(customer: { id: string; telefone: string | null } | null = 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  mocks.gates.canonicalIngest.effective = true
   mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => {
     if (key === 'TELEGRAM_WEBHOOK_SECRET_TOKEN') return 'secret-token'
-    if (key === 'PAYMENT_PROOF_CANONICAL_INGEST_ENABLED') return 'true'
     return 'bot-token'
   })
   mocks.obterSofiaGlobalChannelConfig.mockResolvedValue({ enabled: false })
@@ -168,12 +170,24 @@ describe('Telegram canonical payment-proof intake', () => {
     expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
   })
 
+  it('does not admit a PDF when the immutable gate is closed despite DB configuration being open', async () => {
+    const { client } = adminClient()
+    mocks.createAdminClient.mockReturnValue(client)
+    mocks.gates.canonicalIngest.effective = false
+
+    const response = await POST(request({ file_id: 'file', mime_type: 'application/pdf', file_size: PDF.length }))
+
+    expect(response.status).toBe(200)
+    expect(mocks.downloadTelegramDocument).not.toHaveBeenCalled()
+    expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
+  })
+
   it('bypasses token lookup and download when canonical intake is disabled, then uses the legacy acknowledgement', async () => {
     const { client } = adminClient()
     mocks.createAdminClient.mockReturnValue(client)
+    mocks.gates.canonicalIngest.effective = false
     mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => {
       if (key === 'TELEGRAM_WEBHOOK_SECRET_TOKEN') return 'secret-token'
-      if (key === 'PAYMENT_PROOF_CANONICAL_INGEST_ENABLED') return undefined
       if (key === 'TELEGRAM_BOT_TOKEN') throw new Error('disabled intake must not look up the bot token')
       return 'unused'
     })

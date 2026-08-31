@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { createClientMock, createAdminClientMock, orderMock } = vi.hoisted(() => ({
+const { createClientMock, createAdminClientMock, orderMock, gates } = vi.hoisted(() => ({
   createClientMock: vi.fn(),
   createAdminClientMock: vi.fn(),
   orderMock: vi.fn(),
+  gates: { sellerReconciliation: { effective: true } },
 }))
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: createClientMock }))
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMock }))
+vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: gates }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 
 import { listEligiblePaymentProofOrders, listPaymentProofsForAdmin, mutatePaymentProofAdmin } from '@/app/actions/payment-proof-admin'

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const leaseToken = /^[0-9a-f]{64}$/i
@@ -70,6 +71,7 @@ export async function getPaymentProofUnresolvedDiagnostics() {
 
 export async function replayPaymentProofDeadLetter(input: unknown) {
   if (!input || typeof input !== 'object') return { success: false as const, error: 'INVALID_REQUEST' }
+  if (!paymentProofOperationalGates.privilegedReplay.effective) return { success: false as const, error: 'FORBIDDEN' }
   const { source, targetId, idempotencyKey } = input as Partial<ReplayInput>
   if ((source !== 'processing_queue' && source !== 'outbox') || typeof targetId !== 'string' || !targetId.trim() || !uuid.test(idempotencyKey || '') || (source === 'processing_queue' ? !uuid.test(targetId) : !/^[1-9]\d*$/.test(targetId))) return { success: false as const, error: 'INVALID_REQUEST' }
   const actor = await privilegedStaff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
@@ -100,6 +102,8 @@ export async function mutatePaymentProofAdmin(input: MutationInput): Promise<Mut
   if (!input || !uuid.test(input.proofId)) return { success: false, error: 'INVALID_PROOF' }
   const actor = await staff(); if (!actor) return { success: false, error: 'FORBIDDEN' }
   if (input.operation === 'restore' && actor.role !== 'admin') return { success: false, error: 'FORBIDDEN' }
+
+  if ((input.operation === 'confirm_amount' || input.operation === 'reconcile') && paymentProofOperationalGates.sellerReconciliation?.effective === false) return { success: false, error: 'FORBIDDEN' }
 
   if (input.operation === 'acquire') {
     const { data, error } = await actor.session.rpc('acquire_payment_proof_lease', { p_proof_id: input.proofId })

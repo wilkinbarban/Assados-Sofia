@@ -13,10 +13,13 @@ const gateVariables = [
 ]
 
 describe('canonical proof rollout', () => {
-  it('is flag gated and fail closed for unsafe whatsapp', () => {
-    expect(intake).toContain('PAYMENT_PROOF_CANONICAL_INGEST_ENABLED')
-    expect(intake).toContain('WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED')
+  it('uses central immutable effective gates and fails closed for unsafe WhatsApp', () => {
+    expect(intake).toContain("from './operational-gates'")
+    expect(intake).toContain('paymentProofOperationalGates.canonicalIngest.effective')
+    expect(intake).toContain('paymentProofOperationalGates.whatsappIngest.effective')
     expect(intake).toMatch(/input\.channel\s*===\s*['"]whatsapp['"]/)
+    expect(intake).not.toContain('PAYMENT_PROOF_CANONICAL_INGEST_ENABLED')
+    expect(intake).not.toContain('WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED')
   })
 
   it('declares maintenance runtime', () => {
