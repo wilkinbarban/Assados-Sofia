@@ -7,6 +7,7 @@ import {
   EVOLUTION_PAYMENT_PROOF_PROFILE,
   evaluateEvolutionPaymentProofCompatibility,
 } from '@/lib/whatsapp/evolution-payment-proof-compatibility'
+import { createPaymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 
 const NOW = new Date('2026-08-28T12:00:00.000Z')
 const attestation = {
@@ -34,6 +35,20 @@ describe('Evolution v2.3.7 payment-proof compatibility gate', () => {
 
   it('opens only when every necessary compatibility condition is exact', () => {
     expect(evaluateEvolutionPaymentProofCompatibility(ready, NOW)).toEqual({ open: true, reason: 'COMPATIBLE' })
+  })
+
+  it('consumes centralized canonical and WhatsApp operational states without weakening attestation checks', () => {
+    const gates = createPaymentProofOperationalGates({
+      PAYMENT_PROOF_CANONICAL_INGEST_ENABLED: 'true',
+      WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED: 'true',
+    })
+    expect(evaluateEvolutionPaymentProofCompatibility({ ...ready, gates }, NOW)).toEqual({ open: true, reason: 'COMPATIBLE' })
+    expect(evaluateEvolutionPaymentProofCompatibility({ ...ready, gates, operationalAttestation: null }, NOW)).toEqual({ open: false, reason: 'ATTESTATION_INVALID' })
+  })
+
+  it('fails closed rather than throwing when supplied gates are incomplete at runtime', () => {
+    const gates = { canonicalIngest: { effective: true, reason: 'ENABLED' } }
+    expect(evaluateEvolutionPaymentProofCompatibility({ ...ready, gates: gates as never }, NOW)).toEqual({ open: false, reason: 'WHATSAPP_FLAG_DISABLED' })
   })
 
   it.each([

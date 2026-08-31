@@ -15,9 +15,12 @@ export type EvolutionCompatibilityReason =
   | 'ATTESTATION_FUTURE'
   | 'ATTESTATION_STALE'
 
+import type { PaymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
+
 export type EvolutionPaymentProofCompatibilityInput = {
-  canonicalEnabled: string | null | undefined
-  whatsappEnabled: string | null | undefined
+  canonicalEnabled?: string | null | undefined
+  whatsappEnabled?: string | null | undefined
+  gates?: Pick<PaymentProofOperationalGates, 'canonicalIngest' | 'whatsappIngest'>
   primaryProvider: string | null | undefined
   fallbackProvider: string | null | undefined
   operationalAttestation: string | null | undefined
@@ -50,8 +53,10 @@ export function evaluateEvolutionPaymentProofCompatibility(
   input: EvolutionPaymentProofCompatibilityInput,
   now = new Date(),
 ): { open: boolean; reason: EvolutionCompatibilityReason } {
-  if (input.canonicalEnabled !== 'true') return { open: false, reason: 'CANONICAL_FLAG_DISABLED' }
-  if (input.whatsappEnabled !== 'true') return { open: false, reason: 'WHATSAPP_FLAG_DISABLED' }
+  const canonicalEnabled = input.gates?.canonicalIngest?.effective === true || (!input.gates && input.canonicalEnabled === 'true')
+  const whatsappEnabled = input.gates?.whatsappIngest?.effective === true || (!input.gates && input.whatsappEnabled === 'true')
+  if (!canonicalEnabled) return { open: false, reason: 'CANONICAL_FLAG_DISABLED' }
+  if (!whatsappEnabled) return { open: false, reason: 'WHATSAPP_FLAG_DISABLED' }
 
   const provider = input.primaryProvider?.trim() || input.fallbackProvider?.trim() || ''
   if (provider.toLowerCase() !== 'evolution') return { open: false, reason: 'PROVIDER_NOT_EVOLUTION' }
