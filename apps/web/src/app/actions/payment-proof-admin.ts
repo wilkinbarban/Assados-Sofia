@@ -56,11 +56,14 @@ function safeError(error: unknown) {
 function diagnostics(value: unknown): Diagnostics | null {
   if (!value || typeof value !== 'object') return null
   const data = value as Record<string, unknown>
-  const count = (key: keyof Pick<Diagnostics, 'processing_queue_dead_letter' | 'outbox_dead_letter' | 'unresolved_dead_letter'>) => typeof data[key] === 'number' && Number.isSafeInteger(data[key]) && data[key] >= 0
+  const processing = data.processing_queue_dead_letter
+  const outbox = data.outbox_dead_letter
+  const unresolved = data.unresolved_dead_letter
   const oldestAt = data.oldest_unresolved_dead_letter_at
   const oldestAge = data.oldest_unresolved_dead_letter_age_seconds
-  if (!count('processing_queue_dead_letter') || !count('outbox_dead_letter') || !count('unresolved_dead_letter') || !(oldestAt === null || typeof oldestAt === 'string') || !(oldestAge === null || typeof oldestAge === 'number' && Number.isSafeInteger(oldestAge) && oldestAge >= 0)) return null
-  return { processing_queue_dead_letter: data.processing_queue_dead_letter, outbox_dead_letter: data.outbox_dead_letter, unresolved_dead_letter: data.unresolved_dead_letter, oldest_unresolved_dead_letter_at: oldestAt, oldest_unresolved_dead_letter_age_seconds: oldestAge }
+  const count = (candidate: unknown): candidate is number => typeof candidate === 'number' && Number.isSafeInteger(candidate) && candidate >= 0
+  if (!count(processing) || !count(outbox) || !count(unresolved) || !(oldestAt === null || typeof oldestAt === 'string') || !(oldestAge === null || count(oldestAge))) return null
+  return { processing_queue_dead_letter: processing, outbox_dead_letter: outbox, unresolved_dead_letter: unresolved, oldest_unresolved_dead_letter_at: oldestAt, oldest_unresolved_dead_letter_age_seconds: oldestAge }
 }
 
 export async function getPaymentProofOperationalGatesDiagnostics() {
