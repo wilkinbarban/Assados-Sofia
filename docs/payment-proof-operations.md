@@ -28,6 +28,21 @@ PDF page-one rendering runs in an isolated worker thread through the determinist
 
 Queue claims retry with bounded backoff. After the fifth unsuccessful attempt, work becomes `dead_letter` and a proof still in an intermediate processing state is returned to `review` for manual-safe handling; it is never auto-approved. Lease-token and attempt checks prevent stale workers from completing newer claims. Replays use the channel delivery key and exact-hash controls: a completed delivery is treated as complete, active queued work remains queued, and a fully persisted intake missing its queue row can be repaired atomically. Preview persistence and advisory attempt keys make repeated processing idempotent rather than creating duplicate render or extraction events.
 
+## Rollout readiness
+
+This is **readiness only**: commands and steps are not executed automatically, and this candidate performs no production operation.
+
+| Stage | Entry evidence and observation | Stop condition |
+|---|---|---|
+| Stage 0 — closed baseline | Verify all six gates report closed with a redacted reason; retain the privileged diagnostic record. | Any gate is unexpectedly effective, malformed, or unreadable. |
+| 1 — canonical intake | Authorize canonical intake only; observe one bounded canonical admission and its aggregate queue state. | Duplicate admission, unsafe state, or unexpected processing. |
+| 2 — WhatsApp intake | After separate explicit authorization and compatibility evidence, authorize WhatsApp intake; canonical and WhatsApp are observed separately and explicitly. | Missing provenance, compatibility failure, or channel cross-over. |
+| 3 — processing | Authorize processing only after the selected intake observation is clean; observe bounded lifecycle aggregates. | Dead-letter growth, stale lease, render/classifier failure, or automatic approval. |
+| 4 — seller reconciliation | Authorize seller reconciliation only after processing evidence is accepted; observe one human-confirmed reconciliation. | Amount/order mismatch, authorization failure, or unexpected state transition. |
+| 5 — recovery readiness | Keep replay and cleanup closed absent separate authorization; verify their redacted closed diagnostics and recovery evidence. | Either recovery gate becomes effective without its separate authorization. |
+
+Close declaratively by recording the stage, evidence, observer, and stop-condition result. If a stop condition occurs, return all gates to the closed baseline; Web recreation occurs only under approved change control, followed by verification rollback against bounded diagnostics. Do not replay, clean up, or otherwise operate production automatically.
+
 ## Database rollout and backups
 
 The following production backups were completed before or during the rollout:

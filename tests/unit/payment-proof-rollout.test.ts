@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const intake = readFileSync('apps/web/src/lib/payment-proofs/canonical-intake.ts', 'utf8')
 const compose = readFileSync('docker-compose.yml', 'utf8')
+const operations = readFileSync('docs/payment-proof-operations.md', 'utf8')
 const gateVariables = [
   'PAYMENT_PROOF_CANONICAL_INGEST_ENABLED',
   'WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED',
@@ -28,5 +29,16 @@ describe('canonical proof rollout', () => {
 
   it.each(gateVariables)('declares %s closed by default in Compose', (key) => {
     expect(compose).toContain(`${key}=${'${'}${key}:-false}`)
+  })
+
+  it('documents closed, sequential readiness without executing production operations', () => {
+    expect(operations).toContain('## Rollout readiness')
+    expect(operations).toMatch(/Stage 0.*closed baseline/i)
+    expect(operations).toMatch(/canonical.*WhatsApp.*separately/i)
+    expect(operations).toMatch(/replay.*cleanup.*closed/i)
+    expect(operations).toMatch(/readiness only/i)
+    expect(operations).toMatch(/not executed automatically/i)
+    expect(operations).toMatch(/Web recreation/i)
+    expect(operations).toMatch(/verification rollback/i)
   })
 })

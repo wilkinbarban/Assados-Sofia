@@ -5,7 +5,8 @@ import PaymentProofAdminPanel, { quarantineCountdown } from '@/components/operat
 const proof = { id: '11111111-1111-4111-8111-111111111111', customer_id: null, customer_name: null, channel: 'telegram', status: 'quarantined', preview_url: '/api/payment-proofs/1/preview', original_url: '/api/payment-proofs/1/original', suggested_cents: 4200, confirmed_cents: null, extraction_confidence: 0.91, purge_after: '2026-09-05T12:00:00.000Z', created_at: '2026-08-26T12:00:00.000Z' }
 const leasedMutation = (proofResult = {}) => vi.fn().mockImplementation((input) => Promise.resolve(input.operation === 'acquire' ? { success: true, lease: { token: 'a'.repeat(64), expiresAt: '2026-08-27T12:05:00Z' } } : { success: true, ...proofResult }))
 const safeDiagnostics = () => Promise.resolve({ success: false, error: 'FORBIDDEN' })
-const panel = (props: React.ComponentProps<typeof PaymentProofAdminPanel>) => <PaymentProofAdminPanel diagnostics={safeDiagnostics} {...props}/>
+const safeGateDiagnostics = () => Promise.resolve({ success: false, error: 'FORBIDDEN' })
+const panel = (props: React.ComponentProps<typeof PaymentProofAdminPanel>) => <PaymentProofAdminPanel diagnostics={safeDiagnostics} gateDiagnostics={safeGateDiagnostics} {...props}/>
 afterEach(cleanup)
 
 describe('Comprovantes PIX admin workflow', () => {
@@ -31,6 +32,14 @@ describe('Comprovantes PIX admin workflow', () => {
     const target=screen.getByRole('textbox',{name:/id alvo/i}); expect(screen.getByRole('button',{name:/reprocessar carta morta/i})).toBeDisabled(); fireEvent.change(target,{target:{value:proof.id}}); fireEvent.click(screen.getByRole('checkbox',{name:/confirmo/i})); fireEvent.click(screen.getByRole('button',{name:/reprocessar carta morta/i})); fireEvent.click(screen.getByRole('button',{name:/confirmar reprocessamento/i}))
     await screen.findByText(/não elegível/i); expect(replay).toHaveBeenCalledWith(expect.objectContaining({source:'processing_queue',targetId:proof.id,idempotencyKey:expect.stringMatching(/^[0-9a-f-]{36}$/i)}))
     fireEvent.change(screen.getByRole('combobox',{name:/fonte/i}),{target:{value:'outbox'}}); fireEvent.change(target,{target:{value:'09'}}); expect(screen.getByRole('button',{name:/reprocessar carta morta/i})).toBeDisabled(); fireEvent.change(target,{target:{value:'9'}}); fireEvent.click(screen.getByRole('checkbox',{name:/confirmo/i})); await waitFor(()=>expect(screen.getByRole('button',{name:/reprocessar carta morta/i})).toBeEnabled())
+  })
+  it('renders redacted operational gate state for privileged staff and hides it from vendedores', async () => {
+    const gateDiagnostics = vi.fn().mockResolvedValue({ success: true, data: { canonicalIngest: { effective: false, reason: 'DISABLED' }, whatsappIngest: { effective: false, reason: 'MISSING' }, processing: { effective: false, reason: 'MALFORMED' }, sellerReconciliation: { effective: false, reason: 'DISABLED' }, privilegedReplay: { effective: false, reason: 'UNREADABLE' }, cleanup: { effective: false, reason: 'DISABLED' } } })
+    render(panel({initialProofs:[proof],gateDiagnostics}))
+    expect(await screen.findByLabelText(/portões operacionais/i)).toHaveTextContent(/entrada canônica: fechada.*disabled/i)
+    expect(screen.getByLabelText(/portões operacionais/i)).toHaveTextContent(/limpeza: fechada.*disabled/i)
+    cleanup(); render(panel({initialProofs:[proof],role:'vendedor',gateDiagnostics}))
+    expect(screen.queryByLabelText(/portões operacionais/i)).not.toBeInTheDocument(); expect(gateDiagnostics).toHaveBeenCalledTimes(1)
   })
   it('hides diagnostics and replay controls from vendedores', () => { render(panel({initialProofs:[proof],role:'vendedor',replay:vi.fn()})); expect(screen.queryByText(/não resolvidos/i)).not.toBeInTheDocument(); expect(screen.queryByRole('button', { name: /reprocessar/i })).not.toBeInTheDocument() })
 })

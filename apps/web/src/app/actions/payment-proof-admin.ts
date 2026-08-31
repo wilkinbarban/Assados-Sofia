@@ -32,6 +32,7 @@ type MutationResult = { success: true; proof?: { status: string; purge_after: st
 type Diagnostics = { processing_queue_dead_letter: number; outbox_dead_letter: number; unresolved_dead_letter: number; oldest_unresolved_dead_letter_at: string | null; oldest_unresolved_dead_letter_age_seconds: number | null }
 type ReplayInput = { source: 'processing_queue' | 'outbox'; targetId: string; idempotencyKey: string }
 type ReplayOutcome = 'replayed' | 'ineligible' | 'idempotency_conflict' | 'invalid_request'
+type GateDiagnostics = { canonicalIngest: { effective: boolean; reason: string }; whatsappIngest: { effective: boolean; reason: string }; processing: { effective: boolean; reason: string }; sellerReconciliation: { effective: boolean; reason: string }; privilegedReplay: { effective: boolean; reason: string }; cleanup: { effective: boolean; reason: string } }
 
 async function staff(): Promise<Actor | null> {
   const session = await createClient()
@@ -60,6 +61,20 @@ function diagnostics(value: unknown): Diagnostics | null {
   const oldestAge = data.oldest_unresolved_dead_letter_age_seconds
   if (!count('processing_queue_dead_letter') || !count('outbox_dead_letter') || !count('unresolved_dead_letter') || !(oldestAt === null || typeof oldestAt === 'string') || !(oldestAge === null || typeof oldestAge === 'number' && Number.isSafeInteger(oldestAge) && oldestAge >= 0)) return null
   return { processing_queue_dead_letter: data.processing_queue_dead_letter, outbox_dead_letter: data.outbox_dead_letter, unresolved_dead_letter: data.unresolved_dead_letter, oldest_unresolved_dead_letter_at: oldestAt, oldest_unresolved_dead_letter_age_seconds: oldestAge }
+}
+
+export async function getPaymentProofOperationalGatesDiagnostics() {
+  const actor = await privilegedStaff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+  const gates = paymentProofOperationalGates
+  const data: GateDiagnostics = {
+    canonicalIngest: { effective: gates.canonicalIngest.effective, reason: gates.canonicalIngest.reason },
+    whatsappIngest: { effective: gates.whatsappIngest.effective, reason: gates.whatsappIngest.reason },
+    processing: { effective: gates.processing.effective, reason: gates.processing.reason },
+    sellerReconciliation: { effective: gates.sellerReconciliation.effective, reason: gates.sellerReconciliation.reason },
+    privilegedReplay: { effective: gates.privilegedReplay.effective, reason: gates.privilegedReplay.reason },
+    cleanup: { effective: gates.cleanup.effective, reason: gates.cleanup.reason },
+  }
+  return { success: true as const, data }
 }
 
 export async function getPaymentProofUnresolvedDiagnostics() {
