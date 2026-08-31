@@ -19,9 +19,14 @@ describe('canonical web payment-proof integration', () => {
     expect(intake).toContain("createHash('sha256').update(input.bytes)")
   })
 
-  it('only exposes admitted previews and projects them after human admission', () => {
-    expect(preview).toContain("status")
-    expect(preview).toContain("proof.status!=='admitted'")
-    expect(admin).toContain("project_payment_proof_to_chat")
+  it('keeps confirmation and reconciliation leased, while chat visibility remains DB-authoritative', () => {
+    expect(admin).toContain("rpc = 'confirm_payment_proof_amount'")
+    expect(admin).toContain("rpc = 'reconcile_payment_proof'")
+    expect(admin).toContain('p_lease_token: input.leaseToken')
+    expect(admin).toContain("rpc('acquire_payment_proof_lease'")
+    expect(admin).not.toContain('project_payment_proof_to_chat')
+    expect(preview).toMatch(/proof\.status\s*!==\s*['"]admitted['"]/)
+    expect(preview).toMatch(/from\(['"]payment_proofs['"]\)\.select\(['"]id,customer_id,status,preview_storage_key['"]\)/)
+    expect(preview).not.toContain('project_payment_proof_to_chat')
   })
 })

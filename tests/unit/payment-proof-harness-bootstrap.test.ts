@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const testsDir = join(process.cwd(), 'supabase/tests')
@@ -7,10 +7,55 @@ const harnesses = [
   ...readdirSync(testsDir).filter((name) => name.startsWith('payment_proof_') && name.endsWith('.sql')),
   'manual_external_payment.sql',
 ]
+const forwardMigrationImports = new Map([
+  ['payment_proof_dead_letter_replay.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828380000_payment_proof_dead_letter_replay.sql']],
+  ['payment_proof_leased_amount_confirmation.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828360000_payment_proof_leased_amount_confirmation.sql']],
+  ['payment_proof_observability_replay.sql', ['20260828370000_payment_proof_unresolved_diagnostics.sql']],
+  ['payment_proof_operational_metrics.sql', ['20260828370000_payment_proof_unresolved_diagnostics.sql']],
+  ['payment_proof_order_lock.sql', ['20260828340000_payment_proof_operator_leases.sql']],
+  ['payment_proof_reconciliation.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828350000_payment_proof_exact_reconciliation_fingerprint.sql']],
+])
+const importPattern = /^\s*\\ir?\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:--.*)?$/gm
+
+function migrationImports(sql: string) {
+  return [...sql.matchAll(importPattern)]
+    .map((match) => match[1] ?? match[2] ?? match[3])
+    .filter((path) => normalize(path).split('/').includes('migrations'))
+    .map((path) => normalize(path).split('/').pop())
+}
+
+function isAllowedSuiteImport(suite: string, migration: string) {
+  return forwardMigrationImports.get(suite)?.includes(migration) ?? false
+}
 
 describe('payment proof SQL harness bootstrap', () => {
-  it.each(harnesses)('%s relies exclusively on runner-applied migrations', (name) => {
+  it.each(harnesses)('%s imports only its explicitly allowlisted forward migrations', (name) => {
     const sql = readFileSync(join(testsDir, name), 'utf8')
-    expect(sql).not.toMatch(/^\\ir?\s+.*migrations\//m)
+    expect(migrationImports(sql)).toEqual(forwardMigrationImports.get(name) ?? [])
+  })
+
+  it('allows only the isolated forward migrations 34 through 38', () => {
+    const allowed = new Set([...forwardMigrationImports.values()].flat())
+    expect([...allowed]).toEqual(expect.arrayContaining([
+      '20260828340000_payment_proof_operator_leases.sql',
+      '20260828350000_payment_proof_exact_reconciliation_fingerprint.sql',
+      '20260828360000_payment_proof_leased_amount_confirmation.sql',
+      '20260828370000_payment_proof_unresolved_diagnostics.sql',
+      '20260828380000_payment_proof_dead_letter_replay.sql',
+    ]))
+    expect([...allowed].every((name) => /^202608283[4-8]0000_/.test(name))).toBe(true)
+    expect([...allowed]).not.toContain('20260826170000_payment_proof_chat_projection.sql')
+  })
+
+  it('rejects arbitrary, historical, and cross-suite migration imports', () => {
+    expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', '20260826170000_payment_proof_chat_projection.sql')).toBe(false)
+    expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', 'arbitrary.sql')).toBe(false)
+    expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', '20260828380000_payment_proof_dead_letter_replay.sql')).toBe(false)
+    expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', '20260828350000_payment_proof_exact_reconciliation_fingerprint.sql')).toBe(true)
+  })
+
+  it('detects indented, quoted, and trailing-comment migration imports', () => {
+    expect(migrationImports('  \\ir "../migrations/example.sql" -- required')).toEqual(['example.sql'])
+    expect(migrationImports("\t\\i '../migrations/other.sql'")).toEqual(['other.sql'])
   })
 })

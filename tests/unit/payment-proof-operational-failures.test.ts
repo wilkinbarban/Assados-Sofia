@@ -1,8 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mocks = vi.hoisted(() => ({ render: vi.fn(), classify: vi.fn() }))
+const mocks = vi.hoisted(() => ({
+  render: vi.fn(),
+  classify: vi.fn(),
+  gates: { canonicalIngest: { effective: true, reason: 'ENABLED' as const }, whatsappIngest: { effective: true, reason: 'ENABLED' as const } },
+}))
 vi.mock('@/lib/payment-proofs/render-png', () => ({ renderPaymentProofPageOne: mocks.render }))
 vi.mock('@/lib/payment-proofs/advisory-extraction', () => ({ classifyPaymentProof: mocks.classify }))
+vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: mocks.gates }))
 
 import { processCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 
@@ -28,7 +33,6 @@ function expectNoProcessingSideEffects(rpc: ReturnType<typeof vi.fn>) {
 describe('payment-proof operational failure recording', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    process.env.PAYMENT_PROOF_CANONICAL_INGEST_ENABLED = 'true'
   })
 
   it('accepts atomic admission without invoking worker-owned processing or failure recording', async () => {
