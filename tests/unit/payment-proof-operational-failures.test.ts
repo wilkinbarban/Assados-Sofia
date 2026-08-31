@@ -6,16 +6,23 @@ vi.mock('@/lib/payment-proofs/advisory-extraction', () => ({ classifyPaymentProo
 
 import { processCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 
-function input() {
-  const rpc = vi.fn(async (name: string) => {
-    if (name === 'admit_and_enqueue_payment_proof') return { data: { proof_id: 'proof-1', duplicate: false }, error: null }
-    if (name === 'record_payment_proof_operational_failure') return { data: true, error: null }
-    return { data: true, error: null }
-  })
+function input(admission = { data: { proof_id: 'proof-1', duplicate: false }, error: null as unknown }) {
+  const rpc = vi.fn(async (name: string) => name === 'admit_and_enqueue_payment_proof'
+    ? admission
+    : { data: true, error: null })
+  const upload = vi.fn().mockResolvedValue({ error: null })
+  const remove = vi.fn().mockResolvedValue({ error: null })
   return {
-    value: { channel: 'web' as const, deliveryId: 'delivery', bytes: new Uint8Array(Buffer.from('%PDF-x')), mimeType: 'application/pdf', db: { rpc }, storage: { upload: vi.fn().mockResolvedValue({ error: null }), remove: vi.fn() } },
+    value: { channel: 'web' as const, deliveryId: 'delivery', bytes: new Uint8Array(Buffer.from('%PDF-x')), mimeType: 'application/pdf', db: { rpc }, storage: { upload, remove } },
     rpc,
+    remove,
   }
+}
+
+function expectNoProcessingSideEffects(rpc: ReturnType<typeof vi.fn>) {
+  expect(mocks.render).not.toHaveBeenCalled()
+  expect(mocks.classify).not.toHaveBeenCalled()
+  expect(rpc.mock.calls.filter(([name]) => name === 'record_payment_proof_operational_failure')).toHaveLength(0)
 }
 
 describe('payment-proof operational failure recording', () => {
@@ -24,30 +31,35 @@ describe('payment-proof operational failure recording', () => {
     process.env.PAYMENT_PROOF_CANONICAL_INGEST_ENABLED = 'true'
   })
 
-  it('records only fixed render-stage arguments and returns a sanitized retryable result', async () => {
-    mocks.render.mockRejectedValue(new Error('sensitive document detail'))
+  it('accepts atomic admission without invoking worker-owned processing or failure recording', async () => {
     const { value, rpc } = input()
-    await expect(processCanonicalPaymentProof(value)).resolves.toEqual({ status: 'retryable', error: 'PAYMENT_PROOF_RENDER_FAILED' })
-    expect(rpc).toHaveBeenCalledWith('record_payment_proof_operational_failure', { p_proof_id: 'proof-1', p_stage: 'render' })
-    expect(JSON.stringify(rpc.mock.calls)).not.toContain('sensitive document detail')
+
+    await expect(processCanonicalPaymentProof(value)).resolves.toEqual({
+      status: 'accepted', proofId: 'proof-1', storageKey: expect.any(String),
+    })
+    expect(rpc).toHaveBeenCalledOnce()
+    expect(rpc).toHaveBeenCalledWith('admit_and_enqueue_payment_proof', expect.any(Object))
+    expectNoProcessingSideEffects(rpc)
   })
 
-  it('does not expose a recorder failure', async () => {
-    mocks.render.mockRejectedValue(new Error('private'))
-    const { value, rpc } = input()
-    rpc.mockImplementation(async (name: string) => name === 'record_payment_proof_operational_failure'
-      ? { data: null, error: { message: 'database detail' } }
-      : name === 'admit_and_enqueue_payment_proof'
-        ? { data: { proof_id: 'proof-1', duplicate: false }, error: null }
-        : { data: true, error: null })
-    await expect(processCanonicalPaymentProof(value)).resolves.toEqual({ status: 'retryable', error: 'PAYMENT_PROOF_RENDER_FAILED' })
+  it('returns a sanitized retryable intake result without processing side effects', async () => {
+    const { value, rpc, remove } = input({ data: null, error: { message: 'private enqueue detail' } })
+
+    await expect(processCanonicalPaymentProof(value)).resolves.toEqual({
+      status: 'retryable', error: 'PAYMENT_PROOF_INTAKE_FAILED',
+    })
+    expect(remove).toHaveBeenCalledOnce()
+    expect(JSON.stringify(rpc.mock.calls)).not.toContain('private enqueue detail')
+    expectNoProcessingSideEffects(rpc)
   })
 
-  it('does not invoke the recorder when rendering succeeds', async () => {
-    mocks.render.mockResolvedValue({ png: new Uint8Array([1]), sha256: 'a'.repeat(64), width: 1, height: 1, version: 'v' })
-    mocks.classify.mockResolvedValue({})
-    const { value, rpc } = input()
-    await processCanonicalPaymentProof(value)
-    expect(rpc.mock.calls.filter(([name]) => name === 'record_payment_proof_operational_failure')).toHaveLength(0)
+  it('preserves a supported intake rejection without recording a processing failure', async () => {
+    const { value, rpc, remove } = input({ data: null, error: { message: 'PAYMENT_PROOF_ORDER_INELIGIBLE' } })
+
+    await expect(processCanonicalPaymentProof(value)).resolves.toEqual({
+      status: 'rejected', error: 'PAYMENT_PROOF_ORDER_INELIGIBLE',
+    })
+    expect(remove).toHaveBeenCalledOnce()
+    expectNoProcessingSideEffects(rpc)
   })
 })

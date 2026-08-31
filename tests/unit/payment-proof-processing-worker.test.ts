@@ -46,6 +46,7 @@ describe('payment-proof processing worker', () => {
       expect(upload).toHaveBeenCalledTimes(state.preview ? 0 : 1)
       if (!state.preview) expect(upload.mock.calls[0][0]).toMatch(/^proofs\/private\/[a-f0-9]{64}\.png$/)
       expect(classify).toHaveBeenCalledTimes(state.advisory ? 0 : 1)
+      if (!state.advisory) expect(classify).toHaveBeenCalledWith(expect.objectContaining({ extractedText: expect.any(String) }))
       expect(rpc.mock.calls.filter(([name]) => name === 'record_payment_proof_render')).toHaveLength(state.preview ? 0 : 1)
       expect(rpc.mock.calls.filter(([name]) => name === 'record_payment_proof_advisory')).toHaveLength(state.advisory ? 0 : 1)
     }
@@ -63,6 +64,16 @@ describe('payment-proof processing worker', () => {
 
     await expect(processPaymentProofJob({ proofId:'proof-1', db:client as any, render, classify:classify as any }))
       .resolves.toEqual({ ok:false, stage:'load' })
+  })
+
+  it.each([
+    ['render', vi.fn(async () => { throw new Error('private render detail') }), classify],
+    ['classifier', render, vi.fn(async () => { throw new Error('private classifier detail') })],
+  ] as const)('keeps worker-owned %s failures sanitized and stage-specific', async (stage, stageRender, stageClassify) => {
+    const { client } = db()
+
+    await expect(processPaymentProofJob({ proofId:'proof-1', db:client as any, render:stageRender, classify:stageClassify as any }))
+      .resolves.toEqual({ ok:false, stage })
   })
 
   it('keeps the production worker runner outside webpack URL transformation', async () => {

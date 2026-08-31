@@ -52,7 +52,7 @@ function adminClient(options: { customer?: { id: string } | null; customerLookup
 beforeEach(() => {
   vi.clearAllMocks(); mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => config[key] ?? null)
   mocks.downloadEvolutionPdf.mockResolvedValue({ ok: true, bytes: PDF, mimeType: 'application/pdf' })
-  mocks.processCanonicalPaymentProof.mockResolvedValue({ status: 'review', proofId: 'proof-1' })
+  mocks.processCanonicalPaymentProof.mockResolvedValue({ status: 'accepted', proofId: 'proof-1' })
 })
 
 describe('Evolution canonical payment-proof intake', () => {
@@ -165,7 +165,7 @@ describe('Evolution canonical payment-proof intake', () => {
   })
 
   it.each([
-    [{ status: 'duplicate' }, 200, 'payment_proof_duplicate'], [{ status: 'review' }, 200, 'payment_proof_received'], [{ status: 'retryable' }, 503, 'payment_proof_retryable'], [{ status: 'rejected' }, 200, 'payment_proof_rejected'],
+    [{ status: 'duplicate' }, 200, 'payment_proof_duplicate'], [{ status: 'accepted' }, 200, 'payment_proof_received'], [{ status: 'retryable' }, 503, 'payment_proof_retryable'], [{ status: 'rejected' }, 200, 'payment_proof_rejected'],
   ])('maps canonical outcomes without approval or order association', async (processed, status, resultStatus) => {
     const { client } = adminClient(); mocks.createAdminClient.mockReturnValue(client); mocks.processCanonicalPaymentProof.mockResolvedValue(processed)
     const response = await POST(request()); expect(response.status).toBe(status); expect(await response.json()).toEqual({ success: status === 200, status: resultStatus })
