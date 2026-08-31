@@ -19,7 +19,11 @@ export async function deliverPaymentProofAlerts(): Promise<AlertDeliveryResult> 
     const { data: completed, error: completionError } = await client.rpc('complete_payment_proof_admin_alert', { p_id: claim.id, p_success: success })
     if (completionError || completed !== true) throw new Error('ALERT_DELIVERY_UNAVAILABLE')
     if (success) delivered++
-    else failed++
+    else {
+      const { data: recorded, error: recordError } = await client.rpc('record_payment_proof_alert_delivery_failure', { p_alert_id: claim.id })
+      if (recordError || recorded !== true) throw new Error('ALERT_DELIVERY_UNAVAILABLE')
+      failed++
+    }
   }
   return { reconciled: Number(reconciled) || 0, claimed: Array.isArray(claims) ? Math.min(claims.length, CLAIM_LIMIT) : 0, delivered, failed }
 }

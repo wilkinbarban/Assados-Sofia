@@ -26,7 +26,7 @@ export function evaluatePaymentProofAlerts(metrics: PaymentProofOperationalMetri
   const processing = Math.max(metrics.failures.render_last_60m, metrics.failures.classifier_last_60m)
   const maintenanceCount = Math.max(metrics.maintenance.age_seconds ?? 0, metrics.maintenance.consecutive_failures)
   return [
-    { family: 'dead_letter_growth', active: metrics.outbox.dead_letter_last_60m >= thresholds.deadLetter, count: metrics.outbox.dead_letter_last_60m, severity: metrics.outbox.dead_letter_last_60m },
+    { family: 'dead_letter_growth', active: metrics.outbox.unresolved_dead_letter >= thresholds.deadLetter, count: metrics.outbox.unresolved_dead_letter, severity: metrics.outbox.unresolved_dead_letter },
     { family: 'expired_quarantines', active: metrics.quarantine.expired >= thresholds.expired, count: metrics.quarantine.expired, severity: metrics.quarantine.expired },
     { family: 'repeated_processing_failures', active: processing >= thresholds.processingFailures, count: processing, severity: processing },
     { family: 'maintenance_unhealthy', active: metrics.maintenance.age_seconds === null || metrics.maintenance.age_seconds >= thresholds.maintenanceStaleSeconds || metrics.maintenance.consecutive_failures >= thresholds.maintenanceFailures, count: maintenanceCount, severity: metrics.maintenance.consecutive_failures },

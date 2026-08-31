@@ -12,7 +12,7 @@ import { parsePaymentProofOperationalMetrics } from '@/lib/payment-proofs/operat
 
 const valid = {
   lifecycle: { received: 0, identity_pending: 0, processing: 0, review: 0, admitted: 0, quarantined: 0, purging: 0, duplicate: 0, purged: 0 },
-  outbox: { pending: 0, claimed: 0, completed: 0, dead_letter: 0, attempts: { zero: 0, one: 0, two: 0, three_to_four: 0, five_plus: 0 }, dead_letter_last_60m: 0 },
+  outbox: { pending: 0, claimed: 0, completed: 0, dead_letter: 0, attempts: { zero: 0, one: 0, two: 0, three_to_four: 0, five_plus: 0 }, dead_letter_last_60m: 0, unresolved_dead_letter: 0, oldest_unresolved_dead_letter_at: null, oldest_unresolved_dead_letter_age_seconds: null },
   quarantine: { total: 0, expired: 0 },
   purge: { failures_last_60m: 0 },
   failures: { render_last_60m: 0, classifier_last_60m: 0 },
@@ -30,6 +30,10 @@ describe('payment-proof operational metrics', () => {
     expect(() => parsePaymentProofOperationalMetrics({ ...valid, proof_id: 'forbidden' })).toThrow()
     expect(() => parsePaymentProofOperationalMetrics({ ...valid, lifecycle: { ...valid.lifecycle, received: -1 } })).toThrow()
     expect(() => parsePaymentProofOperationalMetrics({ ...valid, maintenance: { ...valid.maintenance, age_seconds: 1.5 } })).toThrow()
+    expect(() => parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, unresolved_dead_letter: '1' } })).toThrow()
+    expect(() => parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, oldest_unresolved_dead_letter_at: 1 } })).toThrow()
+    expect(() => parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, oldest_unresolved_dead_letter_age_seconds: '60' } })).toThrow()
+    expect(() => parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, unresolved_dead_letter: 1 } })).toThrow()
   })
 
   it('authenticates before creating the operational client', async () => {

@@ -1,5 +1,6 @@
+\ir ../migrations/20260828370000_payment_proof_unresolved_diagnostics.sql
 begin;
-select plan(48);
+select plan(51);
 
 select has_column('public','payment_proof_outbox','dead_lettered_at','dead-letter transition timestamp exists');
 select has_function('public','record_payment_proof_operational_failure',array['uuid','text'],'fixed failure recorder exists');
@@ -36,7 +37,7 @@ reset role;
 
 -- The migration owner is the authorized fixture role for private state; service_role
 -- remains unable to inspect either private table directly.
-truncate table private.payment_proof_operational_failures, public.payment_proof_outbox, public.payment_proof_events, public.payment_proof_hash_tombstones, public.payment_proofs restart identity cascade;
+truncate table private.payment_proof_operational_failures, private.payment_proof_processing_queue, public.payment_proof_outbox, public.payment_proof_events, public.payment_proof_hash_tombstones, public.payment_proofs restart identity cascade;
 insert into public.payment_proofs(id,channel,delivery_key,status,original_storage_key,preview_storage_key,size_bytes,quarantined_at,purge_after) values
  ('91919191-9191-4191-8191-919191919101','web','metrics-received','received','synthetic/received.pdf',null,1,null,null),
  ('91919191-9191-4191-8191-919191919102','web','metrics-quarantine-expired','quarantined','synthetic/expired.pdf','synthetic/expired-preview.pdf',1,now()-interval '2 days',now()-interval '1 day'),
@@ -76,21 +77,27 @@ select is((select event_type||'/'||coalesce(reason,'') from public.payment_proof
 select ok((select status='quarantined' and purge_after>now() and preview_storage_key is not null from public.payment_proofs where delivery_key='metrics-purge-failure'),'failed purge returns to quarantine with retry semantics');
 select ok(not exists(select 1 from public.payment_proof_events where coalesce(reason,'') like '%sensitive%'),'purge failure does not persist arbitrary error detail');
 
-truncate table private.payment_proof_operational_failures, public.payment_proof_outbox, public.payment_proof_events, public.payment_proof_hash_tombstones, public.payment_proofs restart identity cascade;
+truncate table private.payment_proof_operational_failures, private.payment_proof_processing_queue, public.payment_proof_outbox, public.payment_proof_events, public.payment_proof_hash_tombstones, public.payment_proofs restart identity cascade;
 insert into public.payment_proofs(id,channel,delivery_key,status,original_storage_key,size_bytes,quarantined_at,purge_after) values
  ('92929292-9292-4292-8292-929292929101','web','metric-received','received','synthetic/a.pdf',1,null,null),
- ('92929292-9292-4292-8292-929292929102','web','metric-quarantined','quarantined','synthetic/b.pdf',1,now()-interval '2 days',now()-interval '1 day');
+ ('92929292-9292-4292-8292-929292929102','web','metric-quarantined','quarantined','synthetic/b.pdf',1,now()-interval '2 days',now()-interval '1 day'),
+ ('92929292-9292-4292-8292-929292929103','web','metric-queue-dead','review','synthetic/c.pdf',1,null,null);
 insert into public.payment_proof_outbox(proof_id,event_type,channel,status,attempts,dead_lettered_at) values
  ('92929292-9292-4292-8292-929292929101','metric-pending','web','pending',0,null),
  ('92929292-9292-4292-8292-929292929102','metric-dead','web','dead_letter',5,now());
+insert into private.payment_proof_processing_queue(proof_id,status,attempts,dead_lettered_at) values
+ ('92929292-9292-4292-8292-929292929103','dead_letter',5,now()-interval '2 hours') on conflict(proof_id) do update set status='dead_letter',attempts=5,dead_lettered_at=excluded.dead_lettered_at;
 insert into public.payment_proof_events(proof_id,event_type,source,previous_status,result_status,reason)
  values('92929292-9292-4292-8292-929292929102','purge_failed','worker','purging','quarantined','storage_delete_failed');
 reset role;
 set local role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
 select ok(public.record_payment_proof_operational_failure('92929292-9292-4292-8292-929292929101','render') and public.record_payment_proof_operational_failure('92929292-9292-4292-8292-929292929102','classifier'),'fixed failure counters accept seeded stages');
-select is(public.get_payment_proof_operational_metrics()->'lifecycle','{"received":1,"identity_pending":0,"processing":0,"review":0,"admitted":0,"quarantined":1,"purging":0,"duplicate":0,"purged":0}'::jsonb,'lifecycle metrics use fixed values and zero-filled keys');
-select is(public.get_payment_proof_operational_metrics()->'outbox','{"pending":1,"claimed":0,"completed":0,"dead_letter":1,"attempts":{"zero":1,"one":0,"two":0,"three_to_four":0,"five_plus":1},"dead_letter_last_60m":1}'::jsonb,'outbox and attempt metrics use fixed values and zero-filled keys');
+select is(public.get_payment_proof_operational_metrics()->'lifecycle','{"received":1,"identity_pending":0,"processing":0,"review":1,"admitted":0,"quarantined":1,"purging":0,"duplicate":0,"purged":0}'::jsonb,'lifecycle metrics use fixed values and zero-filled keys');
+select is(public.get_payment_proof_operational_metrics()->'outbox'->>'unresolved_dead_letter','2','unresolved dead-letter metric aggregates both sources');
+select ok(public.get_payment_proof_operational_metrics()->'outbox'->>'oldest_unresolved_dead_letter_at' is not null,'oldest unresolved dead-letter timestamp is reported');
+select ok((public.get_payment_proof_operational_metrics()->'outbox'->>'oldest_unresolved_dead_letter_age_seconds')::bigint>=7200,'oldest unresolved dead-letter age is reported');
+select is((public.get_payment_proof_operational_metrics()->'outbox') - array['unresolved_dead_letter','oldest_unresolved_dead_letter_at','oldest_unresolved_dead_letter_age_seconds'],'{"pending":1,"claimed":0,"completed":0,"dead_letter":1,"attempts":{"zero":1,"one":0,"two":0,"three_to_four":0,"five_plus":1},"dead_letter_last_60m":1}'::jsonb,'outbox and attempt metrics use fixed values and zero-filled keys');
 select is(public.get_payment_proof_operational_metrics()->'quarantine','{"total":1,"expired":1}'::jsonb,'quarantine metrics expose fixed aggregate values');
 select is(public.get_payment_proof_operational_metrics()->'purge','{"failures_last_60m":1}'::jsonb,'purge metrics expose fixed aggregate values');
 select is(public.get_payment_proof_operational_metrics()->'failures','{"render_last_60m":1,"classifier_last_60m":1}'::jsonb,'failure metrics expose fixed aggregate values');
