@@ -5,6 +5,10 @@ const migration = readFileSync(
   'supabase/migrations/20260828230000_payment_proof_order_lock.sql',
   'utf8',
 )
+const leases = readFileSync(
+  'supabase/migrations/20260828340000_payment_proof_operator_leases.sql',
+  'utf8',
+)
 const pedidos = readFileSync('apps/web/src/app/actions/pedidos.ts', 'utf8')
 const intake = readFileSync('apps/web/src/lib/payment-proofs/canonical-intake.ts', 'utf8')
 const dashboard = readFileSync(
@@ -37,6 +41,15 @@ describe('payment-proof-driven order lock', () => {
     expect(pedidos).toContain('list_order_payment_proof_locks')
     expect(dashboard).toContain('Comprovante recebido')
     expect(dashboard).toContain('payment_review?.locked')
+  })
+
+  it('serializes operator capability before proof leases and proof/order mutations', () => {
+    expect(leases).toContain('require_active_payment_proof_actor_role()')
+    expect(leases).toMatch(/from public\.perfis p[\s\S]*for update/)
+    expect(leases.indexOf('require_active_payment_proof_actor_role();')).toBeLessThan(
+      leases.indexOf('assert_payment_proof_lease(p_proof_id,p_lease_token)'),
+    )
+    expect(leases).toContain('from public.payment_proofs where id=p_proof_id for update')
   })
 
   it('keeps order-intent RESTRICT semantics while total purge removes intents first', () => {
