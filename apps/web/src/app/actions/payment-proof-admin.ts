@@ -28,6 +28,9 @@ type Actor = { session: Awaited<ReturnType<typeof createClient>>; role: 'admin' 
 type Operation = 'acquire' | 'release' | 'confirm_amount' | 'reject' | 'restore' | 'reconcile'
 type MutationInput = { operation: Operation; proofId: string; value?: string | number; orderIds?: string[]; leaseToken?: string }
 type MutationResult = { success: true; proof?: { status: string; purge_after: string | null }; lease?: { token: string; expiresAt: string } } | { success: false; error: string }
+type Diagnostics = { processing_queue_dead_letter: number; outbox_dead_letter: number; unresolved_dead_letter: number; oldest_unresolved_dead_letter_at: string | null; oldest_unresolved_dead_letter_age_seconds: number | null }
+type ReplayInput = { source: 'processing_queue' | 'outbox'; targetId: string; idempotencyKey: string }
+type ReplayOutcome = 'replayed' | 'ineligible' | 'idempotency_conflict' | 'invalid_request'
 
 async function staff(): Promise<Actor | null> {
   const session = await createClient()
@@ -38,9 +41,41 @@ async function staff(): Promise<Actor | null> {
   return { session, role: profile.funcao as Actor['role'] }
 }
 
+async function privilegedStaff(): Promise<Actor | null> {
+  const actor = await staff()
+  return actor && (actor.role === 'admin' || actor.role === 'supervisor') ? actor : null
+}
+
 function safeError(error: unknown) {
   const message = error && typeof error === 'object' && 'message' in error ? String(error.message) : ''
   return safeErrors.has(message) ? message : 'PAYMENT_PROOF_OPERATION_UNAVAILABLE'
+}
+
+function diagnostics(value: unknown): Diagnostics | null {
+  if (!value || typeof value !== 'object') return null
+  const data = value as Record<string, unknown>
+  const count = (key: keyof Pick<Diagnostics, 'processing_queue_dead_letter' | 'outbox_dead_letter' | 'unresolved_dead_letter'>) => typeof data[key] === 'number' && Number.isSafeInteger(data[key]) && data[key] >= 0
+  const oldestAt = data.oldest_unresolved_dead_letter_at
+  const oldestAge = data.oldest_unresolved_dead_letter_age_seconds
+  if (!count('processing_queue_dead_letter') || !count('outbox_dead_letter') || !count('unresolved_dead_letter') || !(oldestAt === null || typeof oldestAt === 'string') || !(oldestAge === null || typeof oldestAge === 'number' && Number.isSafeInteger(oldestAge) && oldestAge >= 0)) return null
+  return { processing_queue_dead_letter: data.processing_queue_dead_letter, outbox_dead_letter: data.outbox_dead_letter, unresolved_dead_letter: data.unresolved_dead_letter, oldest_unresolved_dead_letter_at: oldestAt, oldest_unresolved_dead_letter_age_seconds: oldestAge }
+}
+
+export async function getPaymentProofUnresolvedDiagnostics() {
+  const actor = await privilegedStaff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+  const { data, error } = await actor.session.rpc('get_payment_proof_unresolved_diagnostics')
+  const safe = diagnostics(data)
+  return error || !safe ? { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' } : { success: true as const, data: safe }
+}
+
+export async function replayPaymentProofDeadLetter(input: unknown) {
+  if (!input || typeof input !== 'object') return { success: false as const, error: 'INVALID_REQUEST' }
+  const { source, targetId, idempotencyKey } = input as Partial<ReplayInput>
+  if ((source !== 'processing_queue' && source !== 'outbox') || typeof targetId !== 'string' || !targetId.trim() || !uuid.test(idempotencyKey || '') || (source === 'processing_queue' ? !uuid.test(targetId) : !/^[1-9]\d*$/.test(targetId))) return { success: false as const, error: 'INVALID_REQUEST' }
+  const actor = await privilegedStaff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+  const { data, error } = await actor.session.rpc('replay_payment_proof_dead_letter', { p_source: source, p_target_id: targetId, p_idempotency_key: idempotencyKey })
+  const outcome = data && typeof data === 'object' ? (data as { outcome?: unknown }).outcome : null
+  return error || !['replayed', 'ineligible', 'idempotency_conflict', 'invalid_request'].includes(outcome as string) ? { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' } : { success: true as const, outcome: outcome as ReplayOutcome }
 }
 
 export async function listPaymentProofsForAdmin() {
