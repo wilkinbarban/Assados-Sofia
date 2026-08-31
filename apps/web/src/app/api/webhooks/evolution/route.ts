@@ -155,7 +155,7 @@ export async function POST(request: Request) {
             const declaredSize = decodeEvolutionDocumentSize(documentMessage.fileLength)
             if (declaredSize === null) {
               console.warn('[Evolution Webhook] CANONICAL_DOCUMENT_SIZE_REJECTED')
-              return NextResponse.json({ success: true, status: 'payment_proof_rejected' })
+              return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
             }
 
             const { data: canonicalCustomer, error: canonicalCustomerError } = await supabaseAdmin
@@ -214,7 +214,7 @@ export async function POST(request: Request) {
                 }
                 return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
               }
-              return NextResponse.json({ success: true, status: 'payment_proof_rejected' }, { status: 200 })
+              return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
             }
 
             const [advisoryApiKey, advisoryModel] = await Promise.all([
@@ -239,13 +239,13 @@ export async function POST(request: Request) {
               return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
             }
             if (processed.status === 'rejected') {
-              return NextResponse.json({ success: true, status: 'payment_proof_rejected' })
+              return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
             }
             if (processed.status === 'duplicate') {
               return NextResponse.json({ success: true, status: 'payment_proof_duplicate' })
             }
           if (processed.status !== 'disabled') {
-            return NextResponse.json({ success: true, status: 'payment_proof_received' })
+            return NextResponse.json({ success: true, status: 'payment_proof_received' }, { status: 202 })
           }
         }
       }
@@ -447,29 +447,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Fora do horário de atendimento', data: novaMensagem }, { status: 200 })
     }
 
-    // 11. Se for anexo/comprovante (documento ou imagem de pagamento), registrar em comprovantes e responder
+    // 11. Preserve chat acknowledgement for proof-like attachments without legacy proof persistence.
     const isComprovante = mediaType === 'document' || 
       (conteudo && (conteudo.toLowerCase().includes('comprovante') || conteudo.toLowerCase().includes('pix') || conteudo.toLowerCase().includes('pagamento')))
 
     if (mediaType && isComprovante) {
       console.log('[Evolution Webhook] LEGACY_ATTACHMENT_DETECTED')
-      const urlArquivo = messageContent?.documentMessage?.url || messageContent?.imageMessage?.url || `whatsapp_media_${messageId}`
-      const nomeArquivo = messageContent?.documentMessage?.fileName || (mediaType === 'document' ? 'comprovante_whatsapp.pdf' : 'comprovante_whatsapp.jpg')
-      const tamanhoBytes = Number(messageContent?.documentMessage?.fileLength || messageContent?.imageMessage?.fileLength || 0)
-
-      try {
-        await supabaseAdmin
-          .from('comprovantes')
-          .insert({
-            cliente_id: clienteId,
-            url_arquivo: urlArquivo,
-            nome_arquivo: nomeArquivo,
-            tamanho_bytes: tamanhoBytes,
-          })
-      } catch {
-        console.warn('[Evolution Webhook] LEGACY_ATTACHMENT_PERSIST_FAILED')
-      }
-
       const autoReplyComprovante = 'Recebemos seu comprovante de pagamento. Ele será analisado por um atendente humano em breve. Muito obrigado!'
       try {
         await sendEvolutionScheduleMessage(sanitizedPhone, autoReplyComprovante)
@@ -484,7 +467,7 @@ export async function POST(request: Request) {
 
       return NextResponse.json({
         success: true,
-        message: 'Comprovante recebido e registrado com sucesso',
+        message: 'Comprovante recebido para análise',
         data: novaMensagem,
       }, { status: 200 })
     }

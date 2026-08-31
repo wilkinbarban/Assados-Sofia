@@ -87,13 +87,25 @@ function metaTextPayload(messageId: string, text = 'Hello') {
   }
 }
 
-function metaRequest(payload: unknown) {
+function metaRequest(payload: unknown, signature = true) {
   const body = JSON.stringify(payload)
   return new Request('https://asados.test/api/webhooks/whatsapp', {
     method: 'POST',
-    headers: { 'x-hub-signature-256': signBody(body) },
+    headers: signature ? { 'x-hub-signature-256': signBody(body) } : {},
     body,
   })
+}
+
+function metaPaymentMediaPayload(messageId: string) {
+  return {
+    object: 'whatsapp_business_account',
+    entry: [{ changes: [{ value: {
+      contacts: [{ profile: { name: 'Ana' }, wa_id: '5541999990003' }],
+      messages: [{ from: '5541999990003', id: messageId, type: 'document', document: {
+        id: 'media-id', mime_type: 'application/pdf', filename: 'pix.pdf', caption: 'comprovante pix',
+      } }],
+    } }] }],
+  }
 }
 
 function evolutionRequest(messageId: string, text = 'Hello', headers: HeadersInit = { 'x-webhook-secret': 'evolution-webhook-secret' }) {
@@ -152,6 +164,22 @@ describe('webhook global Sofia gates', () => {
 
     expect(response.status).toBe(503)
     vi.unstubAllEnvs()
+  })
+
+  it('authenticates and explicitly ignores Cloud payment media before creating any persistence client', async () => {
+    const response = await postMetaWhatsApp(metaRequest(metaPaymentMediaPayload('wamid.payment-media')))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ success: true, status: 'ignored_payment_media' })
+    expect(mocks.createAdminClient).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('rejects unauthenticated Cloud payment media before the non-admission branch', async () => {
+    const response = await postMetaWhatsApp(metaRequest(metaPaymentMediaPayload('wamid.unsigned-media'), false))
+
+    expect(response.status).toBe(401)
+    expect(mocks.createAdminClient).not.toHaveBeenCalled()
   })
 
   it('rejects Evolution query-string secrets before parsing the request body', async () => {

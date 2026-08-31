@@ -299,7 +299,7 @@ export async function POST(request: Request) {
         return Response.json({ ok: false, status: 'payment_proof_retryable', message: 'Falha temporária ao receber documento.' }, { status: 503 })
       }
       if (replayState === 'queued' || replayState === 'complete') {
-        return Response.json({ ok: true, status: 'payment_proof_received' })
+        return Response.json({ ok: true, status: 'payment_proof_duplicate' })
       }
 
       const maxPdfBytes = 5 * 1024 * 1024
@@ -313,7 +313,10 @@ export async function POST(request: Request) {
         declaredSize > maxPdfBytes ||
         !message.document.file_id
       ) {
-        return Response.json({ ok: true, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
+        return Response.json(
+          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { status: 422 }
+        )
       }
 
       const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
@@ -337,7 +340,10 @@ export async function POST(request: Request) {
             { status: 503 }
           )
         }
-        return Response.json({ ok: true, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
+        return Response.json(
+          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { status: 422 }
+        )
       }
 
       const processed = await queueCanonicalPaymentProof({
@@ -359,13 +365,16 @@ export async function POST(request: Request) {
         )
       }
       if (processed.status === 'rejected') {
-        return Response.json({ ok: true, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
+        return Response.json(
+          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { status: 422 }
+        )
       }
       if (processed.status === 'duplicate') {
         return Response.json({ ok: true, status: 'payment_proof_duplicate' })
       }
       if (processed.status !== 'disabled') {
-        return Response.json({ ok: true, status: 'payment_proof_received' })
+        return Response.json({ ok: true, status: 'payment_proof_received' }, { status: 202 })
       }
       // The canonical processor retains its own defense-in-depth flag and can
       // still report disabled if configuration changes during this request.

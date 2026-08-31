@@ -72,7 +72,7 @@ describe('Evolution canonical payment-proof intake', () => {
   it('routes a compatible PDF with a Long-shaped size directly to canonical intake without legacy message dedupe', async () => {
     const { client, storageBucket } = adminClient(); mocks.createAdminClient.mockReturnValue(client)
     const response = await POST(request(undefined, 'application/pdf', undefined, { low: PDF.length, high: 0, unsigned: true }))
-    expect(response.status).toBe(200); expect(await response.json()).toEqual({ success: true, status: 'payment_proof_received' })
+    expect(response.status).toBe(202); expect(await response.json()).toEqual({ success: true, status: 'payment_proof_received' })
     expect(client.from).not.toHaveBeenCalledWith('mensagens')
     expect(mocks.downloadEvolutionPdf).toHaveBeenCalledWith(expect.objectContaining({ instanceName: 'main', declaredMimeType: 'application/pdf', declaredSize: PDF.length }))
     expect(mocks.processCanonicalPaymentProof).toHaveBeenCalledWith(expect.objectContaining({ channel: 'whatsapp', deliveryId: 'evolution:main:message-77', customerId: 'customer-1', orderId: null, sender: '5541999990003', bytes: PDF, db: client, storage: storageBucket }))
@@ -82,8 +82,8 @@ describe('Evolution canonical payment-proof intake', () => {
     const { client } = adminClient(); mocks.createAdminClient.mockReturnValue(client)
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const response = await POST(request(undefined, 'application/pdf', undefined, { low: PDF.length, high: 0, unsigned: true, extra: 'private' }))
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ success: true, status: 'payment_proof_rejected' })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ success: false, status: 'payment_proof_rejected' })
     expect(mocks.downloadEvolutionPdf).not.toHaveBeenCalled()
     expect(mocks.processCanonicalPaymentProof).not.toHaveBeenCalled()
     expect(client.from).not.toHaveBeenCalledWith('mensagens')
@@ -98,7 +98,7 @@ describe('Evolution canonical payment-proof intake', () => {
       id: 'message-77', fromMe: false, addressingMode: 'lid',
       remoteJid: '123456789012345@lid', remoteJidAlt: '5541999990003@s.whatsapp.net',
     }))
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(202)
     expect(mocks.processCanonicalPaymentProof).toHaveBeenCalledWith(expect.objectContaining({ sender: '5541999990003' }))
   })
 
@@ -154,8 +154,8 @@ describe('Evolution canonical payment-proof intake', () => {
 
     const response = await POST(request())
 
-    expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ success: true, status: 'payment_proof_rejected' })
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ success: false, status: 'payment_proof_rejected' })
     expect(warn).not.toHaveBeenCalled()
     expect(errorLog).not.toHaveBeenCalled()
     expect(mocks.processCanonicalPaymentProof).not.toHaveBeenCalled()
@@ -165,10 +165,10 @@ describe('Evolution canonical payment-proof intake', () => {
   })
 
   it.each([
-    [{ status: 'duplicate' }, 200, 'payment_proof_duplicate'], [{ status: 'accepted' }, 200, 'payment_proof_received'], [{ status: 'retryable' }, 503, 'payment_proof_retryable'], [{ status: 'rejected' }, 200, 'payment_proof_rejected'],
+    [{ status: 'duplicate' }, 200, 'payment_proof_duplicate'], [{ status: 'accepted' }, 202, 'payment_proof_received'], [{ status: 'retryable' }, 503, 'payment_proof_retryable'], [{ status: 'rejected' }, 422, 'payment_proof_rejected'],
   ])('maps canonical outcomes without approval or order association', async (processed, status, resultStatus) => {
     const { client } = adminClient(); mocks.createAdminClient.mockReturnValue(client); mocks.processCanonicalPaymentProof.mockResolvedValue(processed)
-    const response = await POST(request()); expect(response.status).toBe(status); expect(await response.json()).toEqual({ success: status === 200, status: resultStatus })
+    const response = await POST(request()); expect(response.status).toBe(status); expect(await response.json()).toEqual({ success: status < 300, status: resultStatus })
   })
 
   it('makes no media request when compatibility is closed and follows the exact legacy path', async () => {
@@ -177,6 +177,18 @@ describe('Evolution canonical payment-proof intake', () => {
     mocks.obterSofiaGlobalChannelConfig.mockResolvedValue({ enabled: false })
     const response = await POST(request()); expect(response.status).toBe(200); expect((await response.json()).message).toBe('Sofia globalmente desativada para WhatsApp')
     expect(mocks.downloadEvolutionPdf).not.toHaveBeenCalled(); expect(mocks.processCanonicalPaymentProof).not.toHaveBeenCalled(); expect(client.from).toHaveBeenCalledWith('mensagens')
+  })
+
+  it('never writes an Evolution payment document to the legacy proof table when canonical compatibility is closed', async () => {
+    const { client } = adminClient(); mocks.createAdminClient.mockReturnValue(client)
+    mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => key === 'WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED' ? 'false' : config[key] ?? null)
+    mocks.obterSofiaGlobalChannelConfig.mockResolvedValue({ enabled: true })
+    mocks.verificarHorarioAtendimento.mockResolvedValue({ dentro: true })
+
+    const response = await POST(request())
+
+    expect(response.status).toBe(200)
+    expect(client.from).not.toHaveBeenCalledWith('comprovantes')
   })
 
   it('does not treat non-PDF documents as canonical', async () => {

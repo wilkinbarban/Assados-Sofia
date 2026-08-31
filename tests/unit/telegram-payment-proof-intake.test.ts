@@ -83,7 +83,7 @@ describe('Telegram canonical payment-proof intake', () => {
 
     const response = await POST(request({ file_id: 'inbound-file-id', mime_type: 'application/pdf', file_size: PDF.length, file_name: 'pix.pdf' }))
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(202)
     expect(await response.json()).toEqual({ ok: true, status: 'payment_proof_received' })
     expect(mocks.obterSofiaGlobalChannelConfig).not.toHaveBeenCalled()
     expect(mocks.verificarHorarioAtendimento).not.toHaveBeenCalled()
@@ -108,7 +108,7 @@ describe('Telegram canonical payment-proof intake', () => {
     const response = await POST(request({ file_id: 'file', mime_type: 'application/pdf', file_size: PDF.length }))
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ ok: true, status: 'payment_proof_received' })
+    expect(await response.json()).toEqual({ ok: true, status: 'payment_proof_duplicate' })
     expect(client.rpc).toHaveBeenCalledWith('get_payment_proof_delivery_state', { p_channel: 'telegram', p_delivery_key: 'telegram:1001:77' })
     expect(mocks.obterConfiguracaoSistema).not.toHaveBeenCalledWith('TELEGRAM_BOT_TOKEN')
     expect(mocks.downloadTelegramDocument).not.toHaveBeenCalled()
@@ -121,7 +121,7 @@ describe('Telegram canonical payment-proof intake', () => {
 
     const response = await POST(request({ file_id: 'file', mime_type: 'application/pdf', file_size: PDF.length }))
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(202)
     expect(mocks.queueCanonicalPaymentProof).toHaveBeenCalledWith(expect.objectContaining({ customerId: 'created-customer' }))
   })
 
@@ -131,7 +131,7 @@ describe('Telegram canonical payment-proof intake', () => {
 
     for (const [result, expectedStatus, expectedBodyStatus] of [
       [{ status: 'duplicate' }, 200, 'payment_proof_duplicate'],
-      [{ status: 'rejected', error: 'PDF_SIGNATURE_INVALID' }, 200, 'payment_proof_rejected'],
+      [{ status: 'rejected', error: 'PDF_SIGNATURE_INVALID' }, 422, 'payment_proof_rejected'],
       [{ status: 'retryable', error: 'PAYMENT_PROOF_STORAGE_FAILED' }, 503, 'payment_proof_retryable'],
     ] as const) {
       mocks.queueCanonicalPaymentProof.mockResolvedValueOnce(result)
@@ -150,10 +150,22 @@ describe('Telegram canonical payment-proof intake', () => {
       { file_id: 'file', mime_type: 'application/pdf', file_size: 5 * 1024 * 1024 + 1 },
     ]) {
       const response = await POST(request(document))
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ ok: true, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
+      expect(response.status).toBe(422)
+      expect(await response.json()).toEqual({ ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
     }
     expect(mocks.downloadTelegramDocument).not.toHaveBeenCalled()
+  })
+
+  it('maps a non-retryable Telegram download rejection to a safe validation response', async () => {
+    const { client } = adminClient()
+    mocks.createAdminClient.mockReturnValue(client)
+    mocks.downloadTelegramDocument.mockResolvedValue({ ok: false, error: 'TELEGRAM_FILE_TOO_LARGE', retryable: false })
+
+    const response = await POST(request({ file_id: 'file', mime_type: 'application/pdf', file_size: PDF.length }))
+
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
+    expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
   })
 
   it('bypasses token lookup and download when canonical intake is disabled, then uses the legacy acknowledgement', async () => {

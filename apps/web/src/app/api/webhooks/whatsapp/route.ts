@@ -178,6 +178,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Mensagem sem ID ignorada' }, { status: 200 })
     }
 
+    const isPaymentMedia = message.type === 'document' && message.document?.mime_type === 'application/pdf'
+    if (isPaymentMedia) {
+      return NextResponse.json({ success: true, status: 'ignored_payment_media' }, { status: 200 })
+    }
+
     const supabaseAdmin = createAdminClient()
 
     // 5. Idempotência: verificar se whatsapp_mensagem_id já existe
