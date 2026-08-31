@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -9,9 +9,19 @@ const runner = join(root, 'scripts/run_migration.mjs')
 const temporaryDirectories: string[] = []
 const expectedProjectRef = 'xvzdxoktwnzmxsfizkxo'
 
-function execute(environment: Record<string, string | undefined> = {}, args: string[] = [], cwd = root) {
-  return spawnSync(process.execPath, [runner, ...args], {
-    cwd,
+function fakeRepository(linkedProjectRef = expectedProjectRef) {
+  const directory = mkdtempSync(join(tmpdir(), 'asados-migration-repository-'))
+  temporaryDirectories.push(directory)
+  mkdirSync(join(directory, 'scripts'), { recursive: true })
+  mkdirSync(join(directory, 'supabase/.temp'), { recursive: true })
+  writeFileSync(join(directory, 'scripts/run_migration.mjs'), readFileSync(runner, 'utf8'))
+  writeFileSync(join(directory, 'supabase/.temp/project-ref'), linkedProjectRef)
+  return directory
+}
+
+function execute(environment: Record<string, string | undefined> = {}, args: string[] = [], cwd?: string, repository = fakeRepository()) {
+  const result = spawnSync(process.execPath, [join(repository, 'scripts/run_migration.mjs'), ...args], {
+    cwd: cwd || repository,
     encoding: 'utf8',
     env: {
       PATH: process.env.PATH,
@@ -20,6 +30,7 @@ function execute(environment: Record<string, string | undefined> = {}, args: str
       ...environment,
     },
   })
+  return Object.assign(result, { repository })
 }
 
 function fakeSupabase() {
@@ -113,7 +124,41 @@ describe('credential-safe migration runner', () => {
     )
 
     expect(result.status).toBe(0)
-    expect(readFileSync(contextFile, 'utf8').trim().split('\n')).toEqual([root, 'unset'])
+    expect(readFileSync(contextFile, 'utf8').trim().split('\n')).toEqual([result.repository, 'unset'])
+  })
+
+  it('aborts without child execution when the linked project reference is unavailable', () => {
+    const repository = fakeRepository()
+    rmSync(join(repository, 'supabase/.temp/project-ref'))
+    const { executable, argumentsFile } = fakeSupabase()
+    const result = execute({
+      SUPABASE_PROJECT_REF: expectedProjectRef,
+      SUPABASE_ACCESS_TOKEN: 'management-token-sentinel',
+      SUPABASE_DB_PASSWORD: 'database-password-sentinel',
+      SUPABASE_CLI_BIN: executable,
+    }, [], undefined, repository)
+
+    expect(result.status).toBe(2)
+    expect(`${result.stdout}${result.stderr}`).toBe('migration-runner:linked-project-ref-unavailable\n')
+    expect(() => readFileSync(argumentsFile, 'utf8')).toThrow()
+  })
+
+  it.each([
+    ['empty', ''],
+    ['mismatched', 'wrong-project-ref'],
+  ])('aborts without child execution when the linked project reference is $0', (_case, linkedProjectRef) => {
+    const repository = fakeRepository(linkedProjectRef)
+    const { executable, argumentsFile } = fakeSupabase()
+    const result = execute({
+      SUPABASE_PROJECT_REF: expectedProjectRef,
+      SUPABASE_ACCESS_TOKEN: 'management-token-sentinel',
+      SUPABASE_DB_PASSWORD: 'database-password-sentinel',
+      SUPABASE_CLI_BIN: executable,
+    }, [], undefined, repository)
+
+    expect(result.status).toBe(2)
+    expect(`${result.stdout}${result.stderr}`).toBe(`migration-runner:${linkedProjectRef ? 'linked-project-ref-mismatch' : 'linked-project-ref-unavailable'}\n`)
+    expect(() => readFileSync(argumentsFile, 'utf8')).toThrow()
   })
 
   it('fully redacts overlapping credentials from failed child output', () => {
