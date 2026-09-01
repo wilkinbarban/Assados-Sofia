@@ -79,7 +79,7 @@ describe('WhatsApp Action Router (TDD)', () => {
             quantidade: 1,
             preco_unitario_centavos: 6990,
             preco_total_centavos: 6990,
-            produtos: { nome: 'Combo 1 - O Clássico da Sofia' },
+            produtos: { nome: 'Combo 1 - O Clássico Brasa & Sabor' },
           },
         ],
       },
@@ -93,7 +93,7 @@ describe('WhatsApp Action Router (TDD)', () => {
 
     expect(resultado.handled).toBe(true)
     expect(resultado.respostaTexto).toContain('Seu Carrinho de Pedido')
-    expect(resultado.respostaTexto).toContain('Combo 1 - O Clássico da Sofia')
+    expect(resultado.respostaTexto).toContain('Combo 1 - O Clássico Brasa & Sabor')
   })
 
   it('retorna handled: false para IDs desconhecidos ou nulos', async () => {

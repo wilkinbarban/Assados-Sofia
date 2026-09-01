@@ -1,0 +1,41 @@
+begin;
+select plan(20);
+select has_table('private','payment_proof_admin_alert_state','private durable incident state exists');
+select has_table('private','payment_proof_admin_alert_outbox','private transactional outbox exists');
+select function_privs_are('public','reconcile_payment_proof_admin_alerts',array['jsonb'],'service_role',array['EXECUTE'],'service may reconcile');
+select function_privs_are('public','reconcile_payment_proof_admin_alerts',array['jsonb'],'authenticated',array[]::text[],'authenticated cannot reconcile');
+select function_privs_are('public','claim_payment_proof_admin_alerts',array['integer'],'anon',array[]::text[],'anon cannot claim');
+set local role service_role;select set_config('request.jwt.claims','{"role":"service_role"}',true);
+select throws_ok($$select * from private.payment_proof_admin_alert_state$$,'42501',null,'state is not directly readable');
+select throws_ok($$select public.reconcile_payment_proof_admin_alerts('[{"family":"dead_letter_growth","active":true,"count":1,"severity":1}]')$$,'22023','PAYMENT_PROOF_ALERT_CONDITIONS_INVALID','requires exactly four conditions');
+select is(public.reconcile_payment_proof_admin_alerts('[{"family":"dead_letter_growth","active":true,"count":1,"severity":1},{"family":"expired_quarantines","active":false,"count":0,"severity":0},{"family":"repeated_processing_failures","active":false,"count":0,"severity":0},{"family":"maintenance_unhealthy","active":false,"count":0,"severity":0}]'),1,'opens one incident');
+do $$declare claimed_id bigint;begin
+ select id into claimed_id from public.claim_payment_proof_admin_alerts(8);
+ perform set_config('test.initial_alert_id',claimed_id::text,false);
+end$$;
+select ok(current_setting('test.initial_alert_id')::bigint>0,'initial notification claims once with a captured identity');
+select is((select count(*)::integer from public.claim_payment_proof_admin_alerts(8)),0,'active lease prevents duplicate claim');
+select ok(public.complete_payment_proof_admin_alert(current_setting('test.initial_alert_id')::bigint,true),'claimed initial notification completes');
+select is(public.reconcile_payment_proof_admin_alerts('[{"family":"dead_letter_growth","active":false,"count":0,"severity":0},{"family":"expired_quarantines","active":false,"count":0,"severity":0},{"family":"repeated_processing_failures","active":false,"count":0,"severity":0},{"family":"maintenance_unhealthy","active":false,"count":0,"severity":0}]'),1,'recovery reconciles');
+do $$declare claimed_id bigint;claimed_kind text;begin
+ select id,kind into claimed_id,claimed_kind from public.claim_payment_proof_admin_alerts(8);
+ perform set_config('test.recovery_alert_id',claimed_id::text,false);
+ perform set_config('test.recovery_alert_kind',claimed_kind,false);
+end$$;
+select is(current_setting('test.recovery_alert_kind'),'recovery','recovery claims exactly once');
+select ok(public.complete_payment_proof_admin_alert(current_setting('test.recovery_alert_id')::bigint,false),'failed recovery send remains retryable');
+select is((select count(*)::integer from public.claim_payment_proof_admin_alerts(8)),0,'retry observes backoff');
+reset role;
+update private.payment_proof_admin_alert_outbox set next_attempt_at=now(),claimed_until=now()-interval '1 second' where id=current_setting('test.recovery_alert_id')::bigint;
+set local role service_role;select set_config('request.jwt.claims','{"role":"service_role"}',true);
+select is((select count(*)::integer from public.claim_payment_proof_admin_alerts(8)),1,'expired lease/retry is recovered');
+select throws_ok($$select * from public.claim_payment_proof_admin_alerts(9)$$,'22023','PAYMENT_PROOF_ALERT_LIMIT_INVALID','claim is bounded');
+reset role;
+-- Simulate a worker crashing after taking the fifth and final bounded attempt.
+update private.payment_proof_admin_alert_outbox set attempts=5,status='claimed',claimed_until=now()-interval '1 second' where id=current_setting('test.recovery_alert_id')::bigint;
+set local role service_role;select set_config('request.jwt.claims','{"role":"service_role"}',true);
+select is((select count(*)::integer from public.claim_payment_proof_admin_alerts(8)),0,'expired fifth claim is not reclaimed');
+reset role;
+select is((select status||':'||attempts::text||':'||(claimed_until is null)::text from private.payment_proof_admin_alert_outbox where id=current_setting('test.recovery_alert_id')::bigint),'dead_letter:5:true','expired fifth claim is atomically dead-lettered with bounded attempts and cleared lease');
+select ok(not exists(select 1 from information_schema.columns where table_schema='private' and table_name like 'payment_proof_admin_alert%' and column_name ~ '(payload|error|token|chat|phone|path|key|bytes|document|caption|text|content|proof_id)'),'alert storage has no sensitive or arbitrary fields');
+select * from finish();rollback;

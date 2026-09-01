@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:8000'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg2NjMxMzM5LCJleHAiOjE5NDQzMTEzMzl9._X-OI8hh_bFU-7iYDjOnXfHFFoPl6ybpD5-mfuogNys'
@@ -100,12 +100,19 @@ describe('Web Client & Operator Unified Cart Management Flow', () => {
   it('allows operator (admin, supervisor, vendedor) to convert client cart into confirmed order with pickup window', async () => {
     const clienteId = 'c3c3c3c3-c3c3-c3c3-c3c3-c3c3c3c3c3c3'
 
-    const { data: prod } = await supabase
+    const { data: prod, error: produtoError } = await supabase
       .from('produtos')
-      .select('id, nome, preco_centavos')
+      .select('id, nome, preco_centavos, ativo, controlar_estoque, quantidade_estoque')
       .eq('ativo', true)
+      .or('controlar_estoque.is.false,quantidade_estoque.gte.1')
+      .order('id')
       .limit(1)
       .single()
+
+    expect(produtoError).toBeNull()
+    expect(prod).toBeDefined()
+    expect(prod?.ativo).toBe(true)
+    expect(prod?.controlar_estoque === false || (prod?.quantidade_estoque ?? 0) >= 1).toBe(true)
 
     // Limpar e criar novo item
     await limparCarrinho({ clienteId })
@@ -114,7 +121,7 @@ describe('Web Client & Operator Unified Cart Management Flow', () => {
       produtoId: prod!.id,
       quantidade: 1,
     })
-    expect(addRes.success).toBe(true)
+    expect(addRes.success, addRes.error).toBe(true)
     const carrinhoId = addRes.carrinho!.id
 
     // Operador converte o carrinho em pedido oficial
@@ -124,7 +131,7 @@ describe('Web Client & Operator Unified Cart Management Flow', () => {
       horarioRetirada: '12:30',
     })
 
-    expect(convRes.success).toBe(true)
+    expect(convRes.success, convRes.error).toBe(true)
     expect(convRes.pedidoId).toBeDefined()
 
     // Verificar se o pedido foi persistido no banco

@@ -66,7 +66,7 @@ export async function responderCallbackTelegram(callbackQueryId: string, text: s
 
 export async function enviarMensagemTelegram(
   conversaId: string,
-  payload: { texto: string; remetente: 'ia' | 'operador' }
+  payload: { texto: string; remetente: 'ia' | 'operador'; salvarNoBanco?: boolean }
 ) {
   const supabase = createAdminClient()
 
@@ -103,20 +103,24 @@ export async function enviarMensagemTelegram(
 
   const telegramMensagemId = deriveTelegramMessageKey(telegramChatId, data.result.message_id)
 
-  // 4. Inserir a mensagem no banco de dados
-  const { data: novaMensagem, error: insertError } = await supabase
-    .from('mensagens')
-    .insert({
-      conversa_id: conversaId,
-      remetente: payload.remetente,
-      conteudo: payload.texto,
-      telegram_mensagem_id: telegramMensagemId,
-    })
-    .select()
-    .single()
+  // 4. Inserir a mensagem no banco de dados (se salvarNoBanco não for explicitamente falso)
+  let novaMensagem = null
+  if (payload.salvarNoBanco !== false) {
+    const { data: inserted, error: insertError } = await supabase
+      .from('mensagens')
+      .insert({
+        conversa_id: conversaId,
+        remetente: payload.remetente,
+        conteudo: payload.texto,
+        telegram_mensagem_id: telegramMensagemId,
+      })
+      .select()
+      .single()
 
-  if (insertError) {
-    throw new Error(`Erro ao salvar mensagem no banco de dados: ${insertError.message}`)
+    if (insertError) {
+      throw new Error(`Erro ao salvar mensagem no banco de dados: ${insertError.message}`)
+    }
+    novaMensagem = inserted
   }
 
   return {

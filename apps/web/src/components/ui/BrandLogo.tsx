@@ -28,18 +28,18 @@ export function BrandLogo({
     <div className={`flex items-center gap-3 select-none ${className}`}>
       <div className="relative flex items-center justify-center shrink-0 drop-shadow-md">
         <Image
-          src="/logo-casa-de-assados-sofia.svg"
-          alt="Casa de Assados Sofia"
+          src="/logo-brasa-sabor.png"
+          alt="Casa de Assados Brasa & Sabor"
           width={currentSize.img}
           height={currentSize.img}
           priority
-          className="rounded-full"
+          className="rounded-full shadow-md shadow-amber-950/30"
         />
       </div>
       <div className="flex flex-col">
         <div className="flex items-center gap-1.5 leading-tight">
           <span className={`font-bold tracking-tight text-zinc-100 ${currentSize.title}`}>
-            Casa de Assados <span className="text-amber-400 font-extrabold">Sofia</span>
+            Casa de Assados <span className="text-amber-400 font-extrabold">Brasa &amp; Sabor</span>
           </span>
         </div>
         {showSubtitle && (

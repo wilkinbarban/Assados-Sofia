@@ -15,52 +15,142 @@ import {
   ExternalLink,
   Eye,
   Download,
+  X,
 } from 'lucide-react'
 import { alternarIaConversa, enviarMensagemOperador } from '@/app/actions/atendimento'
 import { Conversa, Mensagem } from './ConversationsQueue'
 import CreateOrderModal from './CreateOrderModal'
-import { createClient } from '@/lib/supabase/client'
 import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante'
+import { PaymentProofChatCard } from '@/components/chat/PaymentProofChatCard'
 
-function AttachmentCard({
+const maxPreviewPdfBytes = 10 * 1024 * 1024
+let pdfJsPromise: Promise<any> | null = null
+
+function loadPdfJs() {
+  if ((window as any).pdfjsLib) {
+    const lib = (window as any).pdfjsLib
+    lib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.js'
+    return Promise.resolve(lib)
+  }
+  if (pdfJsPromise) return pdfJsPromise
+  pdfJsPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.src = '/pdfjs/pdf.min.js'
+    script.onload = () => {
+      const lib = (window as any).pdfjsLib
+      if (!lib) return reject(new Error('PDF.js indisponível'))
+      lib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.js'
+      resolve(lib)
+    }
+    script.onerror = () => {
+      pdfJsPromise = null
+      reject(new Error('Falha ao carregar PDF.js'))
+    }
+    document.head.appendChild(script)
+  })
+  return pdfJsPromise
+}
+
+export function AttachmentCard({
+  messageId,
   urlArquivo,
   onVisualizar,
 }: {
+  messageId?: string
   urlArquivo: string
   onVisualizar: (url: string, nome: string) => void
 }) {
   const [downloading, setDownloading] = useState(false)
+  const [preview, setPreview] = useState<string | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const pdfDocumentRef = useRef<any>(null)
+  const previewTriggerRef = useRef<HTMLButtonElement>(null)
   const isPdf = urlArquivo.toLowerCase().includes('.pdf') || urlArquivo.toLowerCase().endsWith('.pdf')
   const fileName = urlArquivo.split('/').pop() || 'comprovante'
+  const mediaEndpoint = `/api/chat/midia?path=${encodeURIComponent(urlArquivo)}`
 
-  const handleDownload = async (e: React.MouseEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    setDownloading(true)
-    try {
-      const supabase = createClient()
-      const { data, error } = await supabase.storage
-        .from('chat-midias')
-        .createSignedUrl(urlArquivo, 3600)
+  useEffect(() => {
+    if (!isPdf) return
+    let active = true
+    setPreview(null)
+    setPreviewOpen(false)
+    setPreviewLoading(true)
+    setPreviewError(null)
+    ;(async () => {
+      try {
+        const response = await fetch(mediaEndpoint)
+        if (!response.ok) throw new Error(`Falha ao carregar (${response.status})`)
+        const declaredLength = Number(response.headers.get('Content-Length') || 0)
+        if (declaredLength > maxPreviewPdfBytes) throw new Error('PDF excede 10 MB')
+        const bytes = new Uint8Array(await response.arrayBuffer())
+        if (bytes.byteLength > maxPreviewPdfBytes) throw new Error('PDF excede 10 MB')
+        const mime = response.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase()
 
-      if (error || !data?.signedUrl) throw error || new Error('Falha ao gerar link')
+        if (mime === 'image/png' || mime === 'image/jpeg' || mime === 'image/webp') {
+          const blob = new Blob([bytes], { type: mime })
+          if (active) setPreview(URL.createObjectURL(blob))
+          return
+        }
 
-      const res = await fetch(data.signedUrl)
-      const blob = await res.blob()
-      const blobUrl = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = blobUrl
-      a.download = fileName
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      window.URL.revokeObjectURL(blobUrl)
-    } catch (err) {
-      console.error('Erro ao baixar anexo:', err)
-    } finally {
-      setDownloading(false)
+        const signature = new TextDecoder('ascii').decode(bytes.slice(0, 5))
+        if (mime !== 'application/pdf' || signature !== '%PDF-') throw new Error('Arquivo não é um PDF válido')
+
+        const lib = await loadPdfJs()
+        const document = await lib.getDocument({ data: bytes, useSystemFonts: true }).promise
+        pdfDocumentRef.current = document
+        const page = await document.getPage(1)
+        const viewport = page.getViewport({ scale: 1.5 })
+        const canvas = window.document.createElement('canvas')
+        canvas.width = viewport.width
+        canvas.height = viewport.height
+        const context = canvas.getContext('2d')
+        if (!context) throw new Error('Canvas indisponível')
+        context.fillStyle = '#fff'
+        context.fillRect(0, 0, canvas.width, canvas.height)
+        await page.render({ canvasContext: context, viewport }).promise
+        if (active) setPreview(canvas.toDataURL('image/png'))
+      } catch (error) {
+        console.error('Erro ao gerar prévia do comprovante:', error)
+        if (active) setPreviewError('Não foi possível gerar a prévia do documento.')
+      } finally {
+        if (active) setPreviewLoading(false)
+      }
+    })()
+    return () => {
+      active = false
+      void pdfDocumentRef.current?.destroy?.()
+      pdfDocumentRef.current = null
     }
+  }, [isPdf, mediaEndpoint])
+
+  useEffect(() => {
+    if (!messageId) return
+    const openRequestedPreview = (event: Event) => {
+      const detail = (event as CustomEvent<{ messageId?: string }>).detail
+      if (detail?.messageId !== messageId || !preview) return
+      previewTriggerRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+      previewTriggerRef.current?.focus()
+      setPreviewOpen(true)
+    }
+    window.addEventListener('asados:open-attachment-preview', openRequestedPreview)
+    return () => window.removeEventListener('asados:open-attachment-preview', openRequestedPreview)
+  }, [messageId, preview])
+
+  const closePreview = () => {
+    setPreviewOpen(false)
+    window.requestAnimationFrame(() => previewTriggerRef.current?.focus())
   }
+
+  useEffect(() => {
+    if (!previewOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closePreview()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [previewOpen])
 
   return (
     <div className="mt-2.5 rounded-2xl border border-zinc-700/80 bg-zinc-950/80 p-3 text-xs text-zinc-200 shadow-md space-y-2.5 max-w-sm">
@@ -79,30 +169,67 @@ function AttachmentCard({
         </div>
       </div>
 
+      {isPdf && (
+        <div className="overflow-hidden rounded-xl border border-zinc-800 bg-white">
+          {previewLoading ? (
+            <div className="flex h-36 items-center justify-center gap-2 text-zinc-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Gerando prévia segura…</span>
+            </div>
+          ) : preview ? (
+                <>
+            {/* eslint-disable-next-line @next/next/no-img-element -- Preview is a transient blob or data URL generated from private proof content. */}
+                  <img src={preview} alt="Prévia do comprovante enviado pelo cliente" className="max-h-64 w-full object-contain" />
+                </>
+              ) : previewError ? (
+            <div className="p-4 text-center text-[11px] text-amber-700">{previewError}</div>
+          ) : null}
+        </div>
+      )}
+
       <div className="flex items-center gap-2 pt-1 border-t border-zinc-800/80">
         <button
+          ref={previewTriggerRef}
           type="button"
-          onClick={() => onVisualizar(urlArquivo, fileName)}
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-[11px] font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
+          onClick={() => preview ? setPreviewOpen(true) : onVisualizar(urlArquivo, fileName)}
+          className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition-all active:scale-95 cursor-pointer shadow-sm"
         >
-          <Eye className="h-3.5 w-3.5" />
-          <span>Visualizar</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={handleDownload}
-          disabled={downloading}
-          className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-700/80 text-[11px] font-bold transition-all active:scale-95 disabled:opacity-50 cursor-pointer shadow-sm"
-        >
-          {downloading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Download className="h-3.5 w-3.5" />
-          )}
-          <span>Baixar</span>
+          <Eye className="h-4 w-4" />
+          <span>Visualizar comprovante</span>
         </button>
       </div>
+
+      {previewOpen && preview && (
+        <div
+          data-testid="attachment-preview-backdrop"
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/85 p-4 backdrop-blur-md"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) closePreview()
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Prévia ampliada do comprovante"
+            className="relative flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-3xl border border-amber-500/30 bg-zinc-950 p-4 shadow-2xl"
+          >
+            <div className="mb-3 flex items-center justify-between gap-3 text-zinc-100">
+              <strong className="truncate text-sm">{fileName}</strong>
+              <button type="button" aria-label="Fechar prévia" onClick={closePreview} className="rounded-full p-2 hover:bg-zinc-800">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto rounded-2xl bg-white p-3">
+              {preview && (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- Preview is a transient blob or data URL generated from private proof content. */}
+                  <img src={preview} alt="Comprovante ampliado" className="mx-auto max-h-[78vh] max-w-full object-contain" />
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -464,14 +591,15 @@ export default function OperatorChatConsole({
               </p>
 
               {tipoDetectado === 'comprovante' && (() => {
-                const anexoRecente = mensagens.slice().reverse().find((m) => m.url_anexo)?.url_anexo
-                if (!anexoRecente) return null
-                const nomeRecente = anexoRecente.split('/').pop() || 'comprovante.pdf'
+                const mensagemRecente = mensagens.slice().reverse().find((m) => m.url_anexo)
+                if (!mensagemRecente) return null
                 return (
                   <div className="pt-2 flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => handleAbrirVisualizador(anexoRecente, nomeRecente)}
+                      onClick={() => window.dispatchEvent(new CustomEvent('asados:open-attachment-preview', {
+                        detail: { messageId: mensagemRecente.id },
+                      }))}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
                     >
                       <Eye className="h-3.5 w-3.5" />
@@ -520,8 +648,9 @@ export default function OperatorChatConsole({
 
                   <p className="whitespace-pre-wrap leading-relaxed break-words">{msg.conteudo}</p>
                   
-                  {msg.url_anexo && (
+                  {msg.payment_proof_id ? <PaymentProofChatCard proofId={msg.payment_proof_id} /> : msg.url_anexo && (
                     <AttachmentCard
+                      messageId={msg.id}
                       urlArquivo={msg.url_anexo}
                       onVisualizar={handleAbrirVisualizador}
                     />

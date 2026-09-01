@@ -4,7 +4,10 @@ alter table public.comprovantes_venda disable trigger comprovantes_venda_immutab
 delete from public.comprovantes_venda where pedido_id::text like '33333333-3333-4333-8333-3333333333%';
 alter table public.comprovantes_venda enable trigger comprovantes_venda_immutable;
 delete from public.pedido_payment_events where pedido_id::text like '33333333-3333-4333-8333-3333333333%';
-delete from public.pedidos where id::text like '33333333-3333-4333-8333-3333333333%';
+-- Other focused tests use the same UUID namespace. Clean only this fixture and
+-- remove its direct proof links before deleting the order.
+delete from public.payment_proof_order_links where pedido_id='33333333-3333-4333-8333-333333333311';
+delete from public.pedidos where id='33333333-3333-4333-8333-333333333311';
 delete from public.clientes where id='33333333-3333-4333-8333-333333333310';
 insert into auth.users(id,instance_id,aud,role,email,encrypted_password,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at) values
  ('33333333-3333-4333-8333-333333333301','00000000-0000-0000-0000-000000000000','authenticated','authenticated','receipt-operator@example.test','',now(),'{}','{}',now(),now()),

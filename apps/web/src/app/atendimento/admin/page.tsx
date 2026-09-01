@@ -2,11 +2,25 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { listarUsuariosAdmin, obterEstatisticasMensagens } from '@/app/actions/admin'
 import AdminDashboard from '@/components/operator/AdminDashboard'
+import { OperatorWorkspaceHeader } from '@/components/operator/OperatorWorkspaceHeader'
 
 export const dynamic = 'force-dynamic'
 
-export default async function AdminPage() {
+type AdminPageProps = {
+  searchParams: Promise<{ tab?: string | string[] }>
+}
+
+const adminTabs = new Set([
+  'operadores', 'integracoes', 'conhecimento', 'metricas', 'auditoria',
+  'prompt', 'horarios', 'estoque', 'storage-orphans', 'comprovantes',
+])
+
+export default async function AdminPage({ searchParams }: AdminPageProps) {
   const supabase = await createClient()
+  const requestedTab = (await searchParams).tab
+  const initialTab = typeof requestedTab === 'string' && adminTabs.has(requestedTab)
+    ? requestedTab
+    : 'operadores'
 
   // 1. Verificar sessão do usuário ativo
   const { data: { user }, error: authError } = await supabase.auth.getUser()
@@ -158,36 +172,16 @@ export default async function AdminPage() {
 
   return (
     <div className="flex h-screen w-full flex-col bg-zinc-950 text-zinc-50 overflow-hidden font-sans">
-      {/* Cabeçalho */}
-      <header className="flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-900/30 px-6 shrink-0 backdrop-blur">
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded bg-amber-500 font-bold text-zinc-950 shadow-md shadow-amber-500/10 select-none">
-            A
-          </div>
-          <span className="font-semibold text-zinc-100 tracking-tight">Painel Administrativo Asados</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <a
-            href="/atendimento"
-            className="px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 border border-zinc-800 hover:border-zinc-700 rounded-lg text-xs font-semibold transition-all cursor-pointer select-none"
-          >
-            Voltar para o Atendimento
-          </a>
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
-            </span>
-            <span className="text-xs text-zinc-400 font-medium capitalize">
-              Operador: {perfil.funcao}
-            </span>
-          </div>
-        </div>
-      </header>
+      <OperatorWorkspaceHeader
+        active="admin"
+        role={perfil.funcao}
+        adminTab={initialTab}
+      />
 
       {/* Conteúdo Principal */}
       <main className="flex-1 overflow-hidden">
         <AdminDashboard
+          initialTab={initialTab as 'operadores'}
           usuarioLogado={{
             id: perfil.id,
             nome: perfil.nome,

@@ -19,7 +19,7 @@ export const COMBOS_OFICIAIS: CartaoCombo[] = [
   {
     id: 'a1111111-1111-4111-8111-111111111111',
     numeroCombo: 1,
-    nome: 'Combo 1 – O Clássico da Sofia',
+    nome: 'Combo 1 – O Clássico Brasa & Sabor',
     slogan: 'O verdadeiro sabor do domingo na mesa da sua família!',
     rendimento: 'Serve 3 a 4 pessoas',
     precoCentavos: 6990,
@@ -35,7 +35,7 @@ export const COMBOS_OFICIAIS: CartaoCombo[] = [
     destaqueBadge: '⭐ MAIS PEDIDO DO DOMINGO',
     urlImagemPrincipal: '/cardapio/combo_1_classico_sofia_1.png',
     urlImagemSecundaria: '/cardapio/combo_1_classico_sofia_2.png',
-    textoMarkdownCartao: `🍗 *COMBO 1 — O CLÁSSICO DA SOFIA* ⭐
+    textoMarkdownCartao: `🍗 *COMBO 1 — O CLÁSSICO BRASA & SABOR* ⭐
 _O verdadeiro sabor do domingo na mesa da sua família!_
 
 📦 *COMPOSIÇÃO DO COMBO:*
@@ -88,7 +88,7 @@ _A verdadeira especialidade do churrasco curitibano!_
   {
     id: 'a3333333-3333-4333-8333-333333333333',
     numeroCombo: 3,
-    nome: 'Combo 3 – Dueto Sofia (Frango & Costelinha Suína)',
+    nome: 'Combo 3 – Dueto Brasa & Sabor (Frango & Costelinha Suína)',
     slogan: 'O melhor de dois mundos para quem ama variedade!',
     rendimento: 'Serve 3 a 4 pessoas',
     precoCentavos: 9490,
@@ -104,7 +104,7 @@ _A verdadeira especialidade do churrasco curitibano!_
     destaqueBadge: '✨ DUETO PERFEITO',
     urlImagemPrincipal: '/cardapio/combo_3_dueto_sofia_1.png',
     urlImagemSecundaria: '/cardapio/combo_3_dueto_sofia_2.png',
-    textoMarkdownCartao: `🍗🥩 *COMBO 3 — DUETO SOFIA* ✨
+    textoMarkdownCartao: `🍗🥩 *COMBO 3 — DUETO BRASA & SABOR* ✨
 _A combinação perfeita de Frango Assado & Costelinha Suína!_
 
 📦 *COMPOSIÇÃO DO COMBO:*
@@ -192,7 +192,7 @@ export function obterCartaoCombo(identificador: number | string): CartaoCombo | 
  */
 export function gerarCatalogoTextoCompleto(appUrl = 'https://casadeasados.duckdns.org'): string {
   const cabecalho = [
-    '🍖 *CASA DE ASSADOS SOFIA — CARDÁPIO DE COMBOS FAMILIARES* 🔥',
+    '🍖 *CASA DE ASSADOS BRASA & SABOR — CARDÁPIO DE COMBOS FAMILIARES* 🔥',
     '_O verdadeiro sabor do domingo na mesa da sua família!_',
     '📍 *Bairro Umbará, Curitiba - PR* | Retirada sem fila & Delivery',
     '',

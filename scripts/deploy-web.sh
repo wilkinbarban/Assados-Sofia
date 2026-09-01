@@ -6,6 +6,7 @@ umask 077
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 state_root="${ASADOS_DEPLOY_STATE_ROOT:-/var/lib/asados/deploy}"
 smoke="$root/scripts/smoke-production-readonly.sh"
+preflight="$root/scripts/workspace-preflight.sh"
 health_timeout="${ASADOS_WEB_HEALTH_TIMEOUT_SECONDS:-180}"
 
 usage() {
@@ -38,9 +39,20 @@ wait_healthy() {
 }
 
 recreate_and_verify() {
-  local ref=$1 expected_id=$2
-  ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
-    --project-directory "$root" up -d --no-deps --force-recreate web
+  local ref=$1 expected_id=$2 close_payment_proof_gates=${3:-false}
+  if [[ "$close_payment_proof_gates" == true ]]; then
+    PAYMENT_PROOF_CANONICAL_INGEST_ENABLED=false \
+    WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED=false \
+    PAYMENT_PROOF_PROCESSING_ENABLED=false \
+    PAYMENT_PROOF_SELLER_RECONCILIATION_ENABLED=false \
+    PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false \
+    PAYMENT_PROOF_CLEANUP_ENABLED=false \
+    ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
+      --project-directory "$root" up -d --no-deps --force-recreate web
+  else
+    ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
+      --project-directory "$root" up -d --no-deps --force-recreate web
+  fi
   wait_healthy
   ASADOS_EXPECTED_IMAGE_ID="$expected_id" "$smoke"
 }
@@ -68,8 +80,7 @@ load_state() {
   source "$state_root/release.env"
 }
 
-mkdir -p -- "$state_root"
-chmod 0700 "$state_root"
+"$preflight" check "$state_root"
 exec 9>"$state_root/deploy.lock"
 flock -n 9 || { printf '%s\n' 'Another Web deployment is active' >&2; exit 1; }
 
@@ -87,7 +98,7 @@ case "$action" in
 
     if ! recreate_and_verify "$candidate_ref" "$candidate_id"; then
       printf '%s\n' 'Promotion failed; restoring the retained previous image' >&2
-      recreate_and_verify "$rollback_ref" "$previous_id"
+      recreate_and_verify "$rollback_ref" "$previous_id" true
       exit 1
     fi
     write_state "$rollback_ref" "$previous_id" "$candidate_ref" "$candidate_id"
@@ -102,7 +113,7 @@ case "$action" in
       exit 1
     }
     started=$SECONDS
-    recreate_and_verify "$PREVIOUS_REF" "$PREVIOUS_ID"
+    recreate_and_verify "$PREVIOUS_REF" "$PREVIOUS_ID" true
     elapsed=$((SECONDS - started))
     (( elapsed < 300 )) || {
       printf 'Rollback exceeded five minutes: %s seconds\n' "$elapsed" >&2

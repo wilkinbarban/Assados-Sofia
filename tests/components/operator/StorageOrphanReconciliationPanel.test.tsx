@@ -57,7 +57,7 @@ describe('StorageOrphanReconciliationPanel', () => {
     fireEvent.click(approveButton)
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar aprovação' }))
 
-    expect(await screen.findByTestId('reconciliation-result')).toHaveFocus()
+    await waitFor(() => expect(screen.getByTestId('reconciliation-result')).toHaveFocus())
     expect(approveButton).toBeDisabled()
   })
 

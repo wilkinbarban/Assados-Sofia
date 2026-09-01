@@ -1,14 +1,20 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CircuitBreaker } from '@/lib/whatsapp/circuit-breaker'
 
 describe('WhatsApp Circuit Breaker: Proteção contra Pânico e Quedas de Provedor', () => {
   let breaker: CircuitBreaker
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2025-01-01T00:00:00.000Z'))
     breaker = new CircuitBreaker({
       failureThreshold: 3,
       cooldownMs: 50,
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('starts in CLOSED state and executes successful calls', async () => {
@@ -46,10 +52,14 @@ describe('WhatsApp Circuit Breaker: Proteção contra Pânico e Quedas de Proved
     }
     expect(breaker.obterEstado()).toBe('OPEN')
 
-    // Wait for cooldown
-    await new Promise((r) => setTimeout(r, 60))
+    // Strictly before cooldown, the circuit remains OPEN.
+    await vi.advanceTimersByTimeAsync(49)
+    expect(breaker.obterEstado()).toBe('OPEN')
 
-    // Next call is attempted (HALF_OPEN)
+    // At cooldown, the next state check transitions the circuit to HALF_OPEN.
+    await vi.advanceTimersByTimeAsync(1)
+    expect(breaker.obterEstado()).toBe('HALF_OPEN')
+
     const successFn = vi.fn().mockResolvedValue('recovered')
     const res = await breaker.executar(successFn)
 

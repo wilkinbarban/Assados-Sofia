@@ -9,7 +9,6 @@
  *   node scripts/client-phone-auth-backfill.mjs [--dry-run]
  */
 
-import { createClient } from '@supabase/supabase-js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -33,19 +32,26 @@ function resolveCredentials() {
   return { url, key };
 }
 
-const { url: supabaseUrl, key: serviceRoleKey } = resolveCredentials();
+async function createSupabaseClient() {
+  const { url, key } = resolveCredentials();
+  if (!key) {
+    throw new Error('missing-required-supabase-credentials');
+  }
 
-const supabase = createClient(supabaseUrl, serviceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false }
-});
+  const { createClient } = await import('@supabase/supabase-js');
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+}
 
 const CURITIBA_PHONE_REGEX = /^55419[0-9]{8}$/;
 
-export async function executarBackfill(supabaseClient = supabase) {
+export async function executarBackfill(supabaseClient) {
+  const client = supabaseClient || await createSupabaseClient();
   console.log(`Iniciando backfill de verificação explícita (${isDryRun ? 'DRY-RUN' : 'APPLY'})...`);
 
   // 1. Obter clientes sem telefone_verificado_em mas com telefone válido
-  const { data: clientes, error: clienteErr } = await supabaseClient
+  const { data: clientes, error: clienteErr } = await client
     .from('clientes')
     .select('id, telefone, usuario_id, telegram_chat_id, telefone_verificado_em')
     .is('telefone_verificado_em', null)
@@ -65,7 +71,7 @@ export async function executarBackfill(supabaseClient = supabase) {
     }
 
     // Verificar se possui evidência confiável no histórico de OTP legada
-    const { data: otps } = await supabaseClient
+    const { data: otps } = await client
       .from('codigos_verificacao')
       .select('id, data_criacao')
       .eq('telefone', c.telefone)
@@ -81,7 +87,7 @@ export async function executarBackfill(supabaseClient = supabase) {
       const verificadoEm = temOtpVerificado && otps[0].data_criacao ? otps[0].data_criacao : new Date().toISOString();
 
       if (!isDryRun) {
-        const { error: updErr } = await supabaseClient
+        const { error: updErr } = await client
           .from('clientes')
           .update({
             telefone_verificado_em: verificadoEm,

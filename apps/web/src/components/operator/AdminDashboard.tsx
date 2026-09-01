@@ -20,7 +20,6 @@ import {
   RefreshCw,
   ShieldCheck,
   X,
-  LogOut,
   Trash2,
   User,
   UserPlus,
@@ -32,14 +31,10 @@ import {
   Package,
   FileText,
   Download,
-  MessageSquare,
   Sparkles,
   Layers,
   SlidersHorizontal,
 } from 'lucide-react'
-import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { BrandLogo } from '@/components/ui/BrandLogo'
 import { createClient } from '@/lib/supabase/client'
 import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante'
 import {
@@ -49,6 +44,10 @@ import {
   obterEstatisticasMensagens,
   obterLogsAuditoria,
   deletarUsuarioAdmin,
+  purgarUsuarioAdminTotal,
+  purgarResidualClienteAdmin,
+  listarRegistrosAnonimizadosPreservados,
+  type AnonymizedResidualClient,
   salvarConfiguracaoAdmin,
   obterComprovantes
 } from '@/app/actions/admin'
@@ -63,6 +62,7 @@ import KnowledgeCRUD, { Artigo } from './KnowledgeCRUD'
 import BusinessHoursManager from './BusinessHoursManager'
 import InventoryManager from './InventoryManager'
 import { StorageOrphanReconciliationPanel } from './StorageOrphanReconciliationPanel'
+import PaymentProofAdminPanel from './PaymentProofAdminPanel'
 
 // Import card components and shared types
 import LlmApiCard from './integrations/LlmApiCard'
@@ -99,6 +99,7 @@ interface AuditLog {
 }
 
 interface AdminDashboardProps {
+  initialTab?: TabType
   usuarioLogado: {
     id: string
     nome: string
@@ -140,20 +141,18 @@ export default function AdminDashboard({
   logsIniciais,
   calendarConfig,
   artigosIniciais,
-  systemConfigs
+  systemConfigs,
+  initialTab = 'operadores',
 }: AdminDashboardProps) {
-  const router = useRouter()
-  const [activeTab, setActiveTab] = useState<TabType>('operadores')
+  const [activeTab, setActiveTab] = useState<TabType>(
+    allowedTabs.includes(initialTab) ? initialTab : 'operadores',
+  )
 
   React.useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const params = new URLSearchParams(window.location.search)
-      const tab = params.get('tab') as TabType
-      if (tab && allowedTabs.includes(tab)) {
-        setActiveTab(tab)
-      }
-    }
-  }, [])
+    if (initialTab !== 'operadores' || typeof window === 'undefined') return
+    const tab = new URLSearchParams(window.location.search).get('tab') as TabType
+    if (tab && allowedTabs.includes(tab)) setActiveTab(tab)
+  }, [initialTab])
 
   // State para Provedor de WhatsApp Ativo (coordenado entre cartões)
   const [provedorAtivo, setProvedorAtivo] = useState<'meta' | 'evolution'>((systemConfigs?.WHATSAPP_PROVIDER as 'meta' | 'evolution') || 'meta')
@@ -186,6 +185,16 @@ export default function AdminDashboard({
   
   const [updating, setUpdating] = useState(false)
   const [updateError, setUpdateError] = useState<string | null>(null)
+  const [purgeModal, setPurgeModal] = useState<{ userId: string; userName: string } | null>(null)
+  const [purgePassword, setPurgePassword] = useState('')
+  const [purgeConfirmation, setPurgeConfirmation] = useState('')
+  const [purging, setPurging] = useState(false)
+  const [purgeError, setPurgeError] = useState<string | null>(null)
+  const [residuals, setResiduals] = useState<AnonymizedResidualClient[]>([])
+  const [residualsExpanded, setResidualsExpanded] = useState(false)
+  const [residualModal, setResidualModal] = useState<string | null>(null)
+  const [residualPassword, setResidualPassword] = useState('')
+  const [residualConfirmation, setResidualConfirmation] = useState('')
 
   // States para Modais de Edição e Criação de Usuários
   const [editUserModal, setEditUserModal] = useState<{
@@ -387,29 +396,6 @@ export default function AdminDashboard({
     return matchesCliente && matchesData
   })
 
-  const handleLogout = async () => {
-    try {
-      const supabase = createClient()
-      await supabase.auth.signOut()
-      // Clean local states
-      setUsuarios([])
-      setSearchQuery('')
-      setLogs([])
-      setEstatisticas({
-        totalIa: 0,
-        totalOperador: 0,
-        totalCliente: 0,
-        totalMensagens: 0,
-        taxaAutomacao: 0
-      })
-      // Redirect
-      router.replace('/login')
-    } catch (err) {
-      console.error('Erro ao fazer logout:', err)
-      router.replace('/login')
-    }
-  }
-
   // --- Operações de Operadores ---
   
   const handleToggleStatusClick = (user: Usuario) => {
@@ -455,6 +441,35 @@ export default function AdminDashboard({
       currentActive: user.ativo,
       currentRole: user.funcao
     })
+  }
+
+  const loadResiduals = async () => { const result = await listarRegistrosAnonimizadosPreservados(); if (result.success) setResiduals(result.data) }
+  React.useEffect(() => { if (activeTab === 'operadores') void loadResiduals() }, [activeTab])
+  const purgeResidual = async () => { if (!residualModal) return; const result = await purgarResidualClienteAdmin({ clienteId: residualModal, senhaAtual: residualPassword, confirmacao: residualConfirmation }); if (result.success) { setResiduals((rows) => rows.filter((row) => row.id !== residualModal)); setResidualModal(null); setResidualPassword(''); setResidualConfirmation(''); showToast('success','Registro anonimizado purgado.') } else setPurgeError(result.error || 'Purga residual indisponível.') }
+
+  const handleTotalPurge = async () => {
+    if (!purgeModal) return
+    setPurging(true)
+    setPurgeError(null)
+    try {
+      const result = await purgarUsuarioAdminTotal({
+        usuarioAlvoId: purgeModal.userId,
+        senhaAtual: purgePassword,
+        confirmacao: purgeConfirmation,
+      })
+      if (!result.success) {
+        setPurgeError(result.error || 'A purga não pôde ser concluída.')
+        return
+      }
+      setUsuarios((current) => current.filter((user) => user.id !== purgeModal.userId))
+      setPurgeModal(null)
+      setPurgePassword('')
+      setPurgeConfirmation('')
+      showToast('success', 'Purga total concluída.')
+      handleRefreshLogsSilent()
+    } finally {
+      setPurging(false)
+    }
   }
 
   const handleConfirmUpdate = async () => {
@@ -694,7 +709,7 @@ export default function AdminDashboard({
 
   // --- Ações de Prompt ---
 
-  const systemPromptStatic = `Você é a Sofía, assistente virtual amigável da nossa churrascaria Asados em Curitiba-PR.
+  const systemPromptStatic = `Você é a Sofía, assistente virtual amigável da Casa de Assados Brasa & Sabor em Curitiba-PR.
 Sua personalidade é acolhedora, simpática, com leve sotaque e gírias curitibanas (use termos como "piá", "daí" de forma natural e sem exageros).
 Você deve usar emojis com moderação (no máximo 1 ou 2 por mensagem).
 
@@ -858,6 +873,19 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
         </div>
       )}
 
+      {purgeModal && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-rose-500/40 bg-zinc-900 p-6 shadow-2xl">
+            <h3 className="text-base font-bold text-rose-300">Purga total — apenas conta de teste</h3>
+            <p className="mt-3 text-xs leading-relaxed text-zinc-300">Remove definitivamente todos os dados derivados de {purgeModal.userName}, incluindo pedidos, conversas, comprovantes e arquivos atribuíveis. Registros financeiros e auditoria da exclusão normal NÃO são preservados. Arquivos legados ambíguos ficam na reconciliação de órfãos.</p>
+            <label className="mt-4 block text-xs font-semibold text-zinc-300">Senha atual do administrador<input autoComplete="current-password" className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm" onChange={(event) => setPurgePassword(event.target.value)} type="password" value={purgePassword} /></label>
+            <label className="mt-3 block text-xs font-semibold text-zinc-300">Digite PURGAR DEFINITIVAMENTE<input className="mt-1 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm" onChange={(event) => setPurgeConfirmation(event.target.value)} value={purgeConfirmation} /></label>
+            {purgeError ? <p className="mt-3 text-xs text-rose-300">{purgeError}</p> : null}
+            <div className="mt-5 flex justify-end gap-3"><button className="rounded-lg border border-zinc-700 px-3 py-2 text-xs" disabled={purging} onClick={() => { setPurgeModal(null); setPurgePassword(''); setPurgeConfirmation('') }}>Cancelar</button><button className="rounded-lg bg-rose-600 px-3 py-2 text-xs font-bold text-white disabled:opacity-50" disabled={purging || purgeConfirmation !== 'PURGAR DEFINITIVAMENTE' || !purgePassword} onClick={handleTotalPurge}>{purging ? 'Purgando...' : 'Executar purga total'}</button></div>
+          </div>
+        </div>
+      )}
+
       {/* Confirmation Modal */}
       {confirmModal.isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-fade-in">
@@ -878,7 +906,7 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
             <div className="text-sm text-zinc-300 space-y-3 mb-6">
               <p className="text-xs text-zinc-400 leading-relaxed">
                 {confirmModal.actionType === 'delete'
-                  ? 'Você está prestes a EXCLUIR DEFINITIVAMENTE o operador e todos os seus dados vinculados em cascata:'
+                  ? 'A exclusão normal remove acesso e anonimiza dados pessoais, preservando pedidos, pagamentos, comprovantes e auditoria:'
                   : 'Você está alterando as permissões de acesso do operador:'}
               </p>
               <div className="p-4 bg-zinc-950/60 rounded-xl border border-zinc-800/60">
@@ -897,7 +925,7 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                   </p>
                 ) : (
                   <p className="text-[11px] text-rose-400 mt-2 font-medium leading-relaxed">
-                    Esta ação excluirá permanentemente o perfil, pedidos, conversas, mensagens e a conta de autenticação.
+                    Pedidos, pagamentos, comprovantes, provas e auditoria permanecem anonimizados. Use a Purga total somente para conta de teste.
                   </p>
                 )}
               </div>
@@ -908,7 +936,7 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
               )}
               {confirmModal.actionType === 'delete' && (
                 <p className="text-[11px] text-rose-500 font-bold uppercase tracking-wider">
-                  ⚠️ Atenção: Esta ação é irreversível!
+                  ⚠️ A conta de acesso será removida; os registros preservados ficarão anonimizados.
                 </p>
               )}
             </div>
@@ -937,7 +965,7 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                 }`}
               >
                 {updating && <Loader2 className="h-3 w-3 animate-spin text-current" />}
-                {confirmModal.actionType === 'delete' ? 'Excluir Operador' : 'Confirmar Alteração'}
+                {confirmModal.actionType === 'delete' ? 'Excluir e anonimizar' : 'Confirmar Alteração'}
               </button>
             </div>
           </div>
@@ -1205,11 +1233,6 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
       {/* Sidebar Navigation */}
       <aside className="w-72 shrink-0 border-r border-zinc-800/80 bg-zinc-950/80 p-5 flex flex-col justify-between backdrop-blur-md overflow-y-auto">
         <div className="space-y-6">
-          {/* Brand Header */}
-          <div className="pb-4 border-b border-zinc-800/80">
-            <BrandLogo size="md" href="/atendimento/admin" />
-          </div>
-
           <nav className="space-y-5">
             {/* Categoria 1: Operacional & Vendas */}
             <div className="space-y-1">
@@ -1358,30 +1381,6 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
         </div>
         
         <div className="space-y-3 pt-6 border-t border-zinc-800/80">
-          <Link
-            href="/atendimento"
-            className="flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs font-bold text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 transition-all cursor-pointer shadow-sm"
-          >
-            <MessageSquare className="h-4 w-4 shrink-0" />
-            <span>Voltar ao Atendimento</span>
-          </Link>
-
-          <Link
-            href="/atendimento/perfil"
-            className="flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs font-semibold text-zinc-400 hover:bg-zinc-900/60 hover:text-zinc-200 transition-all cursor-pointer border border-transparent"
-          >
-            <User className="h-4 w-4 shrink-0" />
-            <span>Meu Perfil</span>
-          </Link>
-
-          <button
-            onClick={handleLogout}
-            className="flex w-full items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs font-semibold text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 transition-all cursor-pointer border border-transparent hover:border-rose-500/20"
-          >
-            <LogOut className="h-4 w-4 shrink-0" />
-            <span>Sair do Sistema</span>
-          </button>
-          
           {/* Info logado */}
           <div className="rounded-xl bg-zinc-900/50 border border-zinc-800/60 p-3 text-xs">
             <div className="text-zinc-500 font-medium text-[11px]">Operador Ativo</div>
@@ -1403,7 +1402,7 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
               <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
             </span>
             <div>
-              <div className="text-xs font-bold text-zinc-200">Painel de Controle • Casa de Assados Sofia</div>
+              <div className="text-xs font-bold text-zinc-200">Painel de Controle • Casa de Assados Brasa & Sabor</div>
               <div className="text-[11px] text-zinc-400">Gestão centralizada de estoque, pré-vendas, IA e equipe no Umbará</div>
             </div>
           </div>
@@ -1426,7 +1425,10 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
         
         {/* TAB 1: OPERADORES */}
         {activeTab === 'operadores' && (
-          <div className="flex flex-col h-full overflow-hidden space-y-6">
+          <div
+            className="flex h-full min-w-0 flex-col space-y-6 overflow-y-auto pr-1"
+            data-testid="user-management-flow"
+          >
             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 shrink-0">
               <div>
                 <h2 className="text-2xl font-bold text-zinc-100 tracking-tight">Gestão de Usuários e Equipe</h2>
@@ -1583,9 +1585,18 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                                 onClick={() => handleDeleteUserClick(user)}
                                 disabled={isSelf}
                                 className="p-2 text-rose-500 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg disabled:opacity-40 disabled:hover:bg-transparent transition-all cursor-pointer"
-                                title="Excluir usuário e dados associados em cascata"
+                                title="Excluir acesso e anonimizar dados pessoais"
                               >
                                 <Trash2 className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => { setPurgeError(null); setPurgePassword(''); setPurgeConfirmation(''); setPurgeModal({ userId: user.id, userName: user.nome }) }}
+                                disabled={isSelf}
+                                className="rounded-lg border border-rose-500/40 px-2 py-1 text-[10px] font-bold text-rose-300 hover:bg-rose-500/10 disabled:opacity-40"
+                                title="Purga total de conta de teste"
+                              >
+                                Purga total
                               </button>
                             </div>
                           </td>
@@ -1596,8 +1607,79 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                 </table>
               )}
             </div>
+
+            <section
+              className="min-w-0 shrink-0 overflow-hidden rounded-2xl border border-zinc-800/80 bg-zinc-900/30"
+              data-testid="anonymized-records-panel"
+            >
+              <button
+                type="button"
+                aria-expanded={residualsExpanded}
+                aria-controls="anonymized-records-content"
+                onClick={() => setResidualsExpanded((expanded) => !expanded)}
+                className="flex w-full min-w-0 items-center justify-between gap-4 px-4 py-3 text-left transition-colors hover:bg-zinc-900/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-amber-500"
+              >
+                <span className="min-w-0">
+                  <span className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-bold text-zinc-200">Registros anonimizados preservados</span>
+                    <span className="rounded-full border border-zinc-700 bg-zinc-950/70 px-2 py-0.5 text-[10px] font-bold text-zinc-400">
+                      {residuals.length}
+                    </span>
+                  </span>
+                  <span className="mt-0.5 block text-xs text-zinc-500">
+                    Retenção normal sem identidade ou conta Auth.
+                  </span>
+                </span>
+                <ChevronRight
+                  aria-hidden="true"
+                  className={`h-4 w-4 shrink-0 text-zinc-500 transition-transform ${residualsExpanded ? 'rotate-90' : ''}`}
+                />
+              </button>
+
+              {residualsExpanded && (
+                <div className="border-t border-zinc-800/80 p-3 sm:p-4" id="anonymized-records-content">
+                  <p className="mb-3 text-xs text-zinc-400">
+                    Estes registros são preservados pela política de retenção e não devem ser tratados automaticamente como contas de teste.
+                  </p>
+                  <div className="space-y-2">
+                    {residuals.map((row) => (
+                      <article
+                        className="min-w-0 rounded-xl border border-zinc-800 bg-zinc-950/50 p-3"
+                        key={row.id}
+                      >
+                        <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0 space-y-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <code className="break-all text-[11px] text-zinc-300">{row.id}</code>
+                              <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                                Retido
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-400">
+                              <span>Conversas {row.conversations}</span>
+                              <span>Mensagens {row.messages}</span>
+                              <span>Pedidos {row.orders}</span>
+                              <span>Provas {row.paymentProofs}</span>
+                              <span>Comprovantes {row.legacyReceipts}</span>
+                            </div>
+                          </div>
+                          <button
+                            className="w-full shrink-0 rounded-lg border border-rose-500/40 px-3 py-2 text-xs font-bold text-rose-300 transition-colors hover:bg-rose-500/10 sm:w-auto"
+                            onClick={() => { setResidualModal(row.id); setPurgeError(null) }}
+                          >
+                            Purgar registro anonimizado de teste
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         )}
+
+        {residualModal && <div className="fixed inset-0 z-[70] grid place-items-center bg-black/80 p-4"><div className="w-full max-w-md rounded-xl bg-zinc-900 p-5"><h3 className="font-bold text-rose-300">Purgar registro anonimizado de teste</h3><p className="mt-2 text-xs text-zinc-300">Somente para limpeza excepcional de um registro já anonimizado por engano/teste. Não há conta Auth associada.</p><code className="mt-2 block text-xs">{residualModal}</code><input aria-label="Senha atual do administrador para residual" autoComplete="current-password" className="mt-3 w-full rounded bg-zinc-950 p-2" onChange={(e) => setResidualPassword(e.target.value)} type="password" value={residualPassword}/><input aria-label="Confirmação de purga residual" className="mt-2 w-full rounded bg-zinc-950 p-2" onChange={(e) => setResidualConfirmation(e.target.value)} placeholder="PURGAR RESIDUAL DEFINITIVAMENTE" value={residualConfirmation}/>{purgeError && <p className="mt-2 text-xs text-rose-300">{purgeError}</p>}<div className="mt-3 flex justify-end gap-2"><button onClick={() => setResidualModal(null)}>Cancelar</button><button disabled={!residualPassword || residualConfirmation !== 'PURGAR RESIDUAL DEFINITIVAMENTE'} onClick={purgeResidual}>Confirmar purga residual</button></div></div></div>}
 
         {/* TAB 2: INTEGRAÇÕES */}
         {activeTab === 'integracoes' && (
@@ -2145,7 +2227,8 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
         )}
 
         {/* TAB: COMPROVANTES */}
-        {activeTab === 'comprovantes' && (
+        {activeTab === 'comprovantes' && <PaymentProofAdminPanel />}
+        {false && activeTab === 'comprovantes' && (
           <div className="flex flex-col h-full overflow-hidden space-y-6">
             <div className="flex justify-between items-center shrink-0">
               <div>

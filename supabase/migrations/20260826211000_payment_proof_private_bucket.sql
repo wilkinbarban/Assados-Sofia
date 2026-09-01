@@ -1,0 +1,2 @@
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)values('payment-proofs','payment-proofs',false,5242880,array['application/pdf','image/png'])on conflict(id)do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+-- No authenticated storage.objects policies are intentional: clients cannot list or address paths; row-authorized routes stream through service_role.

@@ -95,14 +95,15 @@ describe('ModalVisualizadorComprovante Component', () => {
     expect(screen.getByText(/comprovante_pix_final\.pdf/i)).toBeInTheDocument()
     expect(screen.getByText(/Wilkin Barban/i)).toBeInTheDocument()
     expect(screen.getByText(/200\.0 KB/i)).toBeInTheDocument()
-    expect(screen.getByText(/Imagem PNG \(Gerada do PDF\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/Prévia gerada do PDF/i)).toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.getByText(/Baixar PDF Original/i)).toBeInTheDocument()
-      expect(screen.getByText(/Abrir PNG/i)).toBeInTheDocument()
+      expect(screen.getByText(/Abrir prévia/i)).toBeInTheDocument()
       const img = screen.getByRole('img')
       expect(img).toBeInTheDocument()
       expect(img).toHaveAttribute('src', expect.stringContaining('data:image/png;base64,'))
+      expect((window as any).pdfjsLib.GlobalWorkerOptions.workerSrc).toBe('/pdfjs/pdf.worker.min.js')
     })
   })
 
@@ -144,7 +145,7 @@ describe('ModalVisualizadorComprovante Component', () => {
       />
     )
 
-    expect(screen.getByText(/Imagem de Comprovante \(PNG\)/i)).toBeInTheDocument()
+    expect(screen.getByText(/Imagem do comprovante/i)).toBeInTheDocument()
 
     await waitFor(() => {
       expect(screen.getByTitle(/Aumentar Zoom/i)).toBeInTheDocument()
@@ -155,5 +156,74 @@ describe('ModalVisualizadorComprovante Component', () => {
     fireEvent.click(zoomInBtn)
 
     expect(screen.getByText('125%')).toBeInTheDocument()
+  })
+
+  it('uses the authenticated SVG preview endpoint for generated receipts', async () => {
+    render(
+      <ModalVisualizadorComprovante
+        isOpen
+        onClose={vi.fn()}
+        urlArquivo="/api/receipts/receipt-1/pdf"
+        nomeArquivo="comprovante.pdf"
+      />,
+    )
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith('/api/receipts/receipt-1/svg')
+      expect(screen.getByText(/Prévia vetorial do comprovante/i)).toBeInTheDocument()
+      expect(screen.getByText(/Abrir prévia/i)).toBeInTheDocument()
+    })
+  })
+
+  it('destroys a loaded PDF document when the viewer closes', async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined)
+    ;(window as any).pdfjsLib.getDocument = () => ({
+      promise: Promise.resolve({
+        numPages: 1,
+        destroy,
+        getPage: () => Promise.resolve({
+          getViewport: () => ({ width: 600, height: 800 }),
+          render: () => ({ promise: Promise.resolve() }),
+        }),
+      }),
+    })
+
+    const view = render(
+      <ModalVisualizadorComprovante
+        isOpen
+        onClose={vi.fn()}
+        urlArquivo="comprovantes/123/comprovante.pdf"
+        nomeArquivo="comprovante.pdf"
+      />,
+    )
+    await waitFor(() => expect(screen.getByRole('img')).toBeInTheDocument())
+    view.rerender(
+      <ModalVisualizadorComprovante
+        isOpen={false}
+        onClose={vi.fn()}
+        urlArquivo="comprovantes/123/comprovante.pdf"
+        nomeArquivo="comprovante.pdf"
+      />,
+    )
+    await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not offer an empty original download when only a preview loaded', async () => {
+    ;(global.fetch as any)
+      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(['svg'], { type: 'image/svg+xml' }) })
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+
+    render(
+      <ModalVisualizadorComprovante
+        isOpen
+        onClose={vi.fn()}
+        urlArquivo="/api/receipts/receipt-1/pdf"
+        nomeArquivo="comprovante.pdf"
+      />,
+    )
+
+    await waitFor(() => expect(screen.getByRole('img')).toBeInTheDocument())
+    expect(screen.queryByText(/Baixar PDF Original/i)).not.toBeInTheDocument()
+    expect(screen.getByText(/PDF original indisponível/i)).toBeInTheDocument()
   })
 })

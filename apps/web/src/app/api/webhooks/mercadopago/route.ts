@@ -343,9 +343,9 @@ export async function POST(request: Request) {
     }
     
     // Ler do Query Params ou Body
-    let topic = searchParams.get('topic') || searchParams.get('type') || body?.type || body?.action
-    let paymentId = dataId || searchParams.get('id') || (body?.data?.id ? String(body.data.id) : null) || (body?.id ? String(body.id) : null)
-    let pedidoIdMock =
+    const topic = searchParams.get('topic') || searchParams.get('type') || body?.type || body?.action
+    const paymentId = dataId || searchParams.get('id') || (body?.data?.id ? String(body.data.id) : null) || (body?.id ? String(body.id) : null)
+    const pedidoIdMock =
       searchParams.get('pedidoId') ||
       searchParams.get('pedido_id') ||
       searchParams.get('external_reference') ||
