@@ -391,7 +391,7 @@ export default function VerificarTelefonePage() {
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">{canalEnvio === 'telegram' ? 'Telegram' : 'WhatsApp'} Verificado!</h2>
             <p className="text-zinc-300 max-w-[280px]">
-              Seu telefone foi vinculado com sucesso à sua conta da Casa de Assados Sofia.
+              Seu telefone foi vinculado com sucesso à sua conta da Casa de Assados Brasa & Sabor.
             </p>
             <p className="text-xs text-zinc-500 mt-6">
               Carregando suas configurações de cliente...

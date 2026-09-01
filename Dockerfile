@@ -26,7 +26,7 @@ ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
 # Disable telemetry during Next.js build
 ENV NEXT_TELEMETRY_DISABLED=1
 
-RUN npm run build
+RUN npm run build --workspace @asados/web -- --webpack
 
 # Stage 3: Production image runner
 FROM node:22-alpine AS runner
@@ -48,6 +48,10 @@ RUN chown -R nextjs:nodejs apps
 # https://nextjs.org/docs/advanced-features/output-file-tracing
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.next/static
+
+# Keep the renderer outside the webpack graph so Worker receives a stable,
+# non-transformed ESM entry point with package resolution rooted at /app.
+COPY --from=builder --chown=nextjs:nodejs /app/apps/web/src/lib/payment-proofs/render-worker.mjs /app/payment-proof-render-worker.mjs
 
 USER nextjs
 

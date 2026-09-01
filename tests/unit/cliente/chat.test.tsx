@@ -348,7 +348,7 @@ describe('ChatContainer Core UI Tests (Phase 2)', () => {
 
     expect(screen.getByRole('button', { name: /Abrir cardápio/i })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Abrir meu pedido/i })).toBeInTheDocument()
-    expect(screen.getByTestId('customer-commerce-panel')).toHaveClass('lg:w-[min(46vw,560px)]')
+    expect(screen.getByTestId('customer-commerce-panel')).toHaveClass('lg:w-[min(48vw,640px)]', 'xl:w-[min(44vw,680px)]')
     expect(screen.getByTestId('customer-chat-shell')).toHaveClass('h-full', 'min-h-0')
   })
 
@@ -477,7 +477,7 @@ describe('ChatContainer Core UI Tests (Phase 2)', () => {
         id: 'msg-inserted-456',
         conversa_id: 'conversa-123',
         remetente: 'cliente' as const,
-        conteudo: '🛒 *Pedido Montado no Cardápio:*\n• 1x Costela Premium (R$ 89,90)\n\n💰 *Total:* R$ 89,90\n🕒 *Horário de Retirada:* 12:00\n📍 *Local:* Balcão Umbará (Casa de Assados Sofia)\n\nOlá! Gostaria de confirmar esse pedido, por favor!',
+        conteudo: '🛒 *Pedido Montado no Cardápio:*\n• 1x Costela Premium (R$ 89,90)\n\n💰 *Total:* R$ 89,90\n🕒 *Horário de Retirada:* 12:00\n📍 *Local:* Balcão Umbará (Casa de Assados Brasa & Sabor)\n\nOlá! Gostaria de confirmar esse pedido, por favor!',
         url_anexo: null,
         data_criacao: new Date().toISOString(),
       }

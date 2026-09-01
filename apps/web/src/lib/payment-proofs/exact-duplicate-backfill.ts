@@ -1,0 +1,2 @@
+type Legacy={id:string;createdAt:string;sha256:string|null}
+export function planExactDuplicateBackfill(rows:Legacy[]){if(rows.length!==2||rows.some(r=>!r.sha256))throw new Error('LEGACY_PROOFS_AMBIGUOUS');if(rows[0].sha256!==rows[1].sha256)throw new Error('LEGACY_PROOFS_NOT_EXACT_DUPLICATES');const [canonical,duplicate]=[...rows].sort((a,b)=>a.createdAt.localeCompare(b.createdAt)||a.id.localeCompare(b.id));return{canonicalId:canonical.id,duplicateId:duplicate.id,sha256:canonical.sha256!}}

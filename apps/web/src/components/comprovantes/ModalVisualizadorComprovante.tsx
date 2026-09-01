@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   X,
   Download,
@@ -32,7 +32,11 @@ let cachedPdfJsPromise: Promise<any> | null = null
 
 async function getPdfJs(): Promise<any> {
   if (typeof window === 'undefined') return null
-  if ((window as any).pdfjsLib) return (window as any).pdfjsLib
+  if ((window as any).pdfjsLib) {
+    const lib = (window as any).pdfjsLib
+    lib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.js'
+    return lib
+  }
   if (cachedPdfJsPromise) return cachedPdfJsPromise
 
   cachedPdfJsPromise = new Promise((resolve, reject) => {
@@ -42,25 +46,12 @@ async function getPdfJs(): Promise<any> {
     }
 
     const script = document.createElement('script')
-    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js'
-    script.onload = async () => {
+    script.src = '/pdfjs/pdf.min.js'
+    script.onload = () => {
       const lib = (window as any).pdfjsLib
       if (lib) {
-        try {
-          // Cria Worker via Blob inline para evitar erro de CORS/SecurityError no navegador
-          const res = await fetch(
-            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
-          )
-          const text = await res.text()
-          const blob = new Blob([text], { type: 'text/javascript' })
-          lib.GlobalWorkerOptions.workerPort = null
-          lib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob)
-          resolve(lib)
-        } catch {
-          // Fallback para rota pública local
-          lib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.mjs'
-          resolve(lib)
-        }
+        lib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.js'
+        resolve(lib)
       } else {
         reject(new Error('PDF.js indisponível após carregar o script'))
       }
@@ -121,6 +112,7 @@ export default function ModalVisualizadorComprovante({
   const [numPages, setNumPages] = useState<number>(1)
   const [currentPage, setCurrentPage] = useState<number>(1)
   const [pdfDoc, setPdfDoc] = useState<any>(null)
+  const pdfDocRef = useRef<any>(null)
 
   const isPdf =
     nomeArquivo.toLowerCase().endsWith('.pdf') ||
@@ -157,6 +149,8 @@ export default function ModalVisualizadorComprovante({
     if (!isOpen || !urlArquivo) {
       setPngDataUrl(null)
       setOriginalBlob(null)
+      void pdfDocRef.current?.destroy?.()
+      pdfDocRef.current = null
       setPdfDoc(null)
       setErro(null)
       setZoom(100)
@@ -172,7 +166,7 @@ export default function ModalVisualizadorComprovante({
       try {
         // Caso seja um comprovante gerado pelo sistema (/api/receipts/[id]/pdf)
         if (urlArquivo.includes('/api/receipts/')) {
-          const imageEndpoint = urlArquivo.replace('/pdf', '/png')
+          const imageEndpoint = urlArquivo.replace('/pdf', '/svg')
           const pdfEndpoint = urlArquivo
 
           // 1. Busca a imagem vetorial/PNG gerada instantaneamente pelo servidor
@@ -215,6 +209,25 @@ export default function ModalVisualizadorComprovante({
           endpoint = `/api/chat/midia?path=${encodeURIComponent(urlArquivo)}`
         }
 
+        if (isPdf) {
+          // 1. Tenta carregar a prévia PNG ultrarrápida gerada pelo servidor
+          try {
+            const previewEndpoint = endpoint.includes('?') ? `${endpoint}&preview=true` : `${endpoint}?preview=true`
+            const previewRes = await fetch(previewEndpoint)
+            if (previewRes.ok && previewRes.headers.get('content-type')?.includes('image')) {
+              const previewBlob = await previewRes.blob()
+              if (!ativo) return
+              createdBlobUrl = URL.createObjectURL(previewBlob)
+              setPngDataUrl(createdBlobUrl)
+              setNumPages(1)
+              setCurrentPage(1)
+              return
+            }
+          } catch (serverPreviewErr) {
+            console.warn('Prévia do servidor indisponível, tentando download do original:', serverPreviewErr)
+          }
+        }
+
         const res = await fetch(endpoint)
         if (!res.ok) {
           throw new Error(`Falha na resposta do servidor (${res.status})`)
@@ -233,7 +246,7 @@ export default function ModalVisualizadorComprovante({
         setOriginalBlob(fileBlob)
 
         if (isPdf) {
-          // Converte o arquivo PDF em imagem PNG
+          // Fallback: Converte o arquivo PDF em imagem PNG no cliente
           try {
             const pdfjsLib = await getPdfJs()
             const loadingTask = pdfjsLib.getDocument({
@@ -243,6 +256,7 @@ export default function ModalVisualizadorComprovante({
             const doc = await loadingTask.promise
             if (!ativo) return
 
+            pdfDocRef.current = doc
             setPdfDoc(doc)
             setNumPages(doc.numPages)
             setCurrentPage(1)
@@ -273,6 +287,8 @@ export default function ModalVisualizadorComprovante({
 
     return () => {
       ativo = false
+      void pdfDocRef.current?.destroy?.()
+      pdfDocRef.current = null
       if (createdBlobUrl) {
         URL.revokeObjectURL(createdBlobUrl)
       }
@@ -282,12 +298,13 @@ export default function ModalVisualizadorComprovante({
   if (!isOpen || !urlArquivo) return null
 
   const handleDownload = () => {
-    if (!originalBlob && !pngDataUrl) return
+    if (!originalBlob || originalBlob.size === 0) {
+      setErro('O arquivo original está indisponível. Tente novamente ou use a prévia para imprimir.')
+      return
+    }
     setBaixando(true)
     try {
-      const blob =
-        originalBlob || new Blob([], { type: isPdf ? 'application/pdf' : 'image/png' })
-      const downloadUrl = URL.createObjectURL(blob)
+      const downloadUrl = URL.createObjectURL(originalBlob)
       const a = document.createElement('a')
       a.href = downloadUrl
       a.download = nomeArquivo || (isPdf ? 'comprovante.pdf' : 'comprovante.png')
@@ -302,39 +319,33 @@ export default function ModalVisualizadorComprovante({
     }
   }
 
-  const handlePrint = () => {
+  const openSafeImageWindow = (print: boolean) => {
     if (pngDataUrl) {
       const printWindow = window.open('', '_blank')
       if (printWindow) {
-        printWindow.document.write(`
-          <html>
-            <head><title>Imprimir Comprovante - ${nomeArquivo}</title></head>
-            <body style="margin:0; display:flex; justify-content:center; align-items:center; min-height:100vh; background:#fff;">
-              <img src="${pngDataUrl}" style="max-width:100%; height:auto;" onload="window.print();window.close();" />
-            </body>
-          </html>
-        `)
-        printWindow.document.close()
+        const document = printWindow.document
+        document.title = `${print ? 'Imprimir comprovante' : 'Prévia do comprovante'} - ${nomeArquivo}`
+        document.body.style.cssText = `margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:${print ? '#fff' : '#09090b'}`
+        const image = document.createElement('img')
+        image.src = pngDataUrl
+        image.alt = 'Prévia do comprovante'
+        image.style.cssText = 'max-width:95vw;max-height:95vh;object-fit:contain'
+        if (print) image.addEventListener('load', () => printWindow.print(), { once: true })
+        document.body.appendChild(image)
       }
     }
   }
 
+  const handlePrint = () => openSafeImageWindow(true)
+
   const handleAbrirNovaAba = () => {
     if (pngDataUrl) {
-      const w = window.open('')
-      if (w) {
-        w.document.write(`
-          <html>
-            <head><title>Comprovante PNG - ${nomeArquivo}</title></head>
-            <body style="margin:0; background:#09090b; display:flex; align-items:center; justify-content:center; min-height:100vh;">
-              <img src="${pngDataUrl}" style="max-width:95vw; max-height:95vh; object-fit:contain; border-radius:12px; box-shadow:0 25px 50px -12px rgba(0,0,0,0.5);" />
-            </body>
-          </html>
-        `)
-      }
+      openSafeImageWindow(false)
     } else if (originalBlob) {
       const url = URL.createObjectURL(originalBlob)
-      window.open(url, '_blank')
+      const opened = window.open(url, '_blank')
+      if (!opened) URL.revokeObjectURL(url)
+      else window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
     }
   }
 
@@ -359,7 +370,7 @@ export default function ModalVisualizadorComprovante({
               <div className="flex items-center gap-2">
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
                   <Sparkles className="h-3 w-3 text-emerald-400" />
-                  {isPdf ? 'Imagem PNG (Gerada do PDF)' : 'Imagem de Comprovante (PNG)'}
+                  {urlArquivo.includes('/api/receipts/') ? 'Prévia vetorial do comprovante' : isPdf ? 'Prévia gerada do PDF' : 'Imagem do comprovante'}
                 </span>
                 <h3 className="text-sm font-bold text-zinc-50 truncate max-w-md">
                   {nomeArquivo}
@@ -397,12 +408,12 @@ export default function ModalVisualizadorComprovante({
           </button>
         </div>
 
-        {/* Área Central de Visualização — Renderiza EXCLUSIVAMENTE a Imagem PNG */}
+        {/* Área central de visualização */}
         <div className="flex-1 min-h-[440px] max-h-[65vh] my-4 rounded-2xl bg-zinc-900/60 border border-zinc-800/80 flex items-center justify-center relative overflow-hidden">
           {carregando ? (
             <div className="flex flex-col items-center gap-3 text-zinc-400">
               <Loader2 className="h-10 w-10 animate-spin text-amber-500" />
-              <p className="text-xs font-medium">Gerando imagem PNG em alta definição a partir do comprovante...</p>
+              <p className="text-xs font-medium">Gerando prévia do comprovante...</p>
             </div>
           ) : erro ? (
             <div className="flex flex-col items-center gap-3 text-amber-300 p-6 text-center">
@@ -416,10 +427,10 @@ export default function ModalVisualizadorComprovante({
                 className="transition-transform duration-200 flex items-center justify-center shadow-2xl rounded-2xl overflow-hidden border border-zinc-800 bg-white"
                 style={{ transform: `scale(${zoom / 100})` }}
               >
-                {/* Visualização pura de Imagem PNG */}
-                <img
+                {/* eslint-disable-next-line @next/next/no-img-element -- Preview is a transient blob or data URL generated from private proof content. */}
+                    <img
                   src={pngDataUrl}
-                  alt={`Comprovante PNG - ${nomeArquivo}`}
+                  alt={`Prévia do comprovante - ${nomeArquivo}`}
                   className="max-h-[58vh] max-w-full object-contain select-none"
                 />
               </div>
@@ -493,7 +504,7 @@ export default function ModalVisualizadorComprovante({
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-zinc-800/80 shrink-0">
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-zinc-400">
-              Casa de Assados Sofia • Visualizador de Imagem PNG
+              Casa de Assados Brasa & Sabor • Visualizador de comprovante
             </span>
           </div>
 
@@ -514,13 +525,13 @@ export default function ModalVisualizadorComprovante({
                   type="button"
                   onClick={handleAbrirNovaAba}
                   className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-800 text-xs font-bold transition-all active:scale-95 cursor-pointer"
-                  title="Abrir imagem PNG em nova aba"
+                  title="Abrir prévia em nova aba"
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
-                  <span>Abrir PNG</span>
+                  <span>Abrir prévia</span>
                 </button>
 
-                <button
+                {originalBlob && originalBlob.size > 0 ? <button
                   type="button"
                   onClick={handleDownload}
                   disabled={baixando}
@@ -537,7 +548,7 @@ export default function ModalVisualizadorComprovante({
                       <span>Baixar {isPdf ? 'PDF Original' : 'Comprovante'}</span>
                     </>
                   )}
-                </button>
+                </button> : isPdf ? <span className="text-xs text-amber-300">PDF original indisponível</span> : null}
               </>
             )}
 

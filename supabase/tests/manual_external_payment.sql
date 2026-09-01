@@ -1,0 +1,8 @@
+select plan(1);set role postgres;
+insert into auth.users(id,instance_id,aud,role,email,created_at,updated_at) values('44444444-4444-4444-8444-444444444401','00000000-0000-0000-0000-000000000000','authenticated','authenticated','seller2@test',now(),now()) on conflict do nothing;
+insert into public.perfis(id,nome,funcao,ativo) values('44444444-4444-4444-8444-444444444401','Seller','vendedor',true) on conflict(id) do update set ativo=true,funcao='vendedor';
+insert into public.clientes(id,nome,telefone) values('44444444-4444-4444-8444-444444444421','Owner','5541999999977') on conflict do nothing;
+insert into public.pedidos(id,cliente_id,status,status_pagamento,tipo_entrega,meio_pagamento,total_produtos_centavos,taxa_entrega_centavos,total_pedido_centavos) values('44444444-4444-4444-8444-444444444441','44444444-4444-4444-8444-444444444421','entregue','pendente','retirada','dinheiro',4200,0,4200) on conflict do nothing;reset role;
+set role authenticated;select set_config('request.jwt.claim.sub','44444444-4444-4444-8444-444444444401',false);
+do $$declare a bigint;b bigint;begin select public.approve_manual_external_payment(array['44444444-4444-4444-8444-444444444441']::uuid[],4200,'cash','Paid at counter','44444444-4444-4444-8444-444444444481') into a;select public.approve_manual_external_payment(array['44444444-4444-4444-8444-444444444441']::uuid[],4200,'cash','Paid at counter','44444444-4444-4444-8444-444444444481') into b;if a<>b then raise exception 'replay failed';end if;end$$;reset role;
+select pass('manual external approval is canonical and idempotent');select * from finish();

@@ -9,7 +9,6 @@
  *   node scripts/client-phone-auth-reconcile.mjs [--dry-run]
  */
 
-import { createClient } from '@supabase/supabase-js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -33,18 +32,25 @@ function resolveCredentials() {
   return { url, key };
 }
 
-const { url: supabaseUrl, key: serviceRoleKey } = resolveCredentials();
+async function createSupabaseClient() {
+  const { url, key } = resolveCredentials();
+  if (!key) {
+    throw new Error('missing-required-supabase-credentials');
+  }
 
-const supabase = createClient(supabaseUrl, serviceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false }
-});
+  const { createClient } = await import('@supabase/supabase-js');
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+}
 
-export async function reconciliarDesafios(supabaseClient = supabase) {
+export async function reconciliarDesafios(supabaseClient) {
+  const client = supabaseClient || await createSupabaseClient();
   console.log(`Iniciando reconciliação de desafios OTP (${isDryRun ? 'DRY-RUN' : 'APPLY'})...`);
 
   // 1. Buscar desafios expirados por tempo que ainda constam como pending_delivery ou active
   const agora = new Date().toISOString();
-  const { data: pendentes, error: errPendentes } = await supabaseClient
+  const { data: pendentes, error: errPendentes } = await client
     .from('desafios_otp')
     .select('id, telefone, proposito, status, expira_em, data_criacao')
     .in('status', ['pending_delivery', 'active'])
@@ -58,7 +64,7 @@ export async function reconciliarDesafios(supabaseClient = supabase) {
 
   for (const d of (pendentes || [])) {
     if (!isDryRun) {
-      const { error: errUpd } = await supabaseClient
+      const { error: errUpd } = await client
         .from('desafios_otp')
         .update({ status: 'expired' })
         .eq('id', d.id);
@@ -72,7 +78,7 @@ export async function reconciliarDesafios(supabaseClient = supabase) {
   }
 
   // 2. Buscar concessões de recuperação expiradas
-  const { data: concessoes, error: errConcessoes } = await supabaseClient
+  const { data: concessoes, error: errConcessoes } = await client
     .from('concessoes_recuperacao')
     .select('id, telefone, expira_em')
     .is('aplicado_em', null)

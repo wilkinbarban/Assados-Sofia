@@ -30,6 +30,7 @@ vi.mock('@/app/actions/admin', () => ({
   deletarUsuarioAdmin: vi.fn(),
   salvarConfiguracaoAdmin: vi.fn(),
   obterComprovantes: vi.fn(),
+  listarRegistrosAnonimizadosPreservados: vi.fn().mockResolvedValue({ success: true, data: [] }),
 }))
 
 vi.mock('@/app/actions/storage-orphan-reconciliation', () => ({

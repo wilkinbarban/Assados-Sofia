@@ -24,7 +24,17 @@ if (process.env.SUPABASE_PROJECT_REF !== protectedProjectRef) {
   abort('project-ref-mismatch')
 }
 
-const linkedProjectRef = readFileSync(new URL('supabase/.temp/project-ref', projectRoot), 'utf8').trim()
+let linkedProjectRef
+try {
+  linkedProjectRef = readFileSync(new URL('supabase/.temp/project-ref', projectRoot), 'utf8').trim()
+} catch {
+  abort('linked-project-ref-unavailable')
+}
+
+if (!linkedProjectRef) {
+  abort('linked-project-ref-unavailable')
+}
+
 if (linkedProjectRef !== protectedProjectRef) {
   abort('linked-project-ref-mismatch')
 }

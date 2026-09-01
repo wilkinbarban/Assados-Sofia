@@ -12,7 +12,6 @@
  *   node scripts/client-phone-auth-audit.mjs [--dry-run] [--json]
  */
 
-import { createClient } from '@supabase/supabase-js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -37,15 +36,22 @@ function resolveCredentials() {
   return { url, key };
 }
 
-const { url: supabaseUrl, key: serviceRoleKey } = resolveCredentials();
+async function createSupabaseClient() {
+  const { url, key } = resolveCredentials();
+  if (!key) {
+    throw new Error('missing-required-supabase-credentials');
+  }
 
-const supabase = createClient(supabaseUrl, serviceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false }
-});
+  const { createClient } = await import('@supabase/supabase-js');
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+}
 
 const CURITIBA_PHONE_REGEX = /^55419[0-9]{8}$/;
 
-export async function auditarClientes(supabaseClient = supabase) {
+export async function auditarClientes(supabaseClient) {
+  const client = supabaseClient || await createSupabaseClient();
   const relatorio = {
     timestamp: new Date().toISOString(),
     dryRun: isDryRun,
@@ -59,7 +65,7 @@ export async function auditarClientes(supabaseClient = supabase) {
     quarentena: []
   };
 
-  const { data: clientes, error } = await supabaseClient
+  const { data: clientes, error } = await client
     .from('clientes')
     .select('id, nome, telefone, email, usuario_id, telegram_chat_id, telefone_verificado_em, telefone_verificado_origem');
 

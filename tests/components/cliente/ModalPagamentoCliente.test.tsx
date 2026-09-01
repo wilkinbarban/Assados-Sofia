@@ -18,6 +18,11 @@ vi.mock('@/app/actions/pedidos', () => ({
 
 vi.mock('@/lib/supabase/client', () => ({
   createClient: () => ({
+    storage: {
+      from: () => ({
+        upload: vi.fn().mockResolvedValue({ error: null }),
+      }),
+    },
     channel: () => ({
       on: () => ({
         subscribe: vi.fn(),
@@ -83,6 +88,10 @@ describe('ModalPagamentoCliente Component', () => {
 
     expect(screen.getByText(/Clique para selecionar ou arraste o comprovante/i)).toBeInTheDocument()
 
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    const pdf = new File(['%PDF-test'], 'comprovante.pdf', { type: 'application/pdf' })
+    fireEvent.change(fileInput, { target: { files: [pdf] } })
+
     const textarea = screen.getByPlaceholderText(/Ex: Realizei o pagamento às 12:10/i)
     fireEvent.change(textarea, { target: { value: 'Comprovante PIX pago ID E999888' } })
 
@@ -91,6 +100,9 @@ describe('ModalPagamentoCliente Component', () => {
 
     await waitFor(() => {
       expect(mocks.enviarComprovantePagamentoCliente).toHaveBeenCalledWith('order-client-1234', {
+        urlComprovante: expect.stringMatching(/^comprovantes\/order-client-1234\/.+_comprovante\.pdf$/),
+        nomeArquivo: 'comprovante.pdf',
+        tamanhoBytes: pdf.size,
         texto: 'Comprovante PIX pago ID E999888',
       })
     })

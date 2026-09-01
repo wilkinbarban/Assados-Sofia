@@ -70,7 +70,7 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
   const mockProdutos = [
     {
       id: 'prod-combo-1',
-      nome: 'Combo 1 - O Clássico da Sofia',
+      nome: 'Combo 1 - O Clássico Brasa & Sabor',
       descricao: 'Frango assado recheado + maionese artesanal 500g + risoto curitibano',
       preco_centavos: 6990,
       precoCentavos: 6990,
@@ -508,7 +508,7 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
               apikey: 'test-evo-api-key',
               'Content-Type': 'application/json',
             }),
-            body: expect.stringContaining('Combo 1 - O Clássico da Sofia'),
+            body: expect.stringContaining('Combo 1 - O Clássico Brasa & Sabor'),
           })
         )
 
@@ -601,7 +601,7 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
         })
 
         expect(actionResult.handled).toBe(true)
-        expect(actionResult.respostaTexto).toContain('Combo 1 - O Clássico da Sofia')
+        expect(actionResult.respostaTexto).toContain('Combo 1 - O Clássico Brasa & Sabor')
         expect(actionResult.respostaTexto).toContain('adicionado ao seu pedido')
       })
     })
@@ -613,8 +613,8 @@ describe('E2E Lifecycle Test: Ciclo Completo de Pedidos (Sem e Com Intervenção
       it('formata e entrega cardápio com descrições, preços e fotos para Telegram e Web', () => {
         const textoCardapioTg = formatarCardapioResumido(mockProdutos as any)
 
-        expect(textoCardapioTg).toContain('CASA DE ASSADOS SOFIA')
-        expect(textoCardapioTg.toUpperCase()).toContain('COMBO 1 - O CLÁSSICO DA SOFIA')
+        expect(textoCardapioTg).toContain('CASA DE ASSADOS BRASA & SABOR')
+        expect(textoCardapioTg.toUpperCase()).toContain('COMBO 1 - O CLÁSSICO BRASA & SABOR')
         expect(textoCardapioTg).toContain('R$ 69,90')
         expect(textoCardapioTg.toUpperCase()).toContain('COSTELA FOGO DE CHÃO (KG)')
         expect(textoCardapioTg).toContain('R$ 79,90')

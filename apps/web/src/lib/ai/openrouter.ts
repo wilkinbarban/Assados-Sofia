@@ -10,6 +10,36 @@ import { gerarCatalogoCardsCompleto, obterCartaoCombo } from '@/lib/cardapio/car
 import { classifySofiaRequestTier } from '@/lib/ai/router'
 import { isOmniRouteEnabled, chamarOmniRouteGateway, isLegacyFallbackEnabled } from '@/lib/ai/omniroute'
 
+const LEGACY_LLM_TIMEOUT_MS = 15_000
+const LEGACY_LLM_MAX_TOKENS = 1024
+const LEGACY_LLM_MAX_RESPONSE_BYTES = 1024 * 1024
+const LEGACY_LLM_MAX_CONTENT_CHARS = 16_000
+
+async function readLegacyLlmJson(response: Response): Promise<any> {
+  const declared = response.headers.get('content-length')
+  if (declared && (!/^\d+$/.test(declared) || Number(declared) > LEGACY_LLM_MAX_RESPONSE_BYTES)) {
+    throw new Error('LEGACY_LLM_RESPONSE_TOO_LARGE')
+  }
+  if (!response.body) throw new Error('LEGACY_LLM_EMPTY_RESPONSE')
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > LEGACY_LLM_MAX_RESPONSE_BYTES) {
+      await reader.cancel()
+      throw new Error('LEGACY_LLM_RESPONSE_TOO_LARGE')
+    }
+    chunks.push(value)
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength }
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
 /**
  * Verifica se as chaves da API do OpenRouter não estão configuradas ou possuem valores de placeholder
  */
@@ -72,7 +102,7 @@ function obterRespostaMock(mensagemCliente: string): string {
   }
 
   if (texto.includes('preço') || texto.includes('preco') || texto.includes('valor') || texto.includes('quanto custa') || texto.includes('quanto tá') || texto.includes('quanto ta')) {
-    return `Nossos combos têm o melhor custo-benefício de Curitiba, piá! 💰\n\n• *Combo 1 (Clássico - Frango Recheado)*: \`R$ 69,90\` (3-4 pessoas)\n• *Combo 2 (Costela Suprema no Bafo)*: \`R$ 119,90\` (4 pessoas)\n• *Combo 3 (Dueto Frango & Costelinha Suína)*: \`R$ 94,90\` (3-4 pessoas)\n• *Combo 4 (Kit Churrasco Família)*: \`R$ 169,90\` (5-6 pessoas)\n\n💬 *Quantas pessoas vão almoçar com você hoje? Me diz que te indico o combo perfeito!* 😊`
+    return `Nossos combos têm o melhor custo-benefício de Curitiba, piá! 💰\n\n• *Combo 1 (Clássico Brasa & Sabor - Frango Recheado)*: \`R$ 69,90\` (3-4 pessoas)\n• *Combo 2 (Costela Suprema no Bafo)*: \`R$ 119,90\` (4 pessoas)\n• *Combo 3 (Dueto Brasa & Sabor - Frango & Costelinha Suína)*: \`R$ 94,90\` (3-4 pessoas)\n• *Combo 4 (Kit Churrasco Família)*: \`R$ 169,90\` (5-6 pessoas)\n\n💬 *Quantas pessoas vão almoçar com você hoje? Me diz que te indico o combo perfeito!* 😊`
   }
 
   if (texto.includes('horário') || texto.includes('horario') || texto.includes('funcionamento') || texto.includes('que horas') || texto.includes('abre') || texto.includes('fecha')) {
@@ -103,7 +133,7 @@ function obterRespostaMock(mensagemCliente: string): string {
   }
 
   // Resposta padrão
-  return 'Olá! Sou a Sofía, assistente virtual da Casa de Assados Sofia no Umbará, piá! 😊 Como posso te ajudar com o seu almoço hoje? Daí, quer conhecer nossos 4 combos especiais ou agendar uma retirada? 🍖🔥'
+  return 'Olá! Sou a Sofía, assistente virtual da Casa de Assados Brasa & Sabor no Umbará, piá! 😊 Como posso te ajudar com o seu almoço hoje? Daí, quer conhecer nossos 4 combos especiais ou agendar uma retirada? 🍖🔥'
 }
 
 /**
@@ -278,7 +308,7 @@ export async function processarRagPipeline(
   const customSystemPrompt = await obterConfiguracaoSistema('SOFIA_SYSTEM_PROMPT')
   const promptBase = (customSystemPrompt && customSystemPrompt.trim())
     ? customSystemPrompt
-    : `Você é a Sofía, consultora gastronômica virtual e anfitriã de atendimento da Casa de Assados Sofia em Curitiba-PR.
+    : `Você é a Sofía, consultora gastronômica virtual e anfitriã de atendimento da Casa de Assados Brasa & Sabor em Curitiba-PR.
 Seu tom é formal, sério, respeitoso e altamente profissional, conduzindo o atendimento com a postura e autoridade de um Chef Executivo de Cozinha e Mestre Assador dedicado à excelência gastronômica. Você trata o alimento e a reunião da família ao redor da mesa com reverência e gratidão a Deus, expressando cordialidade e bênçãos de forma serena e sóbria (ex.: "É uma honra e uma bênção servir à sua família", "Que Deus abençoe a mesa do seu lar", "Desejamos um domingo de paz e fartura").
 Você deve usar emojis com moderação (no máximo 1 ou 2 por mensagem).
 
@@ -390,11 +420,12 @@ ${regraIdiomaRodape}`
 
       if (!isDeepSeek) {
         headers['HTTP-Referer'] = 'https://github.com/wilkin/proyectos/Asados'
-        headers['X-Title'] = 'Sofia CRM Asados'
+        headers['X-Title'] = 'CRM Casa de Assados Brasa & Sabor'
       }
 
       const response = await fetch(apiUrl, {
         method: 'POST',
+        signal: AbortSignal.timeout(LEGACY_LLM_TIMEOUT_MS),
         headers,
         body: JSON.stringify({
           model: model,
@@ -402,7 +433,8 @@ ${regraIdiomaRodape}`
             { role: 'system', content: systemPrompt },
             { role: 'user', content: `[LEMBRETE DO SISTEMA: Você deve responder APENAS em PORTUGUÊS DO BRASIL. Não importa o idioma da mensagem abaixo, sua resposta DEVE ser em português.]\n\nMensagem do cliente:\n${mensagemCliente}` }
           ],
-          temperature: 0.1
+          temperature: 0.1,
+          max_tokens: LEGACY_LLM_MAX_TOKENS
         })
       })
 
@@ -410,8 +442,12 @@ ${regraIdiomaRodape}`
         throw new Error(`Erro HTTP ${response.status}: ${response.statusText}`)
       }
 
-      const data = await response.json()
-      respostaIa = data.choices?.[0]?.message?.content?.trim() || ''
+      const data = await readLegacyLlmJson(response)
+      const content = data.choices?.[0]?.message?.content
+      if (typeof content !== 'string' || content.length > LEGACY_LLM_MAX_CONTENT_CHARS) {
+        throw new Error('LEGACY_LLM_CONTENT_INVALID')
+      }
+      respostaIa = content.trim()
 
       if (!respostaIa) {
         throw new Error('OpenRouter retornou resposta vazia.')

@@ -11,12 +11,12 @@ vi.mock('@/app/actions/pedidos', () => ({
   gerarPreferenciaPagamento: vi.fn().mockResolvedValue({ success: true }),
 }))
 
-describe('OrdersManagementDashboard - Advanced Filtering & Search', () => {
-  afterEach(() => {
-    cleanup()
-    vi.restoreAllMocks()
-  })
+afterEach(() => {
+  cleanup()
+  vi.restoreAllMocks()
+})
 
+describe('OrdersManagementDashboard - Advanced Filtering & Search', () => {
   const mockPedidos: any[] = [
     {
       id: 'ped-101',
@@ -33,7 +33,7 @@ describe('OrdersManagementDashboard - Advanced Filtering & Search', () => {
       cliente_id: 'cli-1',
       clientes: { id: 'cli-1', nome: 'Wilkin Silva', telefone: '5541998887777', email: 'wilkin@test.com' },
       itens: [
-        { id: 'it-1', quantidade: 1, preco_unitario_centavos: 6990, preco_total_centavos: 6990, produtos: { id: 'p1', nome: 'Combo 1 - O Clássico da Sofia' } }
+        { id: 'it-1', quantidade: 1, preco_unitario_centavos: 6990, preco_total_centavos: 6990, produtos: { id: 'p1', nome: 'Combo 1 - O Clássico Brasa & Sabor' } }
       ]
     },
     {
@@ -156,5 +156,15 @@ describe('OrdersManagementDashboard - lifecycle actions', () => {
 
     const [firstCall, secondCall] = vi.mocked(actionAtualizarStatusPagamento).mock.calls
     expect(firstCall[0].idempotencyKey).toBe(secondCall[0].idempotencyKey)
+  })
+})
+
+describe('OrdersManagementDashboard - CRM visual hierarchy', () => {
+  it('exposes an order operations summary and a labelled workflow filter region', () => {
+    render(<OrdersManagementDashboard usuarioLogado={{ id: 'user-admin', nome: 'Admin Sofia', funcao: 'admin' }} pedidosIniciais={[]} />)
+
+    expect(screen.getByRole('heading', { name: 'Operação de pedidos' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Indicadores de pedidos' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: 'Fluxo e filtros de pedidos' })).toBeInTheDocument()
   })
 })

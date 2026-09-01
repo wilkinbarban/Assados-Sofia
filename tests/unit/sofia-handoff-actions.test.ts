@@ -5,6 +5,13 @@ import {
   obterStatusSofiaClienteAction,
 } from '@/actions/sofia-handoff'
 
+const moduleMocks = vi.hoisted(() => ({
+  createClient: vi.fn(),
+  createAdminClient: vi.fn(),
+}))
+vi.mock('@/lib/supabase/server', () => ({ createClient: moduleMocks.createClient }))
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: moduleMocks.createAdminClient }))
+
 describe('Server Actions: Gestão de Human Handoff e Cooldown da Sofía', () => {
   let mockSupabase: any
 
@@ -18,6 +25,15 @@ describe('Server Actions: Gestão de Human Handoff e Cooldown da Sofía', () => 
       single: vi.fn(),
       maybeSingle: vi.fn(),
     }
+    moduleMocks.createAdminClient.mockReturnValue(mockSupabase)
+    moduleMocks.createClient.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-operador-1' } } }) },
+      from: vi.fn(() => ({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({ data: { funcao: 'vendedor', ativo: true } }),
+      })),
+    })
   })
 
   it('silencia Sofia para o cliente chamando a RPC silenciar_sofia_cliente', async () => {
@@ -36,8 +52,6 @@ describe('Server Actions: Gestão de Human Handoff e Cooldown da Sofía', () => 
       clienteId: 'cliente-123',
       minutos: 60,
       motivo: 'cooldown_operador',
-      supabaseClient: mockSupabase,
-      usuarioId: 'user-operador-1',
     })
 
     expect(mockSupabase.rpc).toHaveBeenCalledWith('silenciar_sofia_cliente', {
@@ -63,8 +77,6 @@ describe('Server Actions: Gestão de Human Handoff e Cooldown da Sofía', () => 
 
     const result = await reativarSofiaClienteAction({
       clienteId: 'cliente-123',
-      supabaseClient: mockSupabase,
-      usuarioId: 'user-operador-1',
     })
 
     expect(mockSupabase.rpc).toHaveBeenCalledWith('reativar_sofia_cliente', {
@@ -81,7 +93,7 @@ describe('Server Actions: Gestão de Human Handoff e Cooldown da Sofía', () => 
       error: null,
     })
 
-    const result = await obterStatusSofiaClienteAction('cliente-123', mockSupabase)
+    const result = await obterStatusSofiaClienteAction('cliente-123')
     expect(mockSupabase.rpc).toHaveBeenCalledWith('verificar_sofia_silenciada', {
       p_cliente_id: 'cliente-123',
     })

@@ -35,7 +35,7 @@ export function montarPayloadCarrossel(params: EnviarCardapioInput) {
     const icone = p.nome.toLowerCase().includes('costela') ? '🥩' : '🍗'
 
     return {
-      imageUrl: p.urlImagem || 'https://casadeasados.duckdns.org/logo-casa-de-assados-sofia.svg',
+      imageUrl: p.urlImagem || 'https://casadeasados.duckdns.org/logo-brasa-sabor.png',
       title: `${icone} ${p.nome}`,
       body: `${p.descricao || 'Assado tradicional no bafo de domingo'}\n\n*Valor:* ${valor}`,
       buttons: [
@@ -46,7 +46,7 @@ export function montarPayloadCarrossel(params: EnviarCardapioInput) {
         },
         {
           type: 'reply',
-          displayText: '👀 Ver detalhes',
+          displayText: 'ℹ️ Ver detalhes',
           id: `product:details:${p.id}`,
         },
       ],
@@ -55,7 +55,7 @@ export function montarPayloadCarrossel(params: EnviarCardapioInput) {
 
   return {
     number: params.telefone,
-    body: `🔥 *Cardápio Oficial de Domingo — Casa de Assados Sofia*\n_Tradição no Umbará • O que vai querer hoje?_`,
+    body: `🔥 *Cardápio Oficial de Domingo — Casa de Assados Brasa & Sabor*\n_Tradição no Umbará • O que vai querer hoje?_`,
     cards,
   }
 }
@@ -65,7 +65,7 @@ export function montarPayloadBotoes(params: EnviarCardapioInput) {
     number: params.telefone,
     title: '🔥 Cardápio Oficial de Domingo',
     description: 'Escolha um produto para adicionar ao pedido:',
-    footer: 'Casa de Assados Sofia · Umbará',
+    footer: 'Casa de Assados Brasa & Sabor · Umbará',
     buttons: params.produtos.slice(0, 3).map((produto) => ({
       type: 'reply',
       displayText: produto.nome.slice(0, 20),
@@ -79,7 +79,7 @@ export function montarPayloadLista(params: EnviarCardapioInput) {
     number: params.telefone,
     title: '🔥 Cardápio Oficial de Domingo',
     description: 'Veja os assados disponíveis e escolha o seu.',
-    footerText: 'Casa de Assados Sofia · Umbará',
+    footerText: 'Casa de Assados Brasa & Sabor · Umbará',
     buttonText: 'Ver cardápio',
     sections: [{
       title: 'Produtos',
@@ -101,7 +101,7 @@ export function montarPayloadTexto(params: EnviarCardapioInput) {
   return {
     number: params.telefone,
     text: [
-      '🔥 *Cardápio Oficial de Domingo — Casa de Assados Sofia*',
+      '🔥 *Cardápio Oficial de Domingo — Casa de Assados Brasa & Sabor*',
       '',
       ...itens,
       '',
@@ -153,7 +153,7 @@ export function montarPayloadCardsFallback(params: EnviarCardapioInput) {
     ].join('\n')
 
     return {
-      imageUrl: p.urlImagem || 'https://casadeasados.duckdns.org/logo-casa-de-assados-sofia.svg',
+      imageUrl: p.urlImagem || 'https://casadeasados.duckdns.org/logo-brasa-sabor.png',
       caption,
       produtoId: p.id,
     }

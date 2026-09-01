@@ -12,9 +12,11 @@ vi.mock('@/lib/telegram/send', () => ({
 describe('Order Notifications Service (Omnichannel)', () => {
   let mockSupabase: any
   let mockPedido: any
+  let insertMessage: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     vi.clearAllMocks()
+    insertMessage = vi.fn().mockResolvedValue({ error: null })
 
     mockPedido = {
       id: 'pedido-12345678-0000-0000-0000-000000000000',
@@ -39,7 +41,7 @@ describe('Order Notifications Service (Omnichannel)', () => {
         }
         if (table === 'mensagens') {
           return {
-            insert: vi.fn().mockResolvedValue({ error: null }),
+            insert: insertMessage,
           }
         }
         if (table === 'conversas') {
@@ -71,6 +73,7 @@ describe('Order Notifications Service (Omnichannel)', () => {
     expect(result.whatsapp).toBe(true)
     expect(result.telegram).toBe(true)
     expect(result.erros).toHaveLength(0)
+    expect(insertMessage).not.toHaveBeenCalled()
   })
 
   it('notifies client on payment approval', async () => {
@@ -100,5 +103,6 @@ describe('Order Notifications Service (Omnichannel)', () => {
     expect(result.web).toBe(true)
     expect(result.whatsapp).toBe(false)
     expect(result.telegram).toBe(false)
+    expect(insertMessage).toHaveBeenCalledTimes(1)
   })
 })

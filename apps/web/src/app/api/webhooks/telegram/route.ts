@@ -4,6 +4,9 @@ import { processarRagPipeline } from '@/lib/ai/openrouter'
 import { obterConfiguracaoSistema, obterSofiaGlobalChannelConfig } from '@/lib/config/sistema'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { deriveTelegramMessageKey } from '@/lib/telegram/idempotency'
+import { downloadTelegramDocument } from '@/lib/telegram/document-download'
+import { queueCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
+import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
 import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { executarToolSofia } from '@/lib/ai/tools'
@@ -51,6 +54,12 @@ type TelegramMessage = {
   from?: { id?: string | number }
   text?: string
   contact?: { phone_number?: string; first_name?: string; user_id?: string | number }
+  document?: {
+    file_id?: string
+    file_name?: string
+    mime_type?: string
+    file_size?: number
+  }
 }
 
 type TelegramCallbackQuery = {
@@ -218,20 +227,23 @@ export async function POST(request: Request) {
 
     const supabaseAdmin = createAdminClient()
 
-    // ── IDEMPOTÊNCIA ──────────────────────────────────────────
-    const { data: existingMessage, error: findError } = await supabaseAdmin
-      .from('mensagens')
-      .select('id')
-      .eq('telegram_mensagem_id', telegramMessageKey)
-      .maybeSingle()
+    // Text/contact delivery deduplication remains in the chat ledger. PDF proof
+    // idempotency is owned by the canonical intake ledger instead.
+    if (!message.document) {
+      const { data: existingMessage, error: findError } = await supabaseAdmin
+        .from('mensagens')
+        .select('id')
+        .eq('telegram_mensagem_id', telegramMessageKey)
+        .maybeSingle()
 
-    if (findError) {
-      console.error('[Telegram Webhook] Erro ao buscar mensagem para idempotência:', findError)
-      return Response.json({ ok: false, error: 'Erro ao verificar idempotência' }, { status: 500 })
-    }
+      if (findError) {
+        console.error('[Telegram Webhook] Erro ao buscar mensagem para idempotência:', findError)
+        return Response.json({ ok: false, error: 'Erro ao verificar idempotência' }, { status: 500 })
+      }
 
-    if (existingMessage) {
-      return Response.json({ ok: true, status: 'duplicate' })
+      if (existingMessage) {
+        return Response.json({ ok: true, status: 'duplicate' })
+      }
     }
 
     // ── BUSCAR OU CRIAR CLIENTE ───────────────────────────────
@@ -267,6 +279,104 @@ export async function POST(request: Request) {
       }
       clienteId = newClient.id
       isNewClient = true
+    }
+
+    // Canonical payment proofs are an intake concern, independent from Sofia's
+    // automation and business-hours gates. When disabled, preserve the legacy
+    // document path without validation, token lookup, or download side effects.
+    const canonicalPaymentProofEnabled = Boolean(message.document && paymentProofOperationalGates.canonicalIngest.effective)
+    if (message.document && canonicalPaymentProofEnabled) {
+      const replay = await supabaseAdmin.rpc('get_payment_proof_delivery_state', {
+        p_channel: 'telegram',
+        p_delivery_key: telegramMessageKey,
+      })
+      if (replay.error) {
+        return Response.json({ ok: false, status: 'payment_proof_retryable', message: 'Falha temporária ao receber documento.' }, { status: 503 })
+      }
+      const replayState = replay.data?.state
+      if (!['missing', 'repairable', 'queued', 'complete'].includes(replayState)) {
+        return Response.json({ ok: false, status: 'payment_proof_retryable', message: 'Falha temporária ao receber documento.' }, { status: 503 })
+      }
+      if (replayState === 'queued' || replayState === 'complete') {
+        return Response.json({ ok: true, status: 'payment_proof_duplicate' })
+      }
+
+      const maxPdfBytes = 5 * 1024 * 1024
+      const declaredMime = message.document.mime_type?.trim().toLowerCase()
+      const declaredSize = message.document.file_size
+      if (
+        declaredMime !== 'application/pdf' ||
+        typeof declaredSize !== 'number' ||
+        !Number.isFinite(declaredSize) ||
+        declaredSize <= 0 ||
+        declaredSize > maxPdfBytes ||
+        !message.document.file_id
+      ) {
+        return Response.json(
+          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { status: 422 }
+        )
+      }
+
+      const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
+      if (!token) {
+        return Response.json(
+          { ok: false, status: 'payment_proof_retryable', message: 'Falha temporária ao receber documento.' },
+          { status: 503 }
+        )
+      }
+
+      const downloaded = await downloadTelegramDocument({
+        token,
+        fileId: message.document.file_id,
+        maxBytes: maxPdfBytes,
+        timeoutMs: 10_000,
+      })
+      if (!downloaded.ok) {
+        if (downloaded.retryable) {
+          return Response.json(
+            { ok: false, status: 'payment_proof_retryable', message: 'Falha temporária ao receber documento.' },
+            { status: 503 }
+          )
+        }
+        return Response.json(
+          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { status: 422 }
+        )
+      }
+
+      const processed = await queueCanonicalPaymentProof({
+        channel: 'telegram',
+        deliveryId: telegramMessageKey,
+        customerId: clienteId,
+        orderId: null,
+        sender: telegramChatId,
+        bytes: downloaded.bytes,
+        mimeType: downloaded.mimeType,
+        db: supabaseAdmin,
+        storage: supabaseAdmin.storage.from('payment-proofs'),
+      })
+
+      if (processed.status === 'retryable') {
+        return Response.json(
+          { ok: false, status: 'payment_proof_retryable', message: 'Falha temporária ao receber documento.' },
+          { status: 503 }
+        )
+      }
+      if (processed.status === 'rejected') {
+        return Response.json(
+          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { status: 422 }
+        )
+      }
+      if (processed.status === 'duplicate') {
+        return Response.json({ ok: true, status: 'payment_proof_duplicate' })
+      }
+      if (processed.status !== 'disabled') {
+        return Response.json({ ok: true, status: 'payment_proof_received' }, { status: 202 })
+      }
+      // The canonical processor retains its own defense-in-depth flag and can
+      // still report disabled if configuration changes during this request.
     }
 
     const sofiaGlobalTelegram = await obterSofiaGlobalChannelConfig('telegram')

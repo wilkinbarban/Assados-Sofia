@@ -27,14 +27,14 @@ import {
   ArrowUpDown,
 } from 'lucide-react'
 import Link from 'next/link'
-import { BrandLogo } from '@/components/ui/BrandLogo'
-import { OperatorLogoutButton } from '@/components/operator/OperatorLogoutButton'
+import { OperatorWorkspaceHeader } from '@/components/operator/OperatorWorkspaceHeader'
 import { ReceiptOutputActions } from '@/components/receipts/ReceiptOutputActions'
 import { getOrderContinuation, type OrderAction } from '@/components/operator/orderContinuation'
 import {
   actionListarPedidos,
   actionAtualizarStatusPedido,
   actionAtualizarStatusPagamento,
+  actionAprovarPagamentoExterno,
   gerarPreferenciaPagamento,
   gerarCobrancaPixPedido,
 } from '@/app/actions/pedidos'
@@ -414,19 +414,40 @@ export default function OrdersManagementDashboard({
   }
 
   const handleAprovarPagamento = async (pedidoId: string) => {
-    const reason = window.prompt('Informe o motivo da aprovação manual do pagamento:')?.trim()
-    if (!reason) {
-      setErrorMsg('Informe o motivo para registrar a aprovação manual.')
+    const pedido = pedidos.find((item) => item.id === pedidoId)
+    const method = window.prompt('Método externo confirmado: cash, pix_external, card_external ou bank_transfer_external')?.trim()
+    const note = window.prompt('Informe uma nota de verificação (4 a 500 caracteres):')?.trim()
+    if (!pedido || !method || !note) {
+      setErrorMsg('Informe método e nota para registrar o pagamento externo.')
       return
     }
-    return handleAtualizarPagamento(pedidoId, 'aprovado', reason)
+    if (!['cash', 'pix_external', 'card_external', 'bank_transfer_external'].includes(method)) {
+      setErrorMsg('Método de pagamento externo inválido.')
+      return
+    }
+    const confirmed = window.confirm(`Pagamento externo sem comprovante digital\nPedido: ${pedidoId.slice(0, 8)}\nValor: ${formatarMoeda(pedido.total_pedido_centavos)}\nMétodo: ${method}\nNota: ${note}\n\nConfirmar?`)
+    if (!confirmed) return
+    setActionLoadingId(pedidoId)
+    const res = await actionAprovarPagamentoExterno({
+      orderIds: [pedidoId], confirmedCents: pedido.total_pedido_centavos,
+      method: method as 'cash' | 'pix_external' | 'card_external' | 'bank_transfer_external',
+      note, idempotencyKey: crypto.randomUUID(),
+    })
+    if (res.success) {
+      setSuccessMsg('Pagamento externo verificado e aprovado.')
+      await carregarPedidos(true)
+    } else setErrorMsg(res.error ?? 'Erro ao aprovar pagamento externo.')
+    setActionLoadingId(null)
   }
 
   const handleOrderAction = async (pedidoId: string, action: OrderAction) => {
     if (action === 'confirmar') return handleAtualizarStatus(pedidoId, 'confirmado')
     if (action === 'entregar') return handleAtualizarStatus(pedidoId, 'entregue')
     if (action === 'cancelar') return handleCancelarPedido(pedidoId)
-    if (action === 'aprovar_pagamento') return handleAprovarPagamento(pedidoId)
+    if (action === 'aprovar_pagamento') {
+      const reason = window.prompt('Informe o motivo da aprovação manual de pagamento:') || 'Aprovação manual no caixa'
+      return handleAtualizarPagamento(pedidoId, 'aprovado', reason)
+    }
     return handleGerarLinkPagamento(pedidoId)
   }
 
@@ -463,71 +484,23 @@ export default function OrdersManagementDashboard({
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100 font-sans">
-      {/* Header de Navegação Superior */}
-      <header className="flex h-16 items-center justify-between border-b border-zinc-800 bg-zinc-900/80 px-6 shrink-0 backdrop-blur-md sticky top-0 z-30">
-        <div className="flex items-center gap-6">
-          <BrandLogo size="md" href="/atendimento" />
-
-          <div className="hidden md:flex items-center gap-2 border-l border-zinc-800 pl-6">
-            <span className="text-xs font-semibold uppercase tracking-wider text-amber-500/90 bg-amber-500/10 px-2.5 py-1 rounded-md border border-amber-500/20 flex items-center gap-1.5">
-              <Package className="h-3.5 w-3.5" />
-              Gestão de Pedidos
-            </span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3">
-          <Link
-            href="/atendimento"
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
-          >
-            <MessageSquare className="h-3.5 w-3.5 text-amber-500" />
-            <span>Console Atendimento</span>
-          </Link>
-
-          {['admin', 'supervisor'].includes(usuarioLogado.funcao) && (
-            <Link
-              href="/atendimento/admin"
-              className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-zinc-950 rounded-lg text-xs font-bold shadow-md shadow-amber-500/10 transition-all cursor-pointer select-none"
-            >
-              <span>Painel Admin</span>
-            </Link>
-          )}
-
-          <Link
-            href="/atendimento/produtos"
-            className="hidden md:inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
-          >
-            Estoque
-          </Link>
-
-          <Link
-            href="/atendimento/perfil"
-            className="hidden md:inline-flex items-center px-3 py-1.5 bg-zinc-900/80 hover:bg-zinc-800 text-zinc-300 hover:text-zinc-100 rounded-lg text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
-          >
-            Meu Perfil
-          </Link>
-
-          <OperatorLogoutButton />
-
-          <div className="flex items-center gap-2 pl-2 border-l border-zinc-800">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-            </span>
-            <span className="text-xs text-zinc-300 font-medium capitalize hidden sm:inline">
-              {usuarioLogado.funcao === 'admin'
-                ? 'Administrador'
-                : usuarioLogado.funcao === 'supervisor'
-                ? 'Supervisor'
-                : 'Atendente'}
-            </span>
-          </div>
-        </div>
-      </header>
+      <OperatorWorkspaceHeader active="pedidos" role={usuarioLogado.funcao} />
 
       {/* Conteúdo Principal */}
-      <main className="flex-1 p-6 md:p-8 max-w-7xl w-full mx-auto space-y-6">
+      <main className="flex-1 p-4 sm:p-6 md:p-8 max-w-[90rem] w-full mx-auto space-y-6">
+        <section className="flex flex-col gap-3 rounded-2xl border border-zinc-800 bg-gradient-to-br from-zinc-900/80 to-zinc-950/40 p-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-amber-400">Central operacional</p>
+            <h1 className="mt-1 text-2xl font-black tracking-tight text-zinc-50">Operação de pedidos</h1>
+            <p className="mt-1 max-w-2xl text-sm text-zinc-400">
+              Acompanhe demanda, pagamento e entrega sem perder o contexto comercial de cada cliente.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950/50 px-3 py-2 text-xs text-zinc-400">
+            <span className="h-2 w-2 rounded-full bg-emerald-400" />
+            <strong className="text-zinc-200">{metrics.novos + metrics.confirmados}</strong> pedidos em operação
+          </div>
+        </section>
         {/* Alertas */}
         {errorMsg && (
           <div className="flex items-center gap-3 rounded-xl bg-red-950/40 border border-red-900/50 p-4 text-sm text-red-200 shadow-md">
@@ -544,7 +517,7 @@ export default function OrdersManagementDashboard({
         )}
 
         {/* Métricas e KPIs do Domingo de Assados */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <section aria-label="Indicadores de pedidos" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-5 backdrop-blur-xs flex items-center justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Total de Pedidos</p>
@@ -584,10 +557,10 @@ export default function OrdersManagementDashboard({
               <TrendingUp className="h-5 w-5" />
             </div>
           </div>
-        </div>
+        </section>
 
         {/* Barra de Filtros, Busca e Ações */}
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-3.5">
+        <section aria-label="Fluxo e filtros de pedidos" className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 space-y-3.5 shadow-lg shadow-black/10">
           {/* Linha Superior: Abas de Status, Busca e Botões */}
           <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3.5">
             {/* Abas de Status */}
@@ -866,7 +839,7 @@ export default function OrdersManagementDashboard({
               </div>
             )}
           </div>
-        </div>
+        </section>
 
         {/* Lista de Pedidos */}
         {loading ? (

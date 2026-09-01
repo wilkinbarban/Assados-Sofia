@@ -87,16 +87,28 @@ function metaTextPayload(messageId: string, text = 'Hello') {
   }
 }
 
-function metaRequest(payload: unknown) {
+function metaRequest(payload: unknown, signature = true) {
   const body = JSON.stringify(payload)
   return new Request('https://asados.test/api/webhooks/whatsapp', {
     method: 'POST',
-    headers: { 'x-hub-signature-256': signBody(body) },
+    headers: signature ? { 'x-hub-signature-256': signBody(body) } : {},
     body,
   })
 }
 
-function evolutionRequest(messageId: string, text = 'Hello', headers: HeadersInit = { apikey: 'evolution-key' }) {
+function metaPaymentMediaPayload(messageId: string) {
+  return {
+    object: 'whatsapp_business_account',
+    entry: [{ changes: [{ value: {
+      contacts: [{ profile: { name: 'Ana' }, wa_id: '5541999990003' }],
+      messages: [{ from: '5541999990003', id: messageId, type: 'document', document: {
+        id: 'media-id', mime_type: 'application/pdf', filename: 'pix.pdf', caption: 'comprovante pix',
+      } }],
+    } }] }],
+  }
+}
+
+function evolutionRequest(messageId: string, text = 'Hello', headers: HeadersInit = { 'x-webhook-secret': 'evolution-webhook-secret' }) {
   return new Request('https://asados.test/api/webhooks/evolution', {
     method: 'POST',
     headers,
@@ -154,6 +166,22 @@ describe('webhook global Sofia gates', () => {
     vi.unstubAllEnvs()
   })
 
+  it('authenticates and explicitly ignores Cloud payment media before creating any persistence client', async () => {
+    const response = await postMetaWhatsApp(metaRequest(metaPaymentMediaPayload('wamid.payment-media')))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ success: true, status: 'ignored_payment_media' })
+    expect(mocks.createAdminClient).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('rejects unauthenticated Cloud payment media before the non-admission branch', async () => {
+    const response = await postMetaWhatsApp(metaRequest(metaPaymentMediaPayload('wamid.unsigned-media'), false))
+
+    expect(response.status).toBe(401)
+    expect(mocks.createAdminClient).not.toHaveBeenCalled()
+  })
+
   it('rejects Evolution query-string secrets before parsing the request body', async () => {
     const request = new Request('https://asados.test/api/webhooks/evolution?webhook_secret=evolution-key', {
       method: 'POST',
@@ -163,6 +191,19 @@ describe('webhook global Sofia gates', () => {
     const response = await postEvolution(request)
 
     expect(response.status).toBe(401)
+  })
+
+  it('accepts legacy Evolution text authenticated only by the API-key header', async () => {
+    const { client, log } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    mocks.obterSofiaGlobalChannelConfig.mockResolvedValue({ channel: 'whatsapp', key: 'SOFIA_GLOBAL_WHATSAPP_ENABLED', enabled: false, rawValue: 'false' })
+
+    const response = await postEvolution(evolutionRequest('evo-api-key', 'Legacy API key', { apikey: 'evolution-key' }))
+
+    expect(response.status).toBe(200)
+    expect(log.inserts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ table: 'mensagens', payload: expect.objectContaining({ conteudo: 'Legacy API key' }) }),
+    ]))
   })
 
   it('accepts an Evolution webhook authenticated only by the header secret', async () => {
@@ -178,9 +219,7 @@ describe('webhook global Sofia gates', () => {
     expect(response.status).toBe(200)
   })
 
-  it('accepts the dedicated Evolution webhook secret from the configured query parameter', async () => {
-    const { client } = createSupabaseMock()
-    mocks.createAdminClient.mockReturnValue(client)
+  it('rejects the dedicated Evolution webhook secret from the configured query parameter', async () => {
     const request = new Request('https://asados.test/api/webhooks/evolution?webhook_secret=evolution-webhook-secret', {
       method: 'POST',
       body: JSON.stringify({ event: 'connection.update' }),
@@ -188,7 +227,7 @@ describe('webhook global Sofia gates', () => {
 
     const response = await postEvolution(request)
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(401)
   })
 
   it('persists Meta WhatsApp inbound but skips schedule and RAG when global WhatsApp is off', async () => {

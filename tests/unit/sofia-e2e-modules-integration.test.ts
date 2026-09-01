@@ -132,9 +132,9 @@ describe('E2E Integration: Sofía, Canais (WhatsApp & Telegram), On/Off & Módul
 
       mocks.createAdminClient.mockReturnValue(mockSupabaseAdmin)
 
-      const req = new Request('http://localhost:3000/api/webhooks/evolution?webhook_secret=test-secret-token', {
+      const req = new Request('http://localhost:3000/api/webhooks/evolution', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'x-webhook-secret': 'test-secret-token', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event: 'messages.upsert',
           data: {
@@ -273,9 +273,9 @@ describe('E2E Integration: Sofía, Canais (WhatsApp & Telegram), On/Off & Módul
       const globalFetch = vi.fn().mockResolvedValue({ ok: true, json: vi.fn().mockResolvedValue({}) })
       vi.stubGlobal('fetch', globalFetch)
 
-      const req = new Request('http://localhost:3000/api/webhooks/evolution?webhook_secret=test-secret-token', {
+      const req = new Request('http://localhost:3000/api/webhooks/evolution', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'x-webhook-secret': 'test-secret-token', 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event: 'messages.upsert',
           data: {
@@ -389,18 +389,21 @@ describe('E2E Integration: Sofía, Canais (WhatsApp & Telegram), On/Off & Módul
 
       mocks.createAdminClient.mockReturnValue(mockSupabaseAdmin)
 
-      const fetchMock = vi.fn().mockResolvedValue({
-        ok: true,
-        json: vi.fn().mockResolvedValue({
-          choices: [
-            {
-              message: {
-                content: 'Olá! Temos Costela Premium por R$ 89,90 e Picanha na brasa por R$ 119,90, piá! 🍖',
-              },
+      const mockPayload = JSON.stringify({
+        choices: [
+          {
+            message: {
+              content: 'Olá! Temos Costela Premium por R$ 89,90 e Picanha na brasa por R$ 119,90, piá! 🍖',
             },
-          ],
-        }),
+          },
+        ],
       })
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(mockPayload, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
       vi.stubGlobal('fetch', fetchMock)
 
       const result = await processarRagPipeline('conversa-rag-1', 'Qual o cardápio e preços?', 'whatsapp')

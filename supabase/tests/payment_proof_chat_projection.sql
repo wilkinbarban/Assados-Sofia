@@ -1,0 +1,13 @@
+select plan(1);set role postgres;
+insert into public.clientes(id,nome,telefone) values('32323232-3232-4232-8232-323232323221','Chat customer','5541999999985') on conflict do nothing;
+insert into public.conversas(id,cliente_id,status,ia_ativa) values('32323232-3232-4232-8232-323232323241','32323232-3232-4232-8232-323232323221','aberta',false) on conflict do nothing;reset role;
+set role service_role;select set_config('request.jwt.claim','{"role":"service_role"}',false);
+do $$declare p record;a uuid;b uuid;begin select * into p from public.admit_payment_proof_intake('web','chat-proof','32323232-3232-4232-8232-323232323221',null,'proofs/private/chat.pdf',100,'application/pdf');
+ update public.payment_proofs set status='admitted',preview_storage_key='proofs/private/chat.png' where id=p.proof_id;
+ select public.project_payment_proof_to_chat(p.proof_id,'32323232-3232-4232-8232-323232323241') into a;
+ select public.project_payment_proof_to_chat(p.proof_id,'32323232-3232-4232-8232-323232323241') into b;
+ if a<>b or (select count(*) from public.payment_proof_chat_projections where proof_id=p.proof_id)<>1 then raise exception 'projection duplicate';end if;
+ if exists(select 1 from public.mensagens where id=a and (url_anexo like '%private%' or url_anexo like '%.pdf%')) then raise exception 'private path/pdf leaked';end if;
+ update public.payment_proofs set status='review' where id=p.proof_id;
+ begin perform public.project_payment_proof_to_chat(p.proof_id,'32323232-3232-4232-8232-323232323241');raise exception 'forbidden projected';exception when check_violation then null;end;
+end $$;reset role;select pass('only admitted PNG projects once without PDF or private path');select * from finish();

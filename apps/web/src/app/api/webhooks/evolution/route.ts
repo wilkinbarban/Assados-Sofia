@@ -4,20 +4,16 @@ import { obterConfiguracaoSistema, obterSofiaGlobalChannelConfig } from '@/lib/c
 import { processarRagPipeline } from '@/lib/ai/openrouter'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { resolveWhatsAppInboundConversation } from '@/lib/whatsapp/sofia-control'
-import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
+import { normalizeCuritibaPhone } from '@/lib/auth/phone'
 import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { normalizarMensagemEvolution } from '@/lib/whatsapp/inbound-normalizer'
 import { processarAcaoInterativaWhatsApp } from '@/lib/whatsapp/action-router'
-
-/**
- * Mask customer name for LGPD compliance in production logs
- */
-function maskName(name: string): string {
-  if (!name) return ''
-  const parts = name.split(' ')
-  return parts.map(part => part.charAt(0) + '*'.repeat(Math.max(0, part.length - 1))).join(' ')
-}
-
+import { processCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
+import { downloadEvolutionPdf } from '@/lib/whatsapp/evolution-media-download'
+import { evaluateEvolutionPaymentProofCompatibility } from '@/lib/whatsapp/evolution-payment-proof-compatibility'
+import { resolveEvolutionInboundPhoneLocalPart } from '@/lib/whatsapp/evolution-inbound-sender'
+import { decodeEvolutionDocumentSize } from '@/lib/whatsapp/evolution-document-size'
+import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 
 async function resolveWhatsAppPersistenceConversation(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
@@ -80,17 +76,17 @@ function isRequestAborted(error: unknown): boolean {
 
 export async function POST(request: Request) {
   try {
-    // 1. Autenticação por apikey
-    const evolutionApiKey = await obterConfiguracaoSistema('EVOLUTION_API_KEY')
-    const webhookSecret = await obterConfiguracaoSistema('EVOLUTION_WEBHOOK_SECRET')
+    // 1. Preserve legacy whole-route auth, while tracking dedicated-secret trust separately.
+    const [webhookSecret, apiKey] = await Promise.all([
+      obterConfiguracaoSistema('EVOLUTION_WEBHOOK_SECRET'),
+      obterConfiguracaoSistema('EVOLUTION_API_KEY'),
+    ])
+    const requestSecret = request.headers.get('x-webhook-secret')
     const requestApiKey = request.headers.get('apikey') || request.headers.get('apiKey')
-    const requestUrl = new URL(request.url)
-    const requestSecret = request.headers.get('x-webhook-secret') || requestUrl.searchParams.get('webhook_secret')
+    const hasDedicatedSecretAuth = Boolean(webhookSecret && requestSecret === webhookSecret)
+    const hasLegacyApiKeyAuth = Boolean(apiKey && requestApiKey === apiKey)
 
-    const isApiKeyAuthorized = Boolean(evolutionApiKey && requestApiKey === evolutionApiKey)
-    const isWebhookSecretAuthorized = Boolean(webhookSecret && requestSecret === webhookSecret)
-
-    if (!isApiKeyAuthorized && !isWebhookSecretAuthorized) {
+    if (!hasDedicatedSecretAuth && !hasLegacyApiKeyAuth) {
       console.warn('[Evolution Webhook] Autenticação falhou: credenciais de webhook inválidas.')
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
@@ -125,6 +121,127 @@ export async function POST(request: Request) {
     }
 
     const supabaseAdmin = createAdminClient()
+    const inboundPhoneLocalPart = resolveEvolutionInboundPhoneLocalPart(data.key)
+    const inboundSender = normalizeCuritibaPhone(inboundPhoneLocalPart)
+
+    // Canonical PDF retries intentionally run before the legacy mensagens dedupe.
+    // A closed compatibility gate performs no download and falls through unchanged.
+    const documentMessage = data.message?.documentMessage
+    const isCanonicalPdfCandidate = documentMessage?.mimetype === 'application/pdf'
+    if (isCanonicalPdfCandidate && hasDedicatedSecretAuth) {
+      const [primaryProvider, fallbackProvider, operationalAttestation] = await Promise.all([
+        obterConfiguracaoSistema('PROVEDOR_WHATSAPP_ATIVO'),
+        obterConfiguracaoSistema('WHATSAPP_PROVIDER'),
+        obterConfiguracaoSistema('EVOLUTION_PAYMENT_PROOF_ATTESTATION'),
+      ])
+      const compatibility = evaluateEvolutionPaymentProofCompatibility({
+        gates: paymentProofOperationalGates,
+        primaryProvider,
+        fallbackProvider,
+        operationalAttestation,
+      })
+
+      if (compatibility.open) {
+        const sender = inboundSender
+        if (sender) {
+            const declaredSize = decodeEvolutionDocumentSize(documentMessage.fileLength)
+            if (declaredSize === null) {
+              console.warn('[Evolution Webhook] CANONICAL_DOCUMENT_SIZE_REJECTED')
+              return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+            }
+
+            const { data: canonicalCustomer, error: canonicalCustomerError } = await supabaseAdmin
+              .from('clientes')
+              .select('id')
+              .eq('telefone', sender)
+              .maybeSingle()
+            if (canonicalCustomerError) {
+              console.warn('[Evolution Webhook] CANONICAL_503_CUSTOMER_LOOKUP')
+              return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
+            }
+
+            let canonicalCustomerId = canonicalCustomer?.id
+            if (!canonicalCustomerId) {
+              const { data: createdCustomer, error: createCustomerError } = await supabaseAdmin
+                .from('clientes')
+                .insert({ usuario_id: null, nome: data.pushName || 'Contato Evolution', telefone: sender })
+                .select('id')
+                .single()
+              if (createCustomerError || !createdCustomer?.id) {
+                console.warn('[Evolution Webhook] CANONICAL_503_CUSTOMER_CREATE')
+                return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
+              }
+              canonicalCustomerId = createdCustomer.id
+            }
+
+            const [evolutionApiUrl, evolutionApiKey, evolutionInstanceName] = await Promise.all([
+              obterConfiguracaoSistema('EVOLUTION_API_URL'),
+              obterConfiguracaoSistema('EVOLUTION_API_KEY'),
+              obterConfiguracaoSistema('EVOLUTION_INSTANCE_NAME'),
+            ])
+            if (!evolutionApiUrl || !evolutionApiKey || !evolutionInstanceName) {
+              console.warn('[Evolution Webhook] CANONICAL_503_EVOLUTION_CONFIG')
+              return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
+            }
+
+            const downloaded = await downloadEvolutionPdf({
+              apiUrl: evolutionApiUrl,
+              apiKey: evolutionApiKey,
+              instanceName: evolutionInstanceName,
+              message: data,
+              declaredMimeType: documentMessage.mimetype,
+              declaredSize,
+              timeoutMs: 10_000,
+            })
+            if (!downloaded.ok) {
+              if (downloaded.retryable) {
+                if (downloaded.error === 'EVOLUTION_MEDIA_HTTP_UPSTREAM') {
+                  console.warn('[Evolution Webhook] CANONICAL_503_MEDIA_UPSTREAM')
+                } else if (downloaded.error === 'EVOLUTION_MEDIA_NETWORK') {
+                  console.warn('[Evolution Webhook] CANONICAL_503_MEDIA_NETWORK')
+                } else if (downloaded.error === 'EVOLUTION_MEDIA_DOWNLOAD_TIMEOUT') {
+                  console.warn('[Evolution Webhook] CANONICAL_503_MEDIA_TIMEOUT')
+                } else {
+                  console.warn('[Evolution Webhook] CANONICAL_503_MEDIA_UNKNOWN')
+                }
+                return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
+              }
+              return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+            }
+
+            const [advisoryApiKey, advisoryModel] = await Promise.all([
+              obterConfiguracaoSistema('OPENROUTER_API_KEY'),
+              obterConfiguracaoSistema('OPENROUTER_MODEL'),
+            ])
+            const processed = await processCanonicalPaymentProof({
+              channel: 'whatsapp',
+              deliveryId: `evolution:${evolutionInstanceName}:${messageId}`,
+              customerId: canonicalCustomerId,
+              orderId: null,
+              sender,
+              bytes: downloaded.bytes,
+              mimeType: downloaded.mimeType,
+              db: supabaseAdmin,
+              storage: supabaseAdmin.storage.from('payment-proofs'),
+              apiKey: advisoryApiKey,
+              model: advisoryModel,
+            })
+            if (processed.status === 'retryable') {
+              console.warn('[Evolution Webhook] CANONICAL_503_PROCESSING')
+              return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
+            }
+            if (processed.status === 'rejected') {
+              return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+            }
+            if (processed.status === 'duplicate') {
+              return NextResponse.json({ success: true, status: 'payment_proof_duplicate' })
+            }
+          if (processed.status !== 'disabled') {
+            return NextResponse.json({ success: true, status: 'payment_proof_received' }, { status: 202 })
+          }
+        }
+      }
+    }
 
     // 5. Idempotência: verificar se whatsapp_mensagem_id já existe
     const { data: mensagemExistente, error: checkError } = await supabaseAdmin
@@ -134,24 +251,19 @@ export async function POST(request: Request) {
       .maybeSingle()
 
     if (checkError) {
-      console.error('[Evolution Webhook] Erro ao verificar idempotência:', checkError)
+      console.error('[Evolution Webhook] LEGACY_DEDUPE_CHECK_FAILED')
       return NextResponse.json({ error: 'Erro de banco ao verificar idempotência' }, { status: 500 })
     }
 
     if (mensagemExistente) {
-      console.log(`[Evolution Webhook] Mensagem com ID ${messageId} já processada (duplicada). Ignorando.`)
+      console.log('[Evolution Webhook] LEGACY_DUPLICATE_IGNORED')
       return NextResponse.json({ success: true, message: 'Mensagem duplicada ignorada' }, { status: 200 })
     }
 
     // 6. Validar telefone do cliente (Brasil, DDD 41 — Curitiba)
-    const remoteJid = data.key.remoteJid || ''
-    if (remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast') {
-      return NextResponse.json({ success: true, message: 'Mensagem de grupo/status ignorada' }, { status: 200 })
-    }
-
-    const sanitizedPhone = normalizeCuritibaPhone(remoteJid.split('@')[0])
+    const sanitizedPhone = inboundSender
     if (!sanitizedPhone) {
-      console.log(`[Evolution Webhook] Telefone fora do padrão de Curitiba (${maskPhone(remoteJid.split('@')[0])}). Descartando silenciosamente.`)
+      console.log('[Evolution Webhook] LEGACY_SENDER_REJECTED')
       return NextResponse.json({ success: true, message: 'Telefone fora do padrão descartado silenciosamente' }, { status: 200 })
     }
 
@@ -163,15 +275,13 @@ export async function POST(request: Request) {
       .maybeSingle()
 
     if (clientError) {
-      console.error('[Evolution Webhook] Erro ao buscar cliente:', clientError)
+      console.error('[Evolution Webhook] LEGACY_CUSTOMER_LOOKUP_FAILED')
       return NextResponse.json({ error: 'Erro de banco ao buscar cliente' }, { status: 500 })
     }
 
     let clienteId: string
     if (!cliente) {
       const profileName = data.pushName || 'Contato Evolution'
-      console.log(`[Evolution Webhook] Registrando novo cliente: ${maskName(profileName)} (${maskPhone(sanitizedPhone)})`)
-      
       const { data: novoCliente, error: insertClientError } = await supabaseAdmin
         .from('clientes')
         .insert({
@@ -183,7 +293,7 @@ export async function POST(request: Request) {
         .single()
 
       if (insertClientError) {
-        console.error('[Evolution Webhook] Erro ao criar cliente:', insertClientError)
+        console.error('[Evolution Webhook] LEGACY_CUSTOMER_CREATE_FAILED')
         return NextResponse.json({ error: 'Erro ao criar cliente' }, { status: 500 })
       }
       clienteId = novoCliente.id
@@ -237,7 +347,7 @@ export async function POST(request: Request) {
     const iaAtiva = inboundResolution?.iaAtiva ?? false
 
     if (inboundResolution?.sleeping) {
-      console.log(`[Evolution Webhook] Sofia dormindo para cliente ${clienteId}. Mensagem roteada para atendimento humano.`)
+      console.log('[Evolution Webhook] SOFIA_SLEEPING')
     }
 
     // 10. Persistir a mensagem recebida
@@ -254,7 +364,7 @@ export async function POST(request: Request) {
       .single()
 
     if (insertMsgError) {
-      console.error('[Evolution Webhook] Erro ao salvar mensagem:', insertMsgError)
+      console.error('[Evolution Webhook] LEGACY_MESSAGE_PERSIST_FAILED')
       return NextResponse.json({ error: 'Erro ao salvar mensagem' }, { status: 500 })
     }
 
@@ -262,7 +372,7 @@ export async function POST(request: Request) {
     const statusContato = await processarStatusContatoInbound(supabaseAdmin, clienteId, textBody || caption || null)
 
     if (statusContato.suprimirSofia) {
-      console.log(`[Evolution Webhook] Sofia suprimida por solicitação de opt-out para cliente ${clienteId}.`)
+      console.log('[Evolution Webhook] SOFIA_OPT_OUT_SUPPRESSED')
       if (statusContato.mensagemRespostaCurta) {
         try {
           await sendEvolutionScheduleMessage(sanitizedPhone, statusContato.mensagemRespostaCurta)
@@ -271,8 +381,8 @@ export async function POST(request: Request) {
             remetente: 'ia',
             conteudo: statusContato.mensagemRespostaCurta,
           })
-        } catch (err) {
-          console.error('[Evolution Webhook] Erro ao enviar resposta curta de opt-out:', err)
+        } catch {
+          console.error('[Evolution Webhook] OPT_OUT_REPLY_FAILED')
         }
       }
       return NextResponse.json({
@@ -285,7 +395,7 @@ export async function POST(request: Request) {
     // 10.1 Interceptar Ações Interativas (Cliques em botões de carrinho, combos, etc)
     const norm = normalizarMensagemEvolution(body)
     if (norm?.interactiveId) {
-      console.log(`[Evolution Webhook] Ação interativa detectada: ${norm.interactiveId} para cliente ${clienteId}`)
+      console.log('[Evolution Webhook] INTERACTIVE_ACTION_DETECTED')
       const acaoRes = await processarAcaoInterativaWhatsApp({
         clienteId,
         telefone: sanitizedPhone,
@@ -301,8 +411,8 @@ export async function POST(request: Request) {
             remetente: 'ia',
             conteudo: acaoRes.respostaTexto,
           })
-        } catch (sendErr) {
-          console.error('[Evolution Webhook] Erro ao enviar resposta da ação interativa:', sendErr)
+        } catch {
+          console.error('[Evolution Webhook] INTERACTIVE_ACTION_REPLY_FAILED')
         }
 
         return NextResponse.json({
@@ -322,36 +432,19 @@ export async function POST(request: Request) {
       if (horarioAtendimento.mensagem) {
         try {
           await sendEvolutionScheduleMessage(sanitizedPhone, horarioAtendimento.mensagem)
-        } catch (err) {
-          console.error('[Evolution Webhook] Erro ao enviar mensagem fora de horário:', err)
+        } catch {
+          console.error('[Evolution Webhook] SCHEDULE_REPLY_FAILED')
         }
       }
       return NextResponse.json({ success: true, message: 'Fora do horário de atendimento', data: novaMensagem }, { status: 200 })
     }
 
-    // 11. Se for anexo/comprovante (documento ou imagem de pagamento), registrar em comprovantes e responder
+    // 11. Preserve chat acknowledgement for proof-like attachments without legacy proof persistence.
     const isComprovante = mediaType === 'document' || 
       (conteudo && (conteudo.toLowerCase().includes('comprovante') || conteudo.toLowerCase().includes('pix') || conteudo.toLowerCase().includes('pagamento')))
 
     if (mediaType && isComprovante) {
-      console.log(`[Evolution Webhook] Comprovante/anexo detectado para cliente ${clienteId}. Registrando em comprovantes.`)
-      const urlArquivo = messageContent?.documentMessage?.url || messageContent?.imageMessage?.url || `whatsapp_media_${messageId}`
-      const nomeArquivo = messageContent?.documentMessage?.fileName || (mediaType === 'document' ? 'comprovante_whatsapp.pdf' : 'comprovante_whatsapp.jpg')
-      const tamanhoBytes = Number(messageContent?.documentMessage?.fileLength || messageContent?.imageMessage?.fileLength || 0)
-
-      try {
-        await supabaseAdmin
-          .from('comprovantes')
-          .insert({
-            cliente_id: clienteId,
-            url_arquivo: urlArquivo,
-            nome_arquivo: nomeArquivo,
-            tamanho_bytes: tamanhoBytes,
-          })
-      } catch (e: any) {
-        console.warn('[Evolution Webhook] Aviso ao salvar comprovante:', e)
-      }
-
+      console.log('[Evolution Webhook] LEGACY_ATTACHMENT_DETECTED')
       const autoReplyComprovante = 'Recebemos seu comprovante de pagamento. Ele será analisado por um atendente humano em breve. Muito obrigado!'
       try {
         await sendEvolutionScheduleMessage(sanitizedPhone, autoReplyComprovante)
@@ -360,26 +453,26 @@ export async function POST(request: Request) {
           remetente: 'ia',
           conteudo: autoReplyComprovante,
         })
-      } catch (err) {
-        console.error('[Evolution Webhook] Erro ao enviar confirmação de comprovante:', err)
+      } catch {
+        console.error('[Evolution Webhook] LEGACY_ATTACHMENT_REPLY_FAILED')
       }
 
       return NextResponse.json({
         success: true,
-        message: 'Comprovante recebido e registrado com sucesso',
+        message: 'Comprovante recebido para análise',
         data: novaMensagem,
       }, { status: 200 })
     }
 
     // 12. Disparar o pipeline RAG se iaAtiva for verdadeira
     if (iaAtiva && conteudo) {
-      console.log(`[Evolution Webhook] IA ativa na conversa. Disparando processarRagPipeline em background para conversaId: ${conversaId}`)
-      processarRagPipeline(conversaId, conteudo, 'whatsapp').catch((err) => {
-        console.error(`[Evolution Webhook] Erro em background ao processar RAG para conversaId ${conversaId}:`, err)
+      console.log('[Evolution Webhook] RAG_DISPATCHED')
+      processarRagPipeline(conversaId, conteudo, 'whatsapp').catch(() => {
+        console.error('[Evolution Webhook] RAG_BACKGROUND_FAILED')
       })
     }
 
-    console.log(`[Evolution Webhook] Mensagem processada e salva com sucesso. ID: ${novaMensagem.id}`)
+    console.log('[Evolution Webhook] MESSAGE_PROCESSED')
     return NextResponse.json({
       success: true,
       message: 'Mensagem processada com sucesso',
@@ -391,7 +484,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Request aborted' }, { status: 499 })
     }
 
-    console.error('[Evolution Webhook] Erro crítico no handler POST:', error)
+    console.error('[Evolution Webhook] HANDLER_FAILED')
     return NextResponse.json({ error: 'Erro interno do servidor' }, { status: 500 })
   }
 }
