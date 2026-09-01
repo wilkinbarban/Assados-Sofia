@@ -3,7 +3,7 @@
 \ir ../migrations/20260828390000_payment_proof_purge_fencing_and_replay_purge.sql
 \ir ../migrations/20260828400000_payment_proof_replay_audit_hardening.sql
 begin;
-select plan(41);
+select plan(45);
 set local role postgres;
 insert into auth.users(id,instance_id,aud,role,email,created_at,updated_at) values
  ('38383838-3838-4383-8383-383838383801','00000000-0000-0000-0000-000000000000','authenticated','authenticated','replay-supervisor@test',now(),now()),
@@ -80,11 +80,15 @@ select set_config('request.jwt.claims','{"sub":"38383838-3838-4383-8383-38383838
 select is(public.replay_payment_proof_dead_letter('wat','bad','38383838-3838-4383-8383-383838383825'::uuid)->>'outcome','invalid_request','invalid source and target have a fixed safe outcome');
 select is(public.replay_payment_proof_dead_letter('outbox','999999999','38383838-3838-4383-8383-383838383826'::uuid)->>'outcome','ineligible','missing target is safely ineligible');
 select is(public.replay_payment_proof_dead_letter('outbox','999999999','38383838-3838-4383-8383-383838383826'::uuid)->>'outcome','ineligible','same missing request is idempotent');
+select is(public.replay_payment_proof_dead_letter('outbox','9223372036854775808','38383838-3838-4383-8383-383838383830'::uuid)->>'outcome','invalid_request','out-of-range bigint target is invalid_request');
+select is(public.replay_payment_proof_dead_letter('outbox','9223372036854775808','38383838-3838-4383-8383-383838383830'::uuid)->>'outcome','invalid_request','same out-of-range bigint request is idempotent');
 reset role;
 set local role postgres;
 select ok((select outcome='invalid_request' and proof_id is null and source='invalid_request' and target_id=request_fingerprint from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383825'),'invalid request with usable key is durably sanitized');
 select ok((select outcome='ineligible' and proof_id is null and target_id=request_fingerprint from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383826'),'missing target with usable key is durably sanitized');
 select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383826'),1,'same missing request retains one durable key');
+select ok((select outcome='invalid_request' and proof_id is null and source='invalid_request' and target_id=request_fingerprint from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383830'),'out-of-range bigint is durably sanitized');
+select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383830'),1,'same out-of-range bigint request retains one durable key');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claim.sub','38383838-3838-4383-8383-383838383801',true);
@@ -93,7 +97,7 @@ select is(public.replay_payment_proof_dead_letter('processing_queue','38383838-3
 reset role;
 set local role postgres;
 select ok((select status='pending' and attempts=0 and failure_stage is null and claimed_until is null and lease_token is null from private.payment_proof_processing_queue where proof_id='38383838-3838-4383-8383-383838383811') and (select count(*)=1 from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383822'),'conflict leaves target untouched and retains one original key');
-select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests),6,'private immutable ledger retains one row for each keyed request');
+select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests),7,'private immutable ledger retains one row for each keyed request');
 select ok(not exists(select 1 from pg_constraint where conrelid='private.payment_proof_dead_letter_replay_requests'::regclass and contype='u' and pg_get_constraintdef(oid) like '%request_fingerprint%'),'request fingerprint is not a uniqueness key');
 select ok(not exists(select 1 from information_schema.columns where table_schema='private' and table_name='payment_proof_dead_letter_replay_requests' and column_name~'(error|payload|token|secret)'),'request ledger has no raw error, payload, token, or secret column');
 select ok(not exists(select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid where c.relname in('payment_proof_processing_queue','payment_proof_outbox') and t.tgname ilike '%replay%'),'replay has no automatic trigger');

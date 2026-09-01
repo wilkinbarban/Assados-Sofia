@@ -19,10 +19,12 @@ where target_id <> request_fingerprint;
 
 create or replace function public.replay_payment_proof_dead_letter(p_source text,p_target_id text,p_idempotency_key uuid)
 returns jsonb language plpgsql security definer set search_path='' as $$
+<<replay>>
 declare
  role_at_action public.tipo_funcao; actor uuid:=auth.uid(); q private.payment_proof_processing_queue%rowtype;
  o public.payment_proof_outbox%rowtype; prior private.payment_proof_dead_letter_replay_requests%rowtype;
  target_proof uuid; canonical_target text; fingerprint text; outcome text; audit_source text; prior_status text;
+ owns_key boolean;
 begin
  -- Authorization remains the first lock: profile changes cannot race any write.
  select p.funcao into role_at_action from public.perfis p where p.id=actor and p.ativo
@@ -41,13 +43,28 @@ begin
     canonical_target:=p_target_id::bigint::text;
    end if;
    fingerprint:=encode(extensions.digest(jsonb_build_object('source',audit_source,'target_id',canonical_target)::text,'sha256'),'hex');
-  exception when invalid_text_representation then
+  exception when invalid_text_representation or numeric_value_out_of_range then
    audit_source:='invalid_request'; outcome:='invalid_request';
    fingerprint:=encode(extensions.digest(jsonb_build_object('source',audit_source,'target_id',coalesce(p_target_id,''))::text,'sha256'),'hex');
   end;
  end if;
- select * into prior from private.payment_proof_dead_letter_replay_requests where idempotency_key=p_idempotency_key;
- if found then
+ if outcome='invalid_request' then
+  insert into private.payment_proof_dead_letter_replay_requests(idempotency_key,request_fingerprint,source,target_id,proof_id,actor_id,actor_role,outcome)
+  values(p_idempotency_key,fingerprint,audit_source,fingerprint,null,actor,role_at_action,outcome)
+  on conflict(idempotency_key) do nothing returning * into prior;
+  owns_key:=found;
+ else
+  -- INSERT-first claims the UUID before locking or mutating a target. Under
+  -- READ COMMITTED, a conflicting insert waits for the owner to commit, then
+  -- a new statement snapshot locks and reads its durable outcome without 23505.
+  insert into private.payment_proof_dead_letter_replay_requests(idempotency_key,request_fingerprint,source,target_id,proof_id,actor_id,actor_role,outcome)
+  values(p_idempotency_key,fingerprint,audit_source,fingerprint,null,actor,role_at_action,'ineligible')
+  on conflict(idempotency_key) do nothing returning * into prior;
+  owns_key:=found;
+ end if;
+ if not owns_key then
+  select * into prior from private.payment_proof_dead_letter_replay_requests where idempotency_key=p_idempotency_key for update;
+  if not found then raise exception 'PAYMENT_PROOF_REPLAY_IDEMPOTENCY_LOOKUP_FAILED'; end if;
   if prior.request_fingerprint<>fingerprint then return jsonb_build_object('outcome','idempotency_conflict'); end if;
   if prior.proof_id is not null then
    insert into public.payment_proof_events(proof_id,event_type,actor_id,actor_role,source,previous_status,result_status,metadata)
@@ -55,11 +72,7 @@ begin
   end if;
   return jsonb_build_object('outcome',prior.outcome);
  end if;
- if outcome='invalid_request' then
-  insert into private.payment_proof_dead_letter_replay_requests(idempotency_key,request_fingerprint,source,target_id,proof_id,actor_id,actor_role,outcome)
-  values(p_idempotency_key,fingerprint,audit_source,fingerprint,null,actor,role_at_action,outcome);
-  return jsonb_build_object('outcome',outcome);
- end if;
+ if outcome='invalid_request' then return jsonb_build_object('outcome',outcome); end if;
  if audit_source='processing_queue' then
   select * into q from private.payment_proof_processing_queue where proof_id=canonical_target::uuid for update;
   if found then target_proof:=q.proof_id; prior_status:=q.status; outcome:=case when q.status='dead_letter' and q.claimed_until is null and q.lease_token is null then 'replayed' else 'ineligible' end;
@@ -71,8 +84,9 @@ begin
    if outcome='replayed' then update public.payment_proof_outbox set status='pending',attempts=0,next_attempt_at=now(),claimed_until=null,lease_token=null,completed_at=null,dead_lettered_at=null,last_error=null where id=o.id; end if;
   else outcome:='ineligible'; end if;
  end if;
- insert into private.payment_proof_dead_letter_replay_requests(idempotency_key,request_fingerprint,source,target_id,proof_id,actor_id,actor_role,outcome)
- values(p_idempotency_key,fingerprint,audit_source,fingerprint,target_proof,actor,role_at_action,outcome);
+ update private.payment_proof_dead_letter_replay_requests
+ set proof_id=target_proof,outcome=replay.outcome
+ where idempotency_key=p_idempotency_key;
  if target_proof is not null then
   insert into public.payment_proof_events(proof_id,event_type,actor_id,actor_role,source,previous_status,result_status,metadata)
   values(target_proof,'dead_letter_replay',actor,role_at_action,'operator',prior_status,outcome,jsonb_build_object('idempotency_key',p_idempotency_key,'outcome',outcome));

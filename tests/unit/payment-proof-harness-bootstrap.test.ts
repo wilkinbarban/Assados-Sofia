@@ -10,6 +10,7 @@ const harnesses = [
 ]
 const forwardMigrationImports = new Map([
   ['payment_proof_dead_letter_replay.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828380000_payment_proof_dead_letter_replay.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql', '20260828400000_payment_proof_replay_audit_hardening.sql']],
+  ['payment_proof_dead_letter_replay_concurrency.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828380000_payment_proof_dead_letter_replay.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql', '20260828400000_payment_proof_replay_audit_hardening.sql']],
   ['payment_proof_leased_amount_confirmation.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828360000_payment_proof_leased_amount_confirmation.sql']],
   ['payment_proof_observability_replay.sql', ['20260828370000_payment_proof_unresolved_diagnostics.sql']],
   ['payment_proof_operational_metrics.sql', ['20260828370000_payment_proof_unresolved_diagnostics.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql']],
