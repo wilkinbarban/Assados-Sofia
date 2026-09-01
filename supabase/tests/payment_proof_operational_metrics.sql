@@ -1,6 +1,7 @@
 \ir ../migrations/20260828370000_payment_proof_unresolved_diagnostics.sql
+\ir ../migrations/20260828390000_payment_proof_purge_fencing_and_replay_purge.sql
 begin;
-select plan(51);
+select plan(53);
 
 select has_column('public','payment_proof_outbox','dead_lettered_at','dead-letter transition timestamp exists');
 select has_function('public','record_payment_proof_operational_failure',array['uuid','text'],'fixed failure recorder exists');
@@ -40,9 +41,9 @@ reset role;
 truncate table private.payment_proof_operational_failures, private.payment_proof_processing_queue, public.payment_proof_outbox, public.payment_proof_events, public.payment_proof_hash_tombstones, public.payment_proofs restart identity cascade;
 insert into public.payment_proofs(id,channel,delivery_key,status,original_storage_key,preview_storage_key,size_bytes,quarantined_at,purge_after) values
  ('91919191-9191-4191-8191-919191919101','web','metrics-received','received','synthetic/received.pdf',null,1,null,null),
- ('91919191-9191-4191-8191-919191919102','web','metrics-quarantine-expired','quarantined','synthetic/expired.pdf','synthetic/expired-preview.pdf',1,now()-interval '2 days',now()-interval '1 day'),
- ('91919191-9191-4191-8191-919191919103','web','metrics-purge-success','purging','synthetic/success.pdf','synthetic/success-preview.pdf',1,now()-interval '2 days',now()-interval '1 day'),
- ('91919191-9191-4191-8191-919191919104','web','metrics-purge-failure','purging','synthetic/failure.pdf','synthetic/failure-preview.pdf',1,now()-interval '2 days',now()-interval '1 day'),
+ ('91919191-9191-4191-8191-919191919102','web','metrics-quarantine-expired','quarantined','synthetic/expired.pdf','synthetic/expired-preview.pdf',1,now()-interval '4 days',now()-interval '3 days'),
+ ('91919191-9191-4191-8191-919191919103','web','metrics-purge-success','quarantined','synthetic/success.pdf','synthetic/success-preview.pdf',1,now()-interval '3 days',now()-interval '2 days'),
+ ('91919191-9191-4191-8191-919191919104','web','metrics-purge-failure','quarantined','synthetic/failure.pdf','synthetic/failure-preview.pdf',1,now()-interval '2 days',now()-interval '1 day'),
  ('91919191-9191-4191-8191-919191919105','web','metrics-outbox','review','synthetic/outbox.pdf',null,1,null,null);
 insert into public.payment_proof_outbox(proof_id,event_type,channel,payload,status,attempts,next_attempt_at) values
  ('91919191-9191-4191-8191-919191919105','synthetic-auto-dead','web','{}','pending',4,now()),
@@ -68,8 +69,23 @@ reset role;
 
 set local role service_role;
 select set_config('request.jwt.claims','{"role":"service_role"}',true);
-select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919103',true,'ignored success detail',null,null),'successful purge completes through current completion API');
-select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919104',false,'sensitive storage provider detail',null,null),'failed purge completes with retry through current completion API');
+do $$declare expired_job jsonb;success_job jsonb;failure_job jsonb;begin
+ expired_job:=public.claim_payment_proof_maintenance(60,'purge');
+ if expired_job->>'id'<>'91919191-9191-4191-8191-919191919102' then raise exception 'expected expired quarantine claim';end if;
+ perform public.complete_payment_proof_maintenance('purge',expired_job->>'id',false,'operation_failed',(expired_job->>'lease_token')::uuid,(expired_job->>'attempt')::integer);
+ success_job:=public.claim_payment_proof_maintenance(60,'purge');
+ if success_job->>'id'<>'91919191-9191-4191-8191-919191919103' then raise exception 'expected purge success claim';end if;
+ failure_job:=public.claim_payment_proof_maintenance(60,'purge');
+ if failure_job->>'id'<>'91919191-9191-4191-8191-919191919104' then raise exception 'expected purge failure claim';end if;
+ perform set_config('test.purge_success_token',success_job->>'lease_token',false);
+ perform set_config('test.purge_success_attempt',success_job->>'attempt',false);
+ perform set_config('test.purge_failure_token',failure_job->>'lease_token',false);
+ perform set_config('test.purge_failure_attempt',failure_job->>'attempt',false);
+end$$;
+select ok(not public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919103',true,'ignored success detail',null,null),'successful purge rejects null fence');
+select ok(not public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919104',false,'sensitive storage provider detail',null,null),'failed purge rejects null fence');
+select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919103',true,'ignored success detail',current_setting('test.purge_success_token')::uuid,current_setting('test.purge_success_attempt')::integer),'successful purge completes through current completion API with its exact claim');
+select ok(public.complete_payment_proof_maintenance('purge','91919191-9191-4191-8191-919191919104',false,'sensitive storage provider detail',current_setting('test.purge_failure_token')::uuid,current_setting('test.purge_failure_attempt')::integer),'failed purge completes with retry through current completion API with its exact claim');
 reset role;
 select is((select status from public.payment_proofs where delivery_key='metrics-purge-success'),'purged','successful purge has exact fixed status');
 select is((select event_type||'/'||result_status from public.payment_proof_events where proof_id='91919191-9191-4191-8191-919191919103'),'purged/purged','successful purge emits exact fixed event and result');
