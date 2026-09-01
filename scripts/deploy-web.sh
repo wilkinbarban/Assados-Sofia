@@ -39,9 +39,20 @@ wait_healthy() {
 }
 
 recreate_and_verify() {
-  local ref=$1 expected_id=$2
-  ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
-    --project-directory "$root" up -d --no-deps --force-recreate web
+  local ref=$1 expected_id=$2 close_payment_proof_gates=${3:-false}
+  if [[ "$close_payment_proof_gates" == true ]]; then
+    PAYMENT_PROOF_CANONICAL_INGEST_ENABLED=false \
+    WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED=false \
+    PAYMENT_PROOF_PROCESSING_ENABLED=false \
+    PAYMENT_PROOF_SELLER_RECONCILIATION_ENABLED=false \
+    PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false \
+    PAYMENT_PROOF_CLEANUP_ENABLED=false \
+    ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
+      --project-directory "$root" up -d --no-deps --force-recreate web
+  else
+    ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
+      --project-directory "$root" up -d --no-deps --force-recreate web
+  fi
   wait_healthy
   ASADOS_EXPECTED_IMAGE_ID="$expected_id" "$smoke"
 }
@@ -87,7 +98,7 @@ case "$action" in
 
     if ! recreate_and_verify "$candidate_ref" "$candidate_id"; then
       printf '%s\n' 'Promotion failed; restoring the retained previous image' >&2
-      recreate_and_verify "$rollback_ref" "$previous_id"
+      recreate_and_verify "$rollback_ref" "$previous_id" true
       exit 1
     fi
     write_state "$rollback_ref" "$previous_id" "$candidate_ref" "$candidate_id"
@@ -102,7 +113,7 @@ case "$action" in
       exit 1
     }
     started=$SECONDS
-    recreate_and_verify "$PREVIOUS_REF" "$PREVIOUS_ID"
+    recreate_and_verify "$PREVIOUS_REF" "$PREVIOUS_ID" true
     elapsed=$((SECONDS - started))
     (( elapsed < 300 )) || {
       printf 'Rollback exceeded five minutes: %s seconds\n' "$elapsed" >&2

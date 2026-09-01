@@ -60,6 +60,16 @@ describe('Phase 8 operational artifacts', () => {
     expect(deploy).toContain('--no-deps --force-recreate web')
     expect(deploy).toContain('ASADOS_EXPECTED_IMAGE_ID="$expected_id"')
     expect(deploy).toContain('Promotion failed; restoring the retained previous image')
+    expect(deploy).toContain('recreate_and_verify "$rollback_ref" "$previous_id" true')
+    expect(deploy).toContain('recreate_and_verify "$PREVIOUS_REF" "$PREVIOUS_ID" true')
+    for (const gate of [
+      'PAYMENT_PROOF_CANONICAL_INGEST_ENABLED=false',
+      'WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED=false',
+      'PAYMENT_PROOF_PROCESSING_ENABLED=false',
+      'PAYMENT_PROOF_SELLER_RECONCILIATION_ENABLED=false',
+      'PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false',
+      'PAYMENT_PROOF_CLEANUP_ENABLED=false',
+    ]) expect(deploy).toContain(gate)
     expect(deploy).toContain('ASADOS_DEPLOY_STATE_ROOT')
     expect(deploy).not.toMatch(/docker compose[^\\n]*(?:db|auth|storage|evolution)/)
   })

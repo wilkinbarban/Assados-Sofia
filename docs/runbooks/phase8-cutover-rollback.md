@@ -70,7 +70,7 @@ Abort promotion if health, image identity, either origin, an expected private-ro
 
 ## Web rollback rehearsal
 
-Rollback changes only the Web image. It never runs a down-migration or restores a database.
+Rollback changes only the Web image. It never runs a down-migration or restores a database. Both an explicit rollback and an automatic promotion rollback explicitly start Web with all six payment-proof startup gates set to `false`, overriding any open operator-shell values before health and read-only smoke; gate values are not printed.
 
 1. Start a UTC timer and record the rollback decision.
 2. Run `sudo scripts/deploy-web.sh rollback`.

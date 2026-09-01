@@ -1,7 +1,9 @@
 \ir ../migrations/20260828340000_payment_proof_operator_leases.sql
 \ir ../migrations/20260828380000_payment_proof_dead_letter_replay.sql
+\ir ../migrations/20260828390000_payment_proof_purge_fencing_and_replay_purge.sql
+\ir ../migrations/20260828400000_payment_proof_replay_audit_hardening.sql
 begin;
-select plan(35);
+select plan(41);
 set local role postgres;
 insert into auth.users(id,instance_id,aud,role,email,created_at,updated_at) values
  ('38383838-3838-4383-8383-383838383801','00000000-0000-0000-0000-000000000000','authenticated','authenticated','replay-supervisor@test',now(),now()),
@@ -36,7 +38,7 @@ set local role postgres;
 select ok((select status='pending' and attempts=0 and failure_stage is null and claimed_until is null and lease_token is null and completed_at is null and dead_lettered_at is null from private.payment_proof_processing_queue where proof_id='38383838-3838-4383-8383-383838383811'),'queue replay clears dead-letter, lease, completion, and failure fields');
 select is((select status from public.payment_proofs where id='38383838-3838-4383-8383-383838383811'),'review','queue replay does not change proof state');
 select ok((select actor_id='38383838-3838-4383-8383-383838383801'::uuid and actor_role='supervisor' and previous_status='dead_letter' and result_status='replayed' from public.payment_proof_events where proof_id='38383838-3838-4383-8383-383838383811' and event_type='dead_letter_replay' order by id limit 1),'first queue audit records locked actor, role, outcome, and prior status');
-select ok((select actor_id='38383838-3838-4383-8383-383838383801'::uuid and actor_role='supervisor' and outcome='replayed' and source='processing_queue' and target_id='38383838-3838-4383-8383-383838383811' from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383821'),'queue ledger records actor, role, canonical target, and outcome');
+select ok((select actor_id='38383838-3838-4383-8383-383838383801'::uuid and actor_role='supervisor' and outcome='replayed' and source='processing_queue' and target_id=request_fingerprint from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383821'),'queue ledger records actor, role, sanitized target, and outcome');
 reset role;
 set local role authenticated;
 select set_config('request.jwt.claim.sub','38383838-3838-4383-8383-383838383801',true);
@@ -76,11 +78,22 @@ set local role authenticated;
 select set_config('request.jwt.claim.sub','38383838-3838-4383-8383-383838383801',true);
 select set_config('request.jwt.claims','{"sub":"38383838-3838-4383-8383-383838383801","role":"authenticated"}',true);
 select is(public.replay_payment_proof_dead_letter('wat','bad','38383838-3838-4383-8383-383838383825'::uuid)->>'outcome','invalid_request','invalid source and target have a fixed safe outcome');
+select is(public.replay_payment_proof_dead_letter('outbox','999999999','38383838-3838-4383-8383-383838383826'::uuid)->>'outcome','ineligible','missing target is safely ineligible');
+select is(public.replay_payment_proof_dead_letter('outbox','999999999','38383838-3838-4383-8383-383838383826'::uuid)->>'outcome','ineligible','same missing request is idempotent');
+reset role;
+set local role postgres;
+select ok((select outcome='invalid_request' and proof_id is null and source='invalid_request' and target_id=request_fingerprint from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383825'),'invalid request with usable key is durably sanitized');
+select ok((select outcome='ineligible' and proof_id is null and target_id=request_fingerprint from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383826'),'missing target with usable key is durably sanitized');
+select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383826'),1,'same missing request retains one durable key');
+reset role;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','38383838-3838-4383-8383-383838383801',true);
+select set_config('request.jwt.claims','{"sub":"38383838-3838-4383-8383-383838383801","role":"authenticated"}',true);
 select is(public.replay_payment_proof_dead_letter('processing_queue','38383838-3838-4383-8383-383838383811','38383838-3838-4383-8383-383838383822'::uuid)->>'outcome','idempotency_conflict','key reuse for a different canonical target conflicts');
 reset role;
 set local role postgres;
 select ok((select status='pending' and attempts=0 and failure_stage is null and claimed_until is null and lease_token is null from private.payment_proof_processing_queue where proof_id='38383838-3838-4383-8383-383838383811') and (select count(*)=1 from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383822'),'conflict leaves target untouched and retains one original key');
-select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests),4,'private immutable ledger retains one row for each resolved request');
+select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests),6,'private immutable ledger retains one row for each keyed request');
 select ok(not exists(select 1 from pg_constraint where conrelid='private.payment_proof_dead_letter_replay_requests'::regclass and contype='u' and pg_get_constraintdef(oid) like '%request_fingerprint%'),'request fingerprint is not a uniqueness key');
 select ok(not exists(select 1 from information_schema.columns where table_schema='private' and table_name='payment_proof_dead_letter_replay_requests' and column_name~'(error|payload|token|secret)'),'request ledger has no raw error, payload, token, or secret column');
 select ok(not exists(select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid where c.relname in('payment_proof_processing_queue','payment_proof_outbox') and t.tgname ilike '%replay%'),'replay has no automatic trigger');
@@ -110,7 +123,8 @@ select set_config('request.jwt.claims','{}',true);
 select throws_ok($$select public.replay_payment_proof_dead_letter('processing_queue','38383838-3838-4383-8383-383838383811','38383838-3838-4383-8383-383838383829'::uuid)$$,'42501',null,'service role with cleared local identity and claims is denied');
 reset role;
 set local role postgres;
-select ok((select bool_and(metadata ?& array['source','target_id','idempotency_key','outcome']) from public.payment_proof_events where event_type='dead_letter_replay'),'every replay audit has canonical request metadata');
+select ok((select bool_and(metadata ?& array['idempotency_key','outcome']) and bool_and(not (metadata ?| array['source','target_id','error'])) from public.payment_proof_events where event_type='dead_letter_replay'),'every replay event is a sanitized DTO');
+select ok(not exists(select 1 from private.payment_proof_dead_letter_replay_requests where target_id<>request_fingerprint),'ledger does not retain raw targets');
 select ok(not exists(select 1 from pg_indexes where schemaname='private' and tablename='payment_proof_dead_letter_replay_requests' and indexdef like '%request_fingerprint%'), 'no request-fingerprint index is created');
 select * from finish();
 rollback;
