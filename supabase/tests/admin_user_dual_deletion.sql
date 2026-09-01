@@ -14,7 +14,13 @@ select not to_regclass('public.payment_proof_order_intents') is not null as appl
 \endif
 \ir ../migrations/20260828183000_total_purge_sales_receipt_authority.sql
 \ir ../migrations/20260828330000_total_purge_payment_proof_dependents.sql
-select plan(35);
+select to_regclass('private.payment_proof_dead_letter_replay_requests') is null as apply_replay_chain \gset
+\if :apply_replay_chain
+\ir ../migrations/20260828340000_payment_proof_operator_leases.sql
+\ir ../migrations/20260828380000_payment_proof_dead_letter_replay.sql
+\endif
+\ir ../migrations/20260828390000_payment_proof_purge_fencing_and_replay_purge.sql
+select plan(38);
 set role postgres;
 -- All identifiers are disposable-only and the runner executes inside a cloned DB.
 insert into auth.users(id,instance_id,aud,role,email,encrypted_password,created_at,updated_at) values
@@ -58,6 +64,9 @@ insert into private.payment_proof_operational_failures(proof_id,stage) values
  ('4a000000-0000-4000-8000-000000000031','render');
 insert into private.payment_proof_processing_queue(proof_id) values
  ('4a000000-0000-4000-8000-000000000031') on conflict do nothing;
+set role supabase_admin;
+insert into private.payment_proof_dead_letter_replay_requests(idempotency_key,request_fingerprint,source,target_id,proof_id,actor_id,actor_role,outcome) values
+ ('4a000000-0000-4000-8000-000000000071',repeat('e',64),'processing_queue','4a000000-0000-4000-8000-000000000031','4a000000-0000-4000-8000-000000000031','4a000000-0000-4000-8000-000000000001','admin','ineligible');
 insert into public.payment_proof_hash_tombstones(sha256,canonical_proof_id) values
  ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','4a000000-0000-4000-8000-000000000031') on conflict do nothing;
 reset role;
@@ -97,6 +106,7 @@ select ok(not exists(select 1 from public.payment_proof_order_intents where proo
 reset role;
 select ok(not exists(select 1 from private.payment_proof_operational_failures where proof_id='4a000000-0000-4000-8000-000000000031'),'total purge clears RESTRICT private operational failures');
 select ok(not exists(select 1 from private.payment_proof_processing_queue where proof_id='4a000000-0000-4000-8000-000000000031'),'total purge clears RESTRICT private processing queue rows');
+select ok(not exists(select 1 from private.payment_proof_dead_letter_replay_requests where proof_id='4a000000-0000-4000-8000-000000000031'),'total purge clears RESTRICT replay-request dependents');
 select ok(exists(select 1 from public.payment_proof_hash_tombstones where sha256='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' and canonical_proof_id is null),'purge retains only detached global SHA-256 tombstone');
 reset role;
 select is((select status from public.admin_user_deletion_jobs where id=(select job_id from purge_manifest)),'auth_pending','SQL purge records pending Auth phase');
@@ -112,10 +122,18 @@ select throws_ok($$delete from public.comprovantes_venda where id='4a000000-0000
 set local role authenticated;
 -- A normal anonymization may leave business data. Its residual purge is keyed
 -- to that client record and must not require or affect an Auth user.
+set local role supabase_admin;
 insert into public.clientes(id,usuario_id,nome,telefone) values('4a000000-0000-4000-8000-000000000013',null,'Deleted customer','5541999999813') on conflict(id) do update set usuario_id=null,nome='Deleted customer',telefone='5541999999813';
 insert into public.pedidos(id,cliente_id,status,tipo_entrega,total_produtos_centavos,total_pedido_centavos,status_pagamento,meio_pagamento) values('4a000000-0000-4000-8000-000000000023','4a000000-0000-4000-8000-000000000013','confirmado','retirada',300,300,'pendente','pix') on conflict do nothing;
+insert into public.payment_proofs(id,customer_id,channel,delivery_key,status,original_storage_key,size_bytes,sha256) values
+ ('4a000000-0000-4000-8000-000000000032','4a000000-0000-4000-8000-000000000013','web','residual-purge-fixture','received','proofs/private/web/residual-purge-fixture.pdf',100,repeat('d',64));
+set local role supabase_admin;
+insert into private.payment_proof_dead_letter_replay_requests(idempotency_key,request_fingerprint,source,target_id,proof_id,actor_id,actor_role,outcome) values
+ ('4a000000-0000-4000-8000-000000000072',repeat('f',64),'processing_queue','4a000000-0000-4000-8000-000000000032','4a000000-0000-4000-8000-000000000032','4a000000-0000-4000-8000-000000000001','admin','ineligible');
+set local role authenticated;
 create temporary table residual_manifest as select * from public.iniciar_purga_residual_cliente_admin('4a000000-0000-4000-8000-000000000013');
-select is((select count(*) from residual_manifest),0::bigint,'residual purge allows an empty exact Storage manifest');
+select is((select count(*) from residual_manifest),1::bigint,'residual purge returns the proof Storage manifest');
+select lives_ok($$select public.registrar_storage_purga_residual_cliente_admin((select job_id from residual_manifest),(select bucket_id from residual_manifest),(select object_path from residual_manifest),true,null)$$,'residual Storage manifest completes before SQL purge');
 reset role;
 create temporary table residual_job as select id from public.residual_client_purge_jobs where client_id='4a000000-0000-4000-8000-000000000013';
 select set_config('app.residual_job_id',(select id::text from residual_job),true);
@@ -123,5 +141,7 @@ set local role authenticated;
 select lives_ok($$select public.executar_purga_residual_cliente_admin(current_setting('app.residual_job_id')::uuid)$$,'residual client purge runs without Auth deletion');
 select ok(not exists(select 1 from public.clientes where id='4a000000-0000-4000-8000-000000000013'),'residual purge deletes anonymized client record');
 select ok(not exists(select 1 from public.pedidos where id='4a000000-0000-4000-8000-000000000023'),'residual purge deletes its derived order');
+set local role supabase_admin;
+select ok(not exists(select 1 from private.payment_proof_dead_letter_replay_requests where proof_id='4a000000-0000-4000-8000-000000000032'),'residual purge clears RESTRICT replay-request dependents');
 select * from finish();
 rollback;

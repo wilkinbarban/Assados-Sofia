@@ -40,11 +40,11 @@ export async function POST(request: Request) {
       const job = claim.data
       if (!job) { emptyKinds++; continue }
       emptyKinds = 0
-      // The claimed row is untrusted: do not execute or transition a kind whose
-      // immutable capability is closed, even if the claim RPC returns it for a
-      // different requested kind.
-      if ((job.kind === 'processing' && !paymentProofOperationalGates.processing.effective) ||
-        (job.kind === 'purge' && !paymentProofOperationalGates.cleanup.effective)) continue
+      // The claimed row is untrusted. Its discriminator must exactly match the
+      // requested capability before any worker or external dispatch can run.
+      if (job.kind !== kind || !['processing', 'outbox', 'purge'].includes(job.kind)) {
+        throw new Error('MAINTENANCE_UNAVAILABLE')
+      }
 
       let ok = false
       // A throw before the worker can return a narrower stage is a load-boundary failure.
@@ -79,13 +79,16 @@ export async function POST(request: Request) {
         ok = false
       }
 
+      const leaseToken = typeof job.lease_token === 'string' ? job.lease_token : null
+      const attempt = typeof job.attempt === 'number' ? job.attempt : null
+      if (!leaseToken || attempt === null) throw new Error('MAINTENANCE_UNAVAILABLE')
       const transition = await db.rpc('complete_payment_proof_maintenance', {
         p_kind: job.kind,
         p_id: String(job.id),
         p_success: ok,
         p_error: ok ? null : (job.kind === 'processing' ? failureStage : 'operation_failed'),
-        p_lease_token: typeof job.lease_token === 'string' ? job.lease_token : null,
-        p_attempt: typeof job.attempt === 'number' ? job.attempt : null,
+        p_lease_token: leaseToken,
+        p_attempt: attempt,
       })
       if (transition.error || transition.data !== true) throw new Error('MAINTENANCE_UNAVAILABLE')
       if (ok) completed++

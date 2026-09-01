@@ -10,11 +10,16 @@ import { POST } from '@/app/api/internal/payment-proofs/maintenance/route'
 
 const request = () => new Request('http://local/internal', { method: 'POST', headers: { authorization: 'Bearer maintenance-secret' } })
 
-function client(claims: unknown[], options: { removeError?: unknown; completeError?: unknown } = {}) {
-  let claim = 0
-  const rpc = vi.fn(async (name: string) => {
+function client(claims: unknown[], options: { removeError?: unknown; completeError?: unknown; ignoreClaimKind?: boolean } = {}) {
+  const remaining = [...claims]
+  const rpc = vi.fn(async (name: string, args?: { p_kind?: string }) => {
     if (name === 'begin_payment_proof_maintenance') return { data: true, error: null }
-    if (name === 'claim_payment_proof_maintenance') return { data: claims[claim++] ?? null, error: null }
+    if (name === 'claim_payment_proof_maintenance') {
+      const index = options.ignoreClaimKind
+        ? (remaining.length > 0 ? 0 : -1)
+        : remaining.findIndex((claim) => typeof claim === 'object' && claim !== null && 'kind' in claim && claim.kind === args?.p_kind)
+      return { data: index >= 0 ? remaining.splice(index, 1)[0] : null, error: null }
+    }
     if (name === 'complete_payment_proof_maintenance') return { data: !options.completeError, error: options.completeError ?? null }
     if (name === 'finish_payment_proof_maintenance') return { data: true, error: null }
     return { data: true, error: null }
@@ -39,22 +44,20 @@ describe('payment-proof maintenance route', () => {
   })
 
   it.each([
-    ['processing', 'process'],
-    ['purge', 'purge'],
-  ])('does not execute or complete a mismatched closed %s claim', async (kind, capability) => {
-    mocks.gates.processing.effective = false
-    mocks.gates.cleanup.effective = false
-    const { db, rpc, remove } = client([{ kind, id: 'forbidden-1', original_key: 'a' }])
+    ['processing', { kind: 'purge', id: 'forbidden-1', original_key: 'a', attempt: 1, lease_token: 'lease' }],
+    ['outbox', { kind: 'unknown', id: 'forbidden-2', channel: 'telegram', payload: {}, delivery_key: 'key', attempt: 1, lease_token: 'lease' }],
+  ])('rejects an untrusted %s claim discriminator before dispatch or completion', async (_requestedKind, job) => {
+    const { db, rpc, remove } = client([job], { ignoreClaimKind: true })
     mocks.createAdminClient.mockReturnValue(db)
 
     const response = await POST(request())
 
-    expect(response.status).toBe(200)
+    expect(response.status).toBe(503)
     expect(mocks.process).not.toHaveBeenCalled()
     expect(mocks.dispatch).not.toHaveBeenCalled()
     expect(remove).not.toHaveBeenCalled()
     expect(rpc).not.toHaveBeenCalledWith('complete_payment_proof_maintenance', expect.anything())
-    expect(capability).toBeTruthy()
+    expect(rpc).toHaveBeenCalledWith('finish_payment_proof_maintenance', { p_success: false })
   })
 
   it('does not create a client or call RPCs when unauthorized', async () => {
@@ -77,8 +80,8 @@ describe('payment-proof maintenance route', () => {
   })
 
   it.each([
-    [{ kind: 'purge', id: 'p1', original_key: null, preview_key: null }, 0],
-    [{ kind: 'purge', id: 'p1', original_key: 'a', preview_key: 'b' }, 2],
+    [{ kind: 'purge', id: 'p1', original_key: null, preview_key: null, attempt: 1, lease_token: 'purge-lease-1' }, 0],
+    [{ kind: 'purge', id: 'p1', original_key: 'a', preview_key: 'b', attempt: 1, lease_token: 'purge-lease-1' }, 2],
   ])('begins/finishes a healthy purge and counts only aggregates', async (job, keyCount) => {
     const { db, rpc, remove } = client([job])
     mocks.createAdminClient.mockReturnValue(db)
@@ -86,9 +89,20 @@ describe('payment-proof maintenance route', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ completed: 1, failed: 0 })
     expect(rpc.mock.calls[0][0]).toBe('begin_payment_proof_maintenance')
-    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_success: true, p_error: null, p_lease_token: null, p_attempt: null })
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_success: true, p_error: null, p_lease_token: 'purge-lease-1', p_attempt: 1 })
     expect(rpc.mock.calls.at(-1)).toEqual(['finish_payment_proof_maintenance', { p_success: true }])
     if (keyCount) expect(remove).toHaveBeenCalledWith(['a', 'b']); else expect(remove).not.toHaveBeenCalled()
+  })
+
+  it('rejects a claim without its mandatory token and attempt before completion', async () => {
+    const { db, rpc } = client([{ kind: 'purge', id: 'p1', original_key: null, preview_key: null }])
+    mocks.createAdminClient.mockReturnValue(db)
+
+    const response = await POST(request())
+
+    expect(response.status).toBe(503)
+    expect(rpc).not.toHaveBeenCalledWith('complete_payment_proof_maintenance', expect.anything())
+    expect(rpc).toHaveBeenCalledWith('finish_payment_proof_maintenance', { p_success: false })
   })
 
   it('processes a durable proof job and completes its exact transition', async () => {
@@ -116,16 +130,16 @@ describe('payment-proof maintenance route', () => {
   })
 
   it('durably transitions storage failure without leaking details while the run remains healthy', async () => {
-    const { db, rpc } = client([{ kind: 'purge', id: 'p1', original_key: 'a', preview_key: null }], { removeError: { message: 'private path' } })
+    const { db, rpc } = client([{ kind: 'purge', id: 'p1', original_key: 'a', preview_key: null, attempt: 2, lease_token: 'purge-lease-2' }], { removeError: { message: 'private path' } })
     mocks.createAdminClient.mockReturnValue(db)
     const response = await POST(request())
     expect(await response.json()).toEqual({ completed: 0, failed: 1 })
-    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_success: false, p_error: 'operation_failed', p_lease_token: null, p_attempt: null })
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_success: false, p_error: 'operation_failed', p_lease_token: 'purge-lease-2', p_attempt: 2 })
     expect(rpc).toHaveBeenCalledWith('finish_payment_proof_maintenance', { p_success: true })
   })
 
   it.each(['claim', 'completion'])('returns generic 503 and marks health failed on %s infrastructure failure', async (failure) => {
-    const { db, rpc } = client(failure === 'claim' ? [] : [{ kind: 'purge', id: 'p1', original_key: null, preview_key: null }], failure === 'completion' ? { completeError: { message: 'secret' } } : {})
+    const { db, rpc } = client(failure === 'claim' ? [] : [{ kind: 'purge', id: 'p1', original_key: null, preview_key: null, attempt: 1, lease_token: 'purge-lease-1' }], failure === 'completion' ? { completeError: { message: 'secret' } } : {})
     if (failure === 'claim') rpc.mockImplementation(async (name: string) => name === 'claim_payment_proof_maintenance' ? { data: null, error: { message: 'secret' } } : { data: true, error: null })
     mocks.createAdminClient.mockReturnValue(db)
     const response = await POST(request())
