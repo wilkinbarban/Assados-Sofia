@@ -2,8 +2,10 @@
 
 > **Resume from here:** work only in
 > `/home/wilkin/proyectos/Asados-worktrees/client-payment-fix-deploy`.
-> The next action is to finish the authorized local cohesive commits and verify
-> them without pushing, opening a PR, deploying, applying migrations, or changing a gate.
+> Local consolidation and verification are complete through implementation tip
+> `f554feb`; this documentation update is the tenth local commit after
+> `fbe309c...`. Nothing has been pushed and no pull request exists.
+> Do not deploy, apply migrations, or change a gate without separate authorization.
 
 ## Current production baseline
 
@@ -27,18 +29,17 @@
 | Services | web, maintenance, and Evolution healthy; 0 restarts |
 | Post-deploy logs | relevant error-token counts 0 |
 | Temporary environment links | worktree `.env` and `ops/supabase/.env` absent |
-| Delivery | no commit and no pull request for this deployed state |
+| Delivery | implementation is committed through `f554feb`; this documentation update is the tenth local commit after `fbe309c...`; no push or pull request |
 
 This baseline is evidence, not permission to mutate production. Keep the exact six
 gate values above until the corresponding human gate is reached.
 
-## Naming decision required before a gate change
+## Processing terminology and authorization
 
-`docs/payment-proof-operations.md` labels WhatsApp intake as Stage 2 and
-processing as Stage 3. The operational conversation called processing Stage 2.
-Do not silently choose either convention. Refer to the capability by the exact
-gate name `PAYMENT_PROOF_PROCESSING_ENABLED` until a human records the stage
-terminology. A stage number never constitutes authorization.
+This documentation calls processing **Stage 3**, while prior operational
+conversation called it Stage 2. The unambiguous capability is the
+`PAYMENT_PROOF_PROCESSING_ENABLED` gate; always name that gate with any stage
+reference. A stage number, including Stage 3, never constitutes authorization.
 
 ## Controlling sequence
 
@@ -92,22 +93,24 @@ argument, functional drift, or scope expansion.
 
 ### Strategy 3 — Prepare and run the processing canary
 
-**Outcome:** only `PAYMENT_PROOF_PROCESSING_ENABLED` is exercised in a bounded
-canary while every other closed gate remains closed.
+**Outcome:** only the Stage 3 `PAYMENT_PROOF_PROCESSING_ENABLED` capability is
+exercised in a bounded canary while every other closed gate remains closed.
 
-Preparation is automatic and read-only:
+Canary preparation is complete but **HOLD**. Read-only preflight found the sole
+pending row quarantined and its recorded original absent. Consequently its MIME,
+size, and PDF magic cannot be established, so it is not eligible canary evidence.
+Do not enable `PAYMENT_PROOF_PROCESSING_ENABLED` now.
 
-1. Inspect the single pending processing row without exposing identifiers,
-   payloads, storage keys, or sender data.
-2. Establish that its source object exists, is a valid processable PDF, respects
-   MIME and size limits, is not a fixture or residue, and has no unexpected
-   external side effects.
-3. Confirm attempts `0`, no lease, expected proof transition, fresh maintenance,
-   `dead_letter=0`, healthy services, and no relevant log degradation.
-4. Record the exact observation window, expected transitions, and rollback
-   command before changing the gate.
-5. **Stop for independent human authorization to set only
-   `PAYMENT_PROOF_PROCESSING_ENABLED=true`.**
+The local forward-only migration `20260902160000` is designed and tested, but is
+not applied. It is limited to the safe disposition of the narrow, pristine,
+unleased missing-original class; it leaves the proof and Storage untouched,
+keeps `completed_at = null`, and records an immutable audit decision. Applying
+it is a production mutation and requires explicit independent authorization.
+
+After separately authorized application, run a fresh read-only preflight. Only
+if it shows **no eligible pending work** may an operator separately ask whether
+to enable `PAYMENT_PROOF_PROCESSING_ENABLED`; that preflight does not make the
+gate ready or authorize it.
 
 If authorized:
 
@@ -129,14 +132,14 @@ or alerts degrade, or the target differs from the preflight evidence.
 | --- | --- | --- |
 | Change-to-work-unit mapping | Complete | Keep file lists synchronized with the final diff |
 | Durable cold-resume handoff | Complete | Update after every completed or blocked task |
-| Canonical Compose project pin | Complete locally | Included in focused verification; not committed |
-| Migration database-user contract | Complete locally | Re-run focused migration-runner tests |
+| Canonical Compose project pin | Complete and committed locally | Included in focused and full verification |
+| Migration database-user contract | Complete and committed locally | Focused migration-runner tests and full suite passed |
 | Temporary-runner disposition | Complete | Human authorized removal; four untracked one-off runners were deleted locally |
-| Local versioning | Authorized, in progress | Create cohesive local commits only; do not push or open a PR |
-| Reproducibility verification | Complete locally | 127 focused tests, TypeScript, build, isolated worker, lint (0 errors), shell syntax, and diff checks passed |
-| Historical processing disposition | Complete locally, not applied | Forward-only migration `20260902160000` and 37-test compatibility slice pass; production application requires separate authorization |
-| Processing canary preparation | HOLD | Read-only snapshot found the sole pending proof quarantined and its original absent from `storage.objects`; do not enable processing |
-| Processing gate change | Human authorization pending | Never infer from preparation or stage number |
+| Local versioning | Complete locally | Implementation tip `f554feb`; this documentation update is commit 10 after `fbe309c...`; do not push or open a PR |
+| Reproducibility verification | Complete locally | Full suite: 203 files passed, 1 skipped; 1194 tests passed, 1 skipped. TypeScript, lint (0 errors, 67 warnings), shell syntax, and diff checks passed |
+| Historical processing disposition | Complete locally, not applied | Forward-only migration `20260902160000` is designed/tested; production application requires explicit independent authorization |
+| Processing canary preparation | HOLD | The sole pending row is quarantined and its original is absent; MIME, size, and magic cannot be established |
+| Stage 3 `PAYMENT_PROOF_PROCESSING_ENABLED` gate | Human authorization pending | After separately authorized migration application, fresh read-only preflight must show no eligible pending work before separately asking whether to enable it |
 
 ## Reviewable work units
 
@@ -162,17 +165,17 @@ counts before proposing commits; split any unit above roughly 400 changed lines.
    - typed WhatsApp closed-window error;
    - `success | retryable | permanent` dispatch semantics;
    - migrations `20260902140000` and `20260902150000` with focused tests.
-5. **Historical processing disposition**
+6. **Historical processing disposition**
    - bounded abandonment of only pristine pending work for a quarantined proof
      whose recorded original is absent;
    - immutable private audit, idempotency, locks, and terminal delivery-state
      semantics;
    - migration `20260902160000` with focused tests; not applied in production.
-5. **Reproducible operations**
+7. **Reproducible operations**
    - validated `ASADOS_MIGRATION_DB_USER` support and tests;
    - canonical Compose project pin and rollback regression test;
    - updated operational and continuation documentation.
-6. **Retired temporary historical runners**
+8. **Retired temporary historical runners**
    - `scripts/smoke-client-payment-proof-temporary.mjs`;
    - `scripts/replay-payment-proof-dead-letters-temporary.mjs`;
    - `scripts/resolve-payment-proof-outbox-history-temporary.mjs`;
@@ -194,7 +197,7 @@ Proceed automatically through:
 Stop and ask the human before:
 
 - any further destructive cleanup (the four temporary runners were removed under explicit authorization);
-- creating commits, pushing, or opening a pull request;
+- pushing or opening a pull request;
 - applying a new production migration or deploying a new image;
 - changing any feature gate;
 - replaying, disposing, completing, or otherwise mutating a production row;
@@ -230,11 +233,11 @@ Stop and ask the human before:
 
 ## Latest verification evidence
 
-- Focused payment-proof and operations suite: 16 files, 127 tests passed.
+- Full suite: 203 files passed, 1 skipped; 1194 tests passed, 1 skipped.
 - `npx tsc --noEmit`: passed after narrowing test mock/helper types.
-- ESLint: 0 errors; 69 repository warnings remain, including pre-existing areas.
+- ESLint: 0 errors and 67 repository warnings.
 - `sh -n ops/supabase/migrate.sh scripts/deploy-web.sh`: passed.
-- `git diff --check`: passed.
+- `git diff --check`: passed; the verification worktree was clean and temporary environment links were absent.
 - The production-like render-worker test identified that DOM polyfills must load
   before importing `pdf-parse`; the source order is corrected locally.
 - A fresh standalone build passed after installing worktree-local dependencies

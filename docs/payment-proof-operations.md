@@ -30,16 +30,28 @@ Queue claims retry with bounded backoff. After the fifth unsuccessful attempt, w
 
 ## Rollout readiness
 
-This is **readiness only**: commands and steps are not executed automatically, and this candidate performs no production operation.
+This is **readiness only**: commands and steps are not executed automatically, and this candidate performs no production operation. Production remains unchanged and `PAYMENT_PROOF_PROCESSING_ENABLED=false`.
 
 | Stage | Entry evidence and observation | Stop condition |
 |---|---|---|
 | Stage 0 — closed baseline | Verify all six gates report closed with a redacted reason; retain the privileged diagnostic record. | Any gate is unexpectedly effective, malformed, or unreadable. |
 | 1 — canonical intake | Authorize canonical intake only; observe one bounded canonical admission and its aggregate queue state. | Duplicate admission, unsafe state, or unexpected processing. |
 | 2 — WhatsApp intake | After separate explicit authorization and compatibility evidence, authorize WhatsApp intake; canonical and WhatsApp are observed separately and explicitly. | Missing provenance, compatibility failure, or channel cross-over. |
-| 3 — processing | Authorize processing only after the selected intake observation is clean; observe bounded lifecycle aggregates. | Dead-letter growth, stale lease, render/classifier failure, or automatic approval. |
+| Stage 3 — `PAYMENT_PROOF_PROCESSING_ENABLED` processing | Prior operational conversation called this Stage 2; use this exact capability/gate name with either reference. Canary preparation is HOLD: the sole pending row is quarantined and its original is absent, so MIME, size, and PDF magic cannot be established. | Do not enable the gate. Dead-letter growth, stale lease, render/classifier failure, or automatic approval also stops any later authorized canary. |
 | 4 — seller reconciliation | Authorize seller reconciliation only after processing evidence is accepted; observe one human-confirmed reconciliation. | Amount/order mismatch, authorization failure, or unexpected state transition. |
 | 5 — recovery readiness | Keep replay and cleanup closed absent separate authorization; verify their redacted closed diagnostics and recovery evidence. | Either recovery gate becomes effective without its separate authorization. |
+
+The forward-only local migration `20260902160000` is designed and tested but not
+applied. It has an operator-safe boundary: only the narrowly defined pristine,
+unleased pending class with a quarantined proof and absent recorded original may
+be marked abandoned; the proof and Storage remain untouched, `completed_at`
+remains null, and an immutable audit decision is recorded. Applying it requires
+explicit independent authorization.
+
+After separately authorized application, run a fresh read-only preflight. It
+must show no eligible pending work before separately asking whether to enable
+Stage 3 `PAYMENT_PROOF_PROCESSING_ENABLED`. This does not mean the gate is ready
+now, and neither migration application nor preflight authorizes a gate change.
 
 Close declaratively by recording the stage, evidence, observer, and stop-condition result. If a stop condition occurs, return all gates to the closed baseline; Web recreation occurs only under approved change control, followed by verification rollback against bounded diagnostics. Do not replay, clean up, or otherwise operate production automatically.
 
