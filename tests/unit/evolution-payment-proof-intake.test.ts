@@ -77,7 +77,7 @@ describe('Evolution canonical payment-proof intake', () => {
     expect(response.status).toBe(202); expect(await response.json()).toEqual({ success: true, status: 'payment_proof_received' })
     expect(client.from).not.toHaveBeenCalledWith('mensagens')
     expect(mocks.downloadEvolutionPdf).toHaveBeenCalledWith(expect.objectContaining({ instanceName: 'main', declaredMimeType: 'application/pdf', declaredSize: PDF.length }))
-    expect(mocks.processCanonicalPaymentProof).toHaveBeenCalledWith(expect.objectContaining({ channel: 'whatsapp', deliveryId: 'evolution:main:message-77', customerId: 'customer-1', orderId: null, sender: '5541999990003', bytes: PDF, db: client, storage: storageBucket }))
+    expect(mocks.processCanonicalPaymentProof).toHaveBeenCalledWith(expect.objectContaining({ channel: 'whatsapp', deliveryId: 'evolution:main:message-77', customerId: 'customer-1', orderId: null, conversationId: 'conversas-1', sender: '5541999990003', bytes: PDF, db: client, storage: storageBucket }))
   })
 
   it('rejects a noncanonical document size before download with only a static marker', async () => {

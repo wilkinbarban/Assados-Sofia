@@ -17,7 +17,7 @@ import { ingestCanonicalPaymentProof, processCanonicalPaymentProof } from '@/lib
 const pdf = new Uint8Array([0x25,0x50,0x44,0x46,0x2d,0x31])
 
 function boundary(result: { data?: unknown; error?: unknown } = {}) {
-  const rpc = vi.fn(async () => ({ data: result.data ?? null, error: result.error ?? null }))
+  const rpc = vi.fn<(name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>>(async () => ({ data: result.data ?? null, error: result.error ?? null }))
   const upload = vi.fn(async () => ({ error: null }))
   const remove = vi.fn(async () => ({ error: null }))
   return { db: { rpc }, storage: { upload, remove }, rpc, upload, remove }

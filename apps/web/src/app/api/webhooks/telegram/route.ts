@@ -286,6 +286,12 @@ export async function POST(request: Request) {
     // document path without validation, token lookup, or download side effects.
     const canonicalPaymentProofEnabled = Boolean(message.document && paymentProofOperationalGates.canonicalIngest.effective)
     if (message.document && canonicalPaymentProofEnabled) {
+      let canonicalConversationId: string
+      try {
+        canonicalConversationId = (await resolveTelegramConversation(supabaseAdmin, clienteId)).conversationId
+      } catch {
+        return Response.json({ ok: false, status: 'payment_proof_retryable', message: 'Falha temporária ao receber documento.' }, { status: 503 })
+      }
       const replay = await supabaseAdmin.rpc('get_payment_proof_delivery_state', {
         p_channel: 'telegram',
         p_delivery_key: telegramMessageKey,
@@ -350,6 +356,7 @@ export async function POST(request: Request) {
         deliveryId: telegramMessageKey,
         customerId: clienteId,
         orderId: null,
+        conversationId: canonicalConversationId,
         sender: telegramChatId,
         bytes: downloaded.bytes,
         mimeType: downloaded.mimeType,

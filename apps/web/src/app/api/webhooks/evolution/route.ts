@@ -174,6 +174,14 @@ export async function POST(request: Request) {
               canonicalCustomerId = createdCustomer.id
             }
 
+            let canonicalConversationId: string
+            try {
+              canonicalConversationId = await resolveWhatsAppPersistenceConversation(supabaseAdmin, canonicalCustomerId)
+            } catch {
+              console.warn('[Evolution Webhook] CANONICAL_503_CONVERSATION')
+              return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
+            }
+
             const [evolutionApiUrl, evolutionApiKey, evolutionInstanceName] = await Promise.all([
               obterConfiguracaoSistema('EVOLUTION_API_URL'),
               obterConfiguracaoSistema('EVOLUTION_API_KEY'),
@@ -218,6 +226,7 @@ export async function POST(request: Request) {
               deliveryId: `evolution:${evolutionInstanceName}:${messageId}`,
               customerId: canonicalCustomerId,
               orderId: null,
+              conversationId: canonicalConversationId,
               sender,
               bytes: downloaded.bytes,
               mimeType: downloaded.mimeType,

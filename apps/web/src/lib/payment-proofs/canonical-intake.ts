@@ -7,6 +7,7 @@ type IntakeInput = {
   deliveryId: string
   customerId?: string | null
   orderId?: string | null
+  conversationId?: string | null
   sender?: string | null
   bytes: Uint8Array
   mimeType: string
@@ -56,6 +57,7 @@ export async function ingestCanonicalPaymentProof(input: IntakeInput) {
     p_size_bytes: valid.sizeBytes,
     p_mime_type: 'application/pdf',
     p_order_id: input.orderId ?? null,
+    p_conversation_id: input.conversationId ?? null,
     p_sha256: createHash('sha256').update(input.bytes).digest('hex'),
   })
   const proofId = proofIdFrom(data)

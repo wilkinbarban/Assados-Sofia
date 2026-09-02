@@ -43,7 +43,7 @@ function adminClient(customer: { id: string; telefone: string | null } | null = 
   const storageBucket = { upload: vi.fn(), remove: vi.fn() }
   const client = {
     storage: { from: vi.fn(() => storageBucket) },
-    rpc: vi.fn(async () => ({ data: { state: 'missing' }, error: null })),
+    rpc: vi.fn(async (): Promise<{ data: { state: string; proof_id?: string }; error: null }> => ({ data: { state: 'missing' }, error: null })),
     from: vi.fn((table: string) => {
       const builder: any = {
         select: vi.fn(() => builder),
@@ -55,6 +55,7 @@ function adminClient(customer: { id: string; telefone: string | null } | null = 
         maybeSingle: vi.fn(async () => {
           if (table === 'mensagens') return { data: null, error: null }
           if (table === 'clientes') return { data: customer, error: null }
+          if (table === 'conversas') return { data: { id: 'conversation-1', ia_ativa: true }, error: null }
           return { data: null, error: null }
         }),
         single: vi.fn(async () => ({ data: { id: 'created-customer' }, error: null })),
@@ -94,6 +95,7 @@ describe('Telegram canonical payment-proof intake', () => {
       deliveryId: 'telegram:1001:77',
       customerId: 'customer-1',
       orderId: null,
+      conversationId: 'conversation-1',
       bytes: PDF,
       mimeType: 'application/pdf',
       db: client,
