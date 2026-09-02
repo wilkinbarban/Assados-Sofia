@@ -1773,6 +1773,10 @@ export async function enviarComprovantePagamentoCliente(
       .eq('id', pedidoId)
       .single()
 
+    if (!payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
+      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
+    }
+
     const clienteDono = pedido?.clientes as any
     const elegivel = pedido?.status_pagamento === 'pendente' && pedido?.status !== 'cancelado'
     const conversaId = pedido?.conversa_id
@@ -1786,8 +1790,8 @@ export async function enviarComprovantePagamentoCliente(
 
     const supabaseAdmin = createAdminClient()
 
-    if (!pedido.cliente_id || !payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
-      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
+    if (!pedido.cliente_id) {
+      return { success: false, error: 'COMPROVANTE_INDISPONIVEL' }
     }
 
     const { data: fileBlob, error: downloadError } = await supabaseAdmin.storage
