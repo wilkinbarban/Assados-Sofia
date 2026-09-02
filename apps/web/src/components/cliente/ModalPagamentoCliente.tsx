@@ -23,6 +23,7 @@ import {
 import {
   gerarCobrancaPixPedido,
   gerarPreferenciaPagamento,
+  preflightComprovantePagamentoCliente,
   enviarComprovantePagamentoCliente,
 } from '@/app/actions/pedidos'
 import { createClient } from '@/lib/supabase/client'
@@ -227,6 +228,12 @@ export default function ModalPagamentoCliente({
           return
         }
 
+        const preflight = await preflightComprovantePagamentoCliente(pedidoId)
+        if (!preflight.success) {
+          setErroComprovante('Este comprovante não pode mais ser enviado para o pedido selecionado.')
+          return
+        }
+
         const cleanName = arquivoComprovante.name.replace(/[^a-zA-Z0-9._-]/g, '_')
         const filePath = `comprovantes/${pedidoId}/${Date.now()}_${cleanName}`
 
@@ -276,6 +283,7 @@ export default function ModalPagamentoCliente({
   }
 
   const isPago = statusPagamento === 'aprovado'
+  const proofUploadAvailable = statusPagamento === 'pendente'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
@@ -361,18 +369,20 @@ export default function ModalPagamentoCliente({
               <span>Cartão / MP</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setAbaAtiva('comprovante')}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                abaAtiva === 'comprovante'
-                  ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
-                  : 'text-zinc-400 hover:text-zinc-200'
-              }`}
-            >
-              <FileCheck className="h-3.5 w-3.5" />
-              <span>Comprovante</span>
-            </button>
+            {proofUploadAvailable && (
+              <button
+                type="button"
+                onClick={() => setAbaAtiva('comprovante')}
+                className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  abaAtiva === 'comprovante'
+                    ? 'bg-amber-500 text-zinc-950 shadow-md shadow-amber-500/10'
+                    : 'text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <FileCheck className="h-3.5 w-3.5" />
+                <span>Comprovante</span>
+              </button>
+            )}
           </div>
         )}
 
@@ -491,7 +501,7 @@ export default function ModalPagamentoCliente({
         )}
 
         {/* Conteúdo da Aba Enviar Comprovante (PDF/Imagem) */}
-        {abaAtiva === 'comprovante' && !isPago && (
+        {abaAtiva === 'comprovante' && proofUploadAvailable && !isPago && (
           <form onSubmit={handleEnviarComprovante} className="space-y-3.5 py-1 animate-in fade-in">
             {/* Input de arquivo oculto */}
             <input

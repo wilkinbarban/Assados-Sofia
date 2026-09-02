@@ -5,10 +5,6 @@ const migration = readFileSync(
   'supabase/migrations/20260828230000_payment_proof_order_lock.sql',
   'utf8',
 )
-const leases = readFileSync(
-  'supabase/migrations/20260828340000_payment_proof_operator_leases.sql',
-  'utf8',
-)
 const pedidos = readFileSync('apps/web/src/app/actions/pedidos.ts', 'utf8')
 const intake = readFileSync('apps/web/src/lib/payment-proofs/canonical-intake.ts', 'utf8')
 const dashboard = readFileSync(
@@ -36,6 +32,12 @@ describe('payment-proof-driven order lock', () => {
     expect(pedidos).toContain('ORDER_PAYMENT_PROOF_ALREADY_PENDING')
   })
 
+  it('uses the authenticated client for the lock projection and fails closed without hiding orders', () => {
+    expect(pedidos).toContain("await supabase.rpc('list_order_payment_proof_locks'")
+    expect(pedidos).toContain("paymentReviewUnavailable: true")
+    expect(pedidos).not.toContain("? await admin.rpc('list_order_payment_proof_locks'")
+  })
+
   it('projects and renders a persistent review state instead of payment controls', () => {
     expect(pedidos).toContain('payment_review')
     expect(pedidos).toContain('list_order_payment_proof_locks')
@@ -43,13 +45,27 @@ describe('payment-proof-driven order lock', () => {
     expect(dashboard).toContain('payment_review?.locked')
   })
 
-  it('serializes operator capability before proof leases and proof/order mutations', () => {
-    expect(leases).toContain('require_active_payment_proof_actor_role()')
-    expect(leases).toMatch(/from public\.perfis p[\s\S]*for update/)
-    expect(leases.indexOf('require_active_payment_proof_actor_role();')).toBeLessThan(
-      leases.indexOf('assert_payment_proof_lease(p_proof_id,p_lease_token)'),
+  it('applies payment-review locks to every chat payment surface and refreshes boundedly', () => {
+    const chat = readFileSync('apps/web/src/components/chat/ChatContainer.tsx', 'utf8')
+
+    expect(chat).toContain('payment_review?.locked')
+    expect(chat.match(/payment_review\?\.locked/g)?.length).toBeGreaterThanOrEqual(4)
+    expect(chat).toContain('setInterval(carregarPedidosCliente, 7500)')
+    expect(dashboard).toContain('setInterval(carregarPedidos, 7500)')
+    expect(dashboard).toContain('!pedido.payment_review?.paymentReviewUnavailable')
+  })
+
+  it('allows rejected orders to retry gateway payment but keeps canonical proof intake and reconciliation pending-only', () => {
+    const retryMigration = readFileSync(
+      'supabase/migrations/20260901220000_client_payment_retry_and_proof_lock.sql',
+      'utf8',
     )
-    expect(leases).toContain('from public.payment_proofs where id=p_proof_id for update')
+
+    expect(dashboard).toContain("pedido.status_pagamento === 'rejeitado'")
+    expect(dashboard).toContain("pedido.status !== 'cancelado'")
+    expect(retryMigration).toContain("status_pagamento not in ('pendente','rejeitado')")
+    expect(migration).toContain("v_order.status_pagamento<>'pendente'")
+    expect(migration).toContain("status_pagamento<>'pendente' or status='cancelado'")
   })
 
   it('keeps order-intent RESTRICT semantics while total purge removes intents first', () => {

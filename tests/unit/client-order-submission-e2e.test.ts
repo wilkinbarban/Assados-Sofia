@@ -103,6 +103,12 @@ describe('End-to-End Client Order Submission, Locking & Tracking Flow', () => {
           eq: vi.fn().mockReturnThis(),
         }
       }),
+      rpc: vi.fn((name: string) => {
+        if (name === 'list_order_payment_proof_locks') {
+          return Promise.resolve({ data: [{ pedido_id: mockPedidoInserido.id, locked: false }], error: null })
+        }
+        return Promise.resolve({ data: null, error: null })
+      }),
     }
 
     mockAdminClient = {

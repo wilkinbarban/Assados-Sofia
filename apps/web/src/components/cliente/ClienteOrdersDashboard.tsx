@@ -56,6 +56,7 @@ export interface PedidoClienteRecord {
     status: string | null
     proofId: string | null
     lockedAt: string | null
+    paymentReviewUnavailable?: boolean
   }
 }
 
@@ -74,6 +75,7 @@ export default function ClienteOrdersDashboard({
     pedidoId: string
     valorCentavos: number
     statusPagamento: 'pendente' | 'aprovado' | 'rejeitado' | 'reembolsado'
+    abaInicial?: 'pix' | 'cartao' | 'comprovante'
   } | null>(null)
   const [modalVisualizador, setModalVisualizador] = useState<{
     isOpen: boolean
@@ -97,6 +99,17 @@ export default function ClienteOrdersDashboard({
       setLoading(false)
     }
   }, [])
+
+  const hasPaymentReviewLock = pedidos.some(
+    (pedido) => pedido.payment_review?.locked && !pedido.payment_review?.paymentReviewUnavailable,
+  )
+
+  useEffect(() => {
+    if (!hasPaymentReviewLock) return
+
+    const interval = window.setInterval(carregarPedidos, 7500)
+    return () => window.clearInterval(interval)
+  }, [hasPaymentReviewLock, carregarPedidos])
 
   // Sincronização em tempo real via canal Supabase
   useEffect(() => {
@@ -320,9 +333,12 @@ export default function ClienteOrdersDashboard({
                       >
                         <FileCheck className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" />
                         <div>
-                          <strong>Comprovante recebido — aguardando verificação.</strong>{' '}
-                          O pagamento deste pedido está protegido enquanto o atendente confere o
-                          documento. Se ele for rejeitado, você poderá enviar outro PDF.
+                          <strong>{pedido.payment_review?.paymentReviewUnavailable
+                            ? 'Revisão de pagamento indisponível — aguardando atualização.'
+                            : 'Comprovante recebido — aguardando verificação.'}</strong>{' '}
+                          {pedido.payment_review?.paymentReviewUnavailable
+                            ? 'Por segurança, as opções de pagamento e comprovante estão temporariamente bloqueadas. Tente atualizar em instantes.'
+                            : 'O pagamento deste pedido está protegido enquanto o atendente confere o documento. Se ele for rejeitado, você poderá enviar outro PDF.'}
                         </div>
                       </div>
                     )}
@@ -338,7 +354,7 @@ export default function ClienteOrdersDashboard({
                       </Link>
 
                       <div className="flex flex-wrap items-center gap-2">
-                        {pedido.status_pagamento === 'pendente' &&
+                        {(pedido.status_pagamento === 'pendente' || pedido.status_pagamento === 'rejeitado') &&
                           pedido.status !== 'cancelado' &&
                           !paymentReviewLocked && (
                           <>
@@ -357,20 +373,21 @@ export default function ClienteOrdersDashboard({
                               <span>⚡ Pagar Pedido (PIX / Cartão)</span>
                             </button>
 
-                            <button
+                            {pedido.status_pagamento === 'pendente' && <button
                               type="button"
                               onClick={() =>
                                 setModalPagamento({
                                   pedidoId: pedido.id,
                                   valorCentavos: pedido.total_pedido_centavos || pedido.total_produtos_centavos,
                                   statusPagamento: pedido.status_pagamento,
+                                  abaInicial: 'comprovante',
                                 })
                               }
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-xl text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
                             >
                               <FileCheck className="h-3.5 w-3.5 text-amber-400" />
                               <span>Comprovante</span>
-                            </button>
+                            </button>}
                           </>
                         )}
 
@@ -409,6 +426,7 @@ export default function ClienteOrdersDashboard({
           pedidoId={modalPagamento.pedidoId}
           valorCentavos={modalPagamento.valorCentavos}
           statusPagamento={modalPagamento.statusPagamento}
+          abaInicial={modalPagamento.abaInicial}
           onPagamentoConfirmado={() => {
             carregarPedidos()
           }}

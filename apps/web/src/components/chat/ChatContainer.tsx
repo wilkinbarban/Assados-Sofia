@@ -95,6 +95,13 @@ interface PedidoCliente {
   total_centavos?: number;
   data_criacao: string;
   data_atualizacao?: string;
+  payment_review?: {
+    locked: boolean;
+    status: string | null;
+    proofId: string | null;
+    lockedAt: string | null;
+    paymentReviewUnavailable?: boolean;
+  };
   itens_pedido?: Array<{
     id: string;
     produto_id?: string;
@@ -340,6 +347,17 @@ export default function ChatContainer({
   const obterTotalPedidoCentavos = useCallback((p: PedidoCliente) => {
     return p.total_pedido_centavos ?? p.total_centavos ?? (p.total_produtos_centavos || 0) + (p.taxa_entrega_centavos || 0);
   }, []);
+
+  const hasPaymentReviewLock = pedidosCliente.some(
+        (pedido) => pedido.payment_review?.locked && !pedido.payment_review?.paymentReviewUnavailable,
+      );
+
+  useEffect(() => {
+    if (!hasPaymentReviewLock) return;
+
+    const interval = window.setInterval(carregarPedidosCliente, 7500);
+    return () => window.clearInterval(interval);
+  }, [hasPaymentReviewLock, carregarPedidosCliente]);
 
   // Atualização em tempo real dos pedidos do cliente
   useEffect(() => {
@@ -981,7 +999,7 @@ export default function ChatContainer({
                   </span>
                 </div>
 
-                {pedidoAtivo.status_pagamento === 'pendente' && pedidoAtivo.status !== 'cancelado' && (
+                {(pedidoAtivo.status_pagamento === 'pendente' || pedidoAtivo.status_pagamento === 'rejeitado') && pedidoAtivo.status !== 'cancelado' && !pedidoAtivo.payment_review?.locked && (
                   <button
                     type="button"
                     onClick={() =>
@@ -1675,9 +1693,18 @@ export default function ChatContainer({
                           </div>
                         )}
 
+                        {pedido.payment_review?.locked && (
+                          <div role="status" className="flex items-start gap-2 rounded-xl border border-sky-500/25 bg-sky-500/10 p-2.5 text-[11px] text-sky-200">
+                            <FileCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-300" />
+                            <span>{pedido.payment_review.paymentReviewUnavailable
+                              ? 'Revisão de pagamento indisponível. Por segurança, aguarde a atualização antes de tentar pagar ou enviar outro comprovante.'
+                              : 'Comprovante recebido — aguardando verificação. As opções de pagamento e comprovante serão liberadas se ele for rejeitado.'}</span>
+                          </div>
+                        )}
+
                         {/* Ações de Pagamento e Comprovante */}
                         <div className="pt-3 border-t border-zinc-800/80 flex flex-wrap items-center justify-between gap-2">
-                          {pedido.status_pagamento === 'pendente' && pedido.status !== 'cancelado' && (
+                          {(pedido.status_pagamento === 'pendente' || pedido.status_pagamento === 'rejeitado') && pedido.status !== 'cancelado' && !pedido.payment_review?.locked && (
                             <>
                               <button
                                 type="button"
@@ -1695,7 +1722,7 @@ export default function ChatContainer({
                                 <span>⚡ Pagar Pedido (PIX / Cartão)</span>
                               </button>
 
-                              <button
+                              {pedido.status_pagamento === 'pendente' && <button
                                 type="button"
                                 onClick={() =>
                                   setModalPagamento({
@@ -1709,7 +1736,7 @@ export default function ChatContainer({
                               >
                                 <FileCheck className="h-3.5 w-3.5 text-amber-400" />
                                 <span>Comprovante</span>
-                              </button>
+                              </button>}
                             </>
                           )}
 
@@ -1948,9 +1975,18 @@ export default function ChatContainer({
                             </div>
                           )}
 
+                          {p.payment_review?.locked && (
+                            <div role="status" className="flex items-start gap-2 rounded-xl border border-sky-500/25 bg-sky-500/10 p-2.5 text-[11px] text-sky-200">
+                              <FileCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-300" />
+                              <span>{p.payment_review.paymentReviewUnavailable
+                                ? 'Revisão de pagamento indisponível. Por segurança, aguarde a atualização antes de tentar pagar ou enviar outro comprovante.'
+                                : 'Comprovante recebido — aguardando verificação. As opções serão liberadas se ele for rejeitado.'}</span>
+                            </div>
+                          )}
+
                           {/* Botões de Ação */}
                           <div className="pt-2 border-t border-zinc-800/80 flex flex-wrap items-center gap-2">
-                            {p.status_pagamento === 'pendente' && p.status !== 'cancelado' && (
+                            {(p.status_pagamento === 'pendente' || p.status_pagamento === 'rejeitado') && p.status !== 'cancelado' && !p.payment_review?.locked && (
                               <>
                                 <button
                                   type="button"
@@ -1968,7 +2004,7 @@ export default function ChatContainer({
                                   <span>⚡ Pagar (PIX / Cartão)</span>
                                 </button>
 
-                                <button
+                                {p.status_pagamento === 'pendente' && <button
                                   type="button"
                                   onClick={() =>
                                     setModalPagamento({
@@ -1982,7 +2018,7 @@ export default function ChatContainer({
                                 >
                                   <FileCheck className="h-3.5 w-3.5 text-amber-400" />
                                   <span>Comprovante</span>
-                                </button>
+                                </button>}
                               </>
                             )}
 
