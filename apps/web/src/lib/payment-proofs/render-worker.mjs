@@ -23,11 +23,11 @@ async function run() {
   parentPort.postMessage({ diagnostic:'worker_boot' })
   const bytes = new Uint8Array(workerData.bytes)
   if (bytes.length < 5 || bytes.length > MAX_PDF_BYTES) throw Object.assign(new Error(), { diagnostic:'pdf_open' })
+  polyfillDom()
   let PDFParse
   try { ({ PDFParse } = await import('pdf-parse')) }
   catch { throw Object.assign(new Error(), { diagnostic:'dependency_load' }) }
   parentPort.postMessage({ diagnostic:'dependency_load' })
-  polyfillDom()
   let parser
   try { parser = new PDFParse({ data: bytes.slice(), isEvalSupported:false, useWorkerFetch:false, useSystemFonts:false, stopAtErrors:true, verbosity: 0 }) }
   catch { throw Object.assign(new Error(), { diagnostic:'pdf_open' }) }

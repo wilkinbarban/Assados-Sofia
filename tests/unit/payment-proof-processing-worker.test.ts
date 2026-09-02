@@ -44,23 +44,23 @@ describe('payment-proof processing worker', () => {
       expect(result).toEqual({ ok:true })
       expect(render).toHaveBeenCalledTimes(state.preview ? 0 : 1)
       expect(upload).toHaveBeenCalledTimes(state.preview ? 0 : 1)
-      if (!state.preview) expect(upload.mock.calls[0][0]).toMatch(/^proofs\/private\/[a-f0-9]{64}\.png$/)
+      if (!state.preview) expect((upload.mock.calls as unknown[][])[0]?.[0]).toMatch(/^proofs\/private\/[a-f0-9]{64}\.png$/)
       expect(classify).toHaveBeenCalledTimes(state.advisory ? 0 : 1)
       if (!state.advisory) expect(classify).toHaveBeenCalledWith(expect.objectContaining({ extractedText: expect.any(String) }))
-      expect(rpc.mock.calls.filter(([name]) => name === 'record_payment_proof_render')).toHaveLength(state.preview ? 0 : 1)
-      expect(rpc.mock.calls.filter(([name]) => name === 'record_payment_proof_advisory')).toHaveLength(state.advisory ? 0 : 1)
+      expect((rpc.mock.calls as unknown[][]).filter(([name]) => name === 'record_payment_proof_render')).toHaveLength(state.preview ? 0 : 1)
+      expect((rpc.mock.calls as unknown[][]).filter(([name]) => name === 'record_payment_proof_advisory')).toHaveLength(state.advisory ? 0 : 1)
     }
   })
 
   it('maps an original blob read exception to the fixed load stage instead of throwing', async () => {
     const { client } = db()
     client.storage.from = vi.fn(() => ({
-      upload: vi.fn(),
+      upload: vi.fn(async () => ({ error: null })),
       download: vi.fn(async () => ({
-        data: { arrayBuffer: vi.fn(async () => { throw new Error('private blob detail') }) },
-        error: null,
+        data: new Blob([PDF], { type: 'application/pdf' }),
+        error: { message: 'private blob detail' },
       })),
-    }))
+    })) as unknown as typeof client.storage.from
 
     await expect(processPaymentProofJob({ proofId:'proof-1', db:client as any, render, classify:classify as any }))
       .resolves.toEqual({ ok:false, stage:'load' })
@@ -90,7 +90,7 @@ describe('payment-proof processing worker', () => {
     const bytes = renderablePdf()
     const result = await renderPaymentProofWithWorker(bytes, 20_000, () => new Worker(
       path.resolve('apps/web/src/lib/payment-proofs/render-worker.mjs'),
-      { type: 'module', workerData: { bytes: bytes.slice().buffer } },
+      { workerData: { bytes: bytes.slice().buffer } },
     ))
     expect(result.png.subarray(0, 8)).toEqual(Uint8Array.from([137,80,78,71,13,10,26,10]))
   })
@@ -104,7 +104,7 @@ describe('payment-proof processing worker', () => {
 
     const result = await renderPaymentProofWithWorker(bytes, 20_000, () => new Worker(
       workerPath,
-      { type: 'module', workerData: { bytes: bytes.slice().buffer } },
+      { workerData: { bytes: bytes.slice().buffer } },
     ))
 
     expect(result.png.subarray(0, 8)).toEqual(Uint8Array.from([137,80,78,71,13,10,26,10]))
