@@ -48,10 +48,10 @@ recreate_and_verify() {
     PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false \
     PAYMENT_PROOF_CLEANUP_ENABLED=false \
     ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
-      --project-directory "$root" up -d --no-deps --force-recreate web
+      --project-directory "$root" --project-name asados up -d --no-deps --force-recreate web
   else
     ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
-      --project-directory "$root" up -d --no-deps --force-recreate web
+      --project-directory "$root" --project-name asados up -d --no-deps --force-recreate web
   fi
   wait_healthy
   ASADOS_EXPECTED_IMAGE_ID="$expected_id" "$smoke"
