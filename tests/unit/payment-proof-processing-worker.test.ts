@@ -44,7 +44,13 @@ describe('payment-proof processing worker', () => {
       expect(result).toEqual({ ok:true })
       expect(render).toHaveBeenCalledTimes(state.preview ? 0 : 1)
       expect(upload).toHaveBeenCalledTimes(state.preview ? 0 : 1)
-      if (!state.preview) expect((upload.mock.calls as unknown[][])[0]?.[0]).toMatch(/^proofs\/private\/[a-f0-9]{64}\.png$/)
+      if (!state.preview) {
+        const [previewKey, previewBody, previewOptions] = (upload.mock.calls as unknown[][])[0] ?? []
+        expect(previewKey).toMatch(/^proofs\/private\/[a-f0-9]{64}\.png$/)
+        expect(Buffer.isBuffer(previewBody)).toBe(true)
+        expect(previewBody).toEqual(Buffer.from(PNG))
+        expect(previewOptions).toEqual({ contentType:'image/png', upsert:true })
+      }
       expect(classify).toHaveBeenCalledTimes(state.advisory ? 0 : 1)
       if (!state.advisory) expect(classify).toHaveBeenCalledWith(expect.objectContaining({ extractedText: expect.any(String) }))
       expect((rpc.mock.calls as unknown[][]).filter(([name]) => name === 'record_payment_proof_render')).toHaveLength(state.preview ? 0 : 1)
