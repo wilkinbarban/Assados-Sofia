@@ -4,6 +4,17 @@ import { createHash } from 'node:crypto'
 const MAX_PDF_BYTES = 5 * 1024 * 1024
 const RENDER_WIDTH = 1200
 const VERSION = 'pdf-parse-2.4.5/w1200'
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10]
+
+function pngDimensions(png) {
+  if (png.length < 24 || !PNG_SIGNATURE.every((byte, index) => png[index] === byte) ||
+    png[12] !== 73 || png[13] !== 72 || png[14] !== 68 || png[15] !== 82) throw new Error()
+  const view = new DataView(png.buffer, png.byteOffset, png.byteLength)
+  const width = view.getUint32(16)
+  const height = view.getUint32(20)
+  if (width === 0 || height === 0 || width > RENDER_WIDTH || height > RENDER_WIDTH * 4) throw new Error()
+  return { width, height }
+}
 
 function polyfillDom() {
   if (typeof globalThis.DOMMatrix === 'undefined') {
@@ -36,10 +47,11 @@ async function run() {
     const screenshot = await parser.getScreenshot({ partial:[1], desiredWidth:RENDER_WIDTH, imageBuffer:true, imageDataUrl:false })
     parentPort.postMessage({ diagnostic:'page_render' })
     const page = screenshot.pages[0]
-    if (!page?.data?.length || page.width > RENDER_WIDTH || page.height > RENDER_WIDTH * 4) throw new Error()
+    if (!page?.data?.length) throw new Error()
     const png = new Uint8Array(page.data)
+    const { width, height } = pngDimensions(png)
     parentPort.postMessage({ diagnostic:'message_transfer' })
-    parentPort.postMessage({ ok:true, result:{ png, width:page.width, height:page.height, sha256:createHash('sha256').update(png).digest('hex'), version:VERSION } }, [png.buffer])
+    parentPort.postMessage({ ok:true, result:{ png, width, height, sha256:createHash('sha256').update(png).digest('hex'), version:VERSION } }, [png.buffer])
   } catch { throw Object.assign(new Error(), { diagnostic:'page_render' }) }
   finally { await parser.destroy().catch(() => undefined) }
 }

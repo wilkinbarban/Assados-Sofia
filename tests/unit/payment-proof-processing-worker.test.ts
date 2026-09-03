@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Worker } from 'node:worker_threads'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { copyFile, mkdtemp, readFile, symlink } from 'node:fs/promises'
 import os from 'node:os'
@@ -8,8 +9,8 @@ import { processPaymentProofJob, renderPaymentProofWithWorker } from '@/lib/paym
 const PDF = new Uint8Array([0x25,0x50,0x44,0x46,0x2d,0x31])
 const PNG = new Uint8Array([1,2,3])
 
-function renderablePdf() {
-  const objects = ['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>','<< /Type /Page /Parent 2 0 R /MediaBox [0 0 20 20] /Resources << >> /Contents 4 0 R >>','<< /Length 0 >>\nstream\n\nendstream']
+function renderablePdf(width = 20, height = 20) {
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [3 0 R] /Count 1 >>',`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << >> /Contents 4 0 R >>`,'<< /Length 0 >>\nstream\n\nendstream']
   let body='%PDF-1.4\n';const offsets=[0]
   objects.forEach((object,index)=>{offsets[index+1]=Buffer.byteLength(body);body+=`${index+1} 0 obj\n${object}\nendobj\n`})
   const xref=Buffer.byteLength(body);body+=`xref\n0 5\n0000000000 65535 f \n${offsets.slice(1).map(value=>`${String(value).padStart(10,'0')} 00000 n \n`).join('')}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`
@@ -114,6 +115,26 @@ describe('payment-proof processing worker', () => {
     ))
 
     expect(result.png.subarray(0, 8)).toEqual(Uint8Array.from([137,80,78,71,13,10,26,10]))
+  })
+
+  it('returns integral PNG artifact dimensions from the isolated real worker', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'asados-payment-proof-processing-'))
+    const workerPath = path.join(root, 'payment-proof-render-worker.mjs')
+    await copyFile('apps/web/src/lib/payment-proofs/render-worker.mjs', workerPath)
+    await symlink(path.resolve('apps/web/.next/standalone/node_modules'), path.join(root, 'node_modules'), 'dir')
+    const bytes = renderablePdf(816, 1056)
+
+    const result = await renderPaymentProofWithWorker(bytes, 20_000, () => new Worker(
+      workerPath,
+      { workerData: { bytes: bytes.slice().buffer } },
+    ))
+
+    expect(Number.isInteger(result.width)).toBe(true)
+    expect(Number.isInteger(result.height)).toBe(true)
+    expect(result.width).toBeLessThanOrEqual(1200)
+    expect(result.height).toBeLessThanOrEqual(4800)
+    expect(result.png.subarray(0, 8)).toEqual(Uint8Array.from([137,80,78,71,13,10,26,10]))
+    expect(result.sha256).toBe(createHash('sha256').update(result.png).digest('hex'))
   })
 
   it('terminates a renderer that exceeds the hard wall timeout and absorbs termination rejection', async () => {
