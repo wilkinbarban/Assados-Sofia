@@ -23,14 +23,29 @@ export async function dispatchPaymentProofOutbox(input: Input): Promise<Result> 
       const result = await enviarMensagemWhatsapp(input.conversationId, { texto: input.message, remetente: 'operador' })
       if (providerReportedFailure(result)) return { status: 'retryable', error: 'delivery_failed' }
     } else {
-      const { error } = await input.db.from('mensagens').upsert({
+      const expected = {
         conversa_id: input.conversationId,
         remetente: 'operador',
         conteudo: input.message,
         url_anexo: null,
+      }
+      const { error } = await input.db.from('mensagens').upsert({
+        ...expected,
         external_id: input.deliveryKey,
-      }, { onConflict: 'external_id' })
+      }, { onConflict: 'external_id', ignoreDuplicates: true })
       if (error) throw error
+
+      const { data: persisted, error: readError } = await input.db.from('mensagens')
+        .select('conversa_id,remetente,conteudo,url_anexo')
+        .eq('external_id', input.deliveryKey)
+        .maybeSingle()
+      if (readError || !persisted) throw readError || new Error('missing_delivery_binding')
+      if (persisted.conversa_id !== expected.conversa_id
+        || persisted.remetente !== expected.remetente
+        || persisted.conteudo !== expected.conteudo
+        || persisted.url_anexo !== expected.url_anexo) {
+        return { status: 'permanent', error: 'delivery_conflict' }
+      }
     }
     return { status: 'success' }
   } catch (error) {

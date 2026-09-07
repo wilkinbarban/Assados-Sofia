@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
+import { notificarClienteAtualizacaoPedido } from '@/lib/orders/orderNotifications'
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const leaseToken = /^[0-9a-f]{64}$/i
@@ -32,7 +33,7 @@ type MutationResult = { success: true; proof?: { status: string; purge_after: st
 type Diagnostics = { processing_queue_dead_letter: number; outbox_dead_letter: number; unresolved_dead_letter: number; oldest_unresolved_dead_letter_at: string | null; oldest_unresolved_dead_letter_age_seconds: number | null }
 type ReplayInput = { source: 'processing_queue' | 'outbox'; targetId: string; idempotencyKey: string }
 type ReplayOutcome = 'replayed' | 'ineligible' | 'idempotency_conflict' | 'invalid_request'
-type GateDiagnostics = { canonicalIngest: { effective: boolean; reason: string }; whatsappIngest: { effective: boolean; reason: string }; processing: { effective: boolean; reason: string }; sellerReconciliation: { effective: boolean; reason: string }; privilegedReplay: { effective: boolean; reason: string }; cleanup: { effective: boolean; reason: string } }
+type GateDiagnostics = { canonicalIngest: { effective: boolean; reason: string }; whatsappIngest: { effective: boolean; reason: string }; telegramIngest: { effective: boolean; reason: string }; processing: { effective: boolean; reason: string }; sellerReconciliation: { effective: boolean; reason: string }; privilegedReplay: { effective: boolean; reason: string }; cleanup: { effective: boolean; reason: string }; restore: { effective: boolean; reason: string } }
 
 async function staff(): Promise<Actor | null> {
   const session = await createClient()
@@ -72,10 +73,12 @@ export async function getPaymentProofOperationalGatesDiagnostics() {
   const data: GateDiagnostics = {
     canonicalIngest: { effective: gates.canonicalIngest.effective, reason: gates.canonicalIngest.reason },
     whatsappIngest: { effective: gates.whatsappIngest.effective, reason: gates.whatsappIngest.reason },
+    telegramIngest: { effective: gates.telegramIngest.effective, reason: gates.telegramIngest.reason },
     processing: { effective: gates.processing.effective, reason: gates.processing.reason },
     sellerReconciliation: { effective: gates.sellerReconciliation.effective, reason: gates.sellerReconciliation.reason },
     privilegedReplay: { effective: gates.privilegedReplay.effective, reason: gates.privilegedReplay.reason },
     cleanup: { effective: gates.cleanup.effective, reason: gates.cleanup.reason },
+    restore: { effective: gates.restore.effective, reason: gates.restore.reason },
   }
   return { success: true as const, data }
 }
@@ -99,17 +102,49 @@ export async function replayPaymentProofDeadLetter(input: unknown) {
 }
 
 export async function listPaymentProofsForAdmin() {
-  const actor = await staff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
-  const { data, error } = await actor.session.from('payment_proofs').select('id,customer_id,channel,status,suggested_cents,confirmed_cents,extraction_confidence,purge_after,created_at').order('created_at', { ascending: false }).limit(200)
+  const actor = await privilegedStaff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+  const { data, error } = await actor.session
+    .from('payment_proofs')
+    .select('id,customer_id,channel,status,suggested_cents,confirmed_cents,extraction_confidence,purge_after,created_at')
+    .order('created_at', { ascending: false })
+    .limit(200)
   if (error) return { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
-  return { success: true as const, role: actor.role, data: (data || []).map((proof) => ({
-    ...proof, customer_name: proof.customer_id ? `Cliente …${proof.customer_id.slice(-4)}` : null,
-    preview_url: `/api/payment-proofs/${proof.id}/preview`, original_url: `/api/payment-proofs/${proof.id}/original`,
-  })) }
+
+  const customerIds = Array.from(
+    new Set((data || []).map((p) => p.customer_id).filter((id): id is string => !!id && uuid.test(id)))
+  )
+
+  let customerMap = new Map<string, { nome: string; telefone: string | null }>()
+  if (customerIds.length > 0) {
+    try {
+      const { data: clientes } = await actor.session
+        .from('clientes')
+        .select('id, nome, telefone')
+        .in('id', customerIds)
+      if (clientes) {
+        customerMap = new Map(clientes.map((c) => [c.id, { nome: c.nome, telefone: c.telefone }]))
+      }
+    } catch {
+      // Ignora falha caso a tabela clientes esteja temporariamente inacessível
+    }
+  }
+
+  return { success: true as const, role: actor.role, data: (data || []).map((proof) => {
+    const cust = proof.customer_id ? customerMap.get(proof.customer_id) : null
+    return {
+      ...proof,
+      customer_name: cust?.nome || (proof.customer_id ? `Cliente …${proof.customer_id.slice(-4)}` : null),
+      customer_phone: cust?.telefone || null,
+      suggested_cents: proof.suggested_cents ?? proof.confirmed_cents ?? null,
+      extraction_confidence: proof.extraction_confidence ?? null,
+      preview_url: `/api/payment-proofs/${proof.id}/preview`,
+      original_url: `/api/payment-proofs/${proof.id}/original`,
+    }
+  }) }
 }
 
 export async function listEligiblePaymentProofOrders(customerId: string) {
-  const actor = await staff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+  const actor = await privilegedStaff(); if (!actor) return { success: false as const, error: 'FORBIDDEN' }
   if (!uuid.test(customerId)) return { success: false as const, error: 'INVALID_CUSTOMER' }
   const { data, error } = await actor.session.from('pedidos').select('id,cliente_id,total_pedido_centavos,status,status_pagamento').eq('cliente_id', customerId).eq('status_pagamento', 'pendente').neq('status', 'cancelado').order('data_criacao', { ascending: false }).limit(100)
   if (error) return { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
@@ -118,8 +153,10 @@ export async function listEligiblePaymentProofOrders(customerId: string) {
 
 export async function mutatePaymentProofAdmin(input: MutationInput): Promise<MutationResult> {
   if (!input || !uuid.test(input.proofId)) return { success: false, error: 'INVALID_PROOF' }
-  const actor = await staff(); if (!actor) return { success: false, error: 'FORBIDDEN' }
-  if (input.operation === 'restore' && actor.role !== 'admin') return { success: false, error: 'FORBIDDEN' }
+  const financialMutation = input.operation === 'confirm_amount' || input.operation === 'reconcile' || input.operation === 'reject'
+  const actor = financialMutation ? await privilegedStaff() : await staff()
+  if (!actor) return { success: false, error: 'FORBIDDEN' }
+  if (input.operation === 'restore' && (!paymentProofOperationalGates.restore.effective || actor.role !== 'admin')) return { success: false, error: 'FORBIDDEN' }
 
   if ((input.operation === 'confirm_amount' || input.operation === 'reconcile') && paymentProofOperationalGates.sellerReconciliation?.effective === false) return { success: false, error: 'FORBIDDEN' }
 
@@ -160,6 +197,269 @@ export async function mutatePaymentProofAdmin(input: MutationInput): Promise<Mut
   if (error) return { success: false, error: safeError(error) }
   const { data: proof, error: proofError } = await actor.session.from('payment_proofs').select('status,purge_after').eq('id', input.proofId).single()
   if (proofError || !proof) return { success: false, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
+
+  if (input.operation === 'reconcile' && input.orderIds) {
+    for (const orderId of input.orderIds) {
+      try {
+        await notificarClienteAtualizacaoPedido({
+          pedidoId: orderId,
+          tipo: 'status_pagamento',
+          statusPagamento: 'aprovado',
+          supabaseClient: actor.session,
+        })
+      } catch {}
+    }
+  }
+
   revalidatePath('/atendimento/admin'); revalidatePath('/atendimento')
   return { success: true, proof }
+}
+
+export async function getPaymentProofForPreviewModal(proofId: string) {
+  if (!uuid.test(proofId)) return { success: false as const, error: 'INVALID_REQUEST' }
+  const actor = await privilegedStaff()
+  if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+
+  const { data: proof, error: proofError } = await actor.session
+    .from('payment_proofs')
+    .select('id, customer_id, channel, status, suggested_cents, confirmed_cents, extraction_confidence, created_at')
+    .eq('id', proofId)
+    .single()
+
+  if (proofError || !proof) return { success: false as const, error: 'PROOF_NOT_FOUND' }
+
+  // Search in payment_proof_order_intents
+  const { data: intent } = await actor.session
+    .from('payment_proof_order_intents')
+    .select('pedido_id')
+    .eq('proof_id', proofId)
+    .order('requested_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  let orderId = intent?.pedido_id || null
+
+  // If no intent, look up latest pending order of customer
+  if (!orderId && proof.customer_id) {
+    const { data: latestOrder } = await actor.session
+      .from('pedidos')
+      .select('id')
+      .eq('cliente_id', proof.customer_id)
+      .eq('status_pagamento', 'pendente')
+      .neq('status', 'cancelado')
+      .order('data_criacao', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (latestOrder) orderId = latestOrder.id
+  }
+
+  let orderData = null
+  if (orderId) {
+    const { data: order } = await actor.session
+      .from('pedidos')
+      .select('id, total_pedido_centavos, status, status_pagamento, data_criacao')
+      .eq('id', orderId)
+      .single()
+    if (order) orderData = order
+  }
+
+  return {
+    success: true as const,
+    data: {
+      proof: {
+        id: proof.id,
+        status: proof.status,
+        channel: proof.channel,
+        suggested_cents: proof.suggested_cents,
+        confirmed_cents: proof.confirmed_cents,
+        extraction_confidence: proof.extraction_confidence,
+        preview_url: `/api/payment-proofs/${proof.id}/preview`,
+        original_url: `/api/payment-proofs/${proof.id}/original`,
+      },
+      order: orderData,
+    },
+  }
+}
+
+export async function approvePaymentProofDirectly(proofId: string, orderId: string, cents?: number) {
+  if (!uuid.test(proofId) || !uuid.test(orderId)) return { success: false as const, error: 'INVALID_REQUEST' }
+  const actor = await privilegedStaff()
+  if (!actor || !paymentProofOperationalGates.sellerReconciliation.effective) return { success: false as const, error: 'FORBIDDEN' }
+
+  // Verificação de idempotência: somente uma conciliação persistida ou o pedido
+  // já pago prova que esta associação foi efetivamente concluída.
+  const { data: existingLink } = await actor.session
+    .from('payment_proof_order_links')
+    .select('proof_id,pedido_id')
+    .eq('proof_id', proofId)
+    .eq('pedido_id', orderId)
+    .maybeSingle()
+
+  const { data: currentOrder } = await actor.session
+    .from('pedidos')
+    .select('status_pagamento')
+    .eq('id', orderId)
+    .single()
+
+  if (existingLink && currentOrder?.status_pagamento === 'aprovado') {
+    return { success: true as const, alreadyReconciled: true }
+  }
+
+  // 1. Acquire lease
+  const { data: leaseData, error: leaseErr } = await actor.session.rpc('acquire_payment_proof_lease', { p_proof_id: proofId })
+  const lease = Array.isArray(leaseData) ? leaseData[0] : leaseData
+  if (leaseErr || !lease?.lease_token) return { success: false as const, error: safeError(leaseErr) }
+  const token = lease.lease_token
+
+  try {
+    // 2. Fetch current proof status and order amount
+    const { data: proof } = await actor.session.from('payment_proofs').select('status, confirmed_cents, suggested_cents').eq('id', proofId).single()
+    const { data: order } = await actor.session.from('pedidos').select('total_pedido_centavos').eq('id', orderId).single()
+
+    const targetCents = cents ?? proof?.confirmed_cents ?? proof?.suggested_cents ?? order?.total_pedido_centavos
+    if (!targetCents || !validCents(targetCents)) {
+      await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+      return { success: false as const, error: 'INVALID_AMOUNT' }
+    }
+
+    // 3. Confirm amount if in review
+    if (proof?.status === 'review' || !proof?.confirmed_cents) {
+      const { error: confErr } = await actor.session.rpc('confirm_payment_proof_amount', {
+        p_proof_id: proofId,
+        p_confirmed_cents: Number(targetCents),
+        p_lease_token: token,
+      })
+      if (confErr) {
+        await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+        return { success: false as const, error: safeError(confErr) }
+      }
+    }
+
+    // 4. Reconcile with the order
+    const { error: recErr } = await actor.session.rpc('reconcile_payment_proof', {
+      p_proof_id: proofId,
+      p_order_ids: [orderId],
+      p_idempotency_key: crypto.randomUUID(),
+      p_lease_token: token,
+    })
+    if (recErr) {
+      await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+      return { success: false as const, error: safeError(recErr) }
+    }
+
+    // 5. Release lease
+    await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+
+    // 6. Notificar cliente nos canais cadastrados (Web, WhatsApp, Telegram)
+    try {
+      await notificarClienteAtualizacaoPedido({
+        pedidoId: orderId,
+        tipo: 'status_pagamento',
+        statusPagamento: 'aprovado',
+        supabaseClient: actor.session,
+      })
+    } catch (notifErr) {
+      console.warn('Falha ao notificar aprovação de comprovante:', notifErr)
+    }
+
+    revalidatePath('/atendimento')
+    revalidatePath('/atendimento/pedidos')
+    revalidatePath('/atendimento/admin')
+    revalidatePath('/cliente/pedidos')
+    return { success: true as const }
+  } catch {
+    try {
+      await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+    } catch {}
+    return { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
+  }
+}
+
+export async function rejectPaymentProofDirectly(proofId: string) {
+  if (!uuid.test(proofId)) return { success: false as const, error: 'INVALID_REQUEST' }
+  const actor = await privilegedStaff()
+  if (!actor) return { success: false as const, error: 'FORBIDDEN' }
+
+  // 1. Acquire lease
+  const { data: leaseData, error: leaseErr } = await actor.session.rpc('acquire_payment_proof_lease', { p_proof_id: proofId })
+  const lease = Array.isArray(leaseData) ? leaseData[0] : leaseData
+  if (leaseErr || !lease?.lease_token) return { success: false as const, error: safeError(leaseErr) }
+  const token = lease.lease_token
+
+  try {
+    // 2. Reject
+    const { error: rejErr } = await actor.session.rpc('manage_payment_proof_review', {
+      p_proof_id: proofId,
+      p_operation: 'reject',
+      p_value: null,
+      p_lease_token: token,
+    })
+    if (rejErr) {
+      await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+      return { success: false as const, error: safeError(rejErr) }
+    }
+
+    // 3. Release lease
+    await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+
+    // 4. Notificar cliente nos canais cadastrados (Web, WhatsApp, Telegram)
+    try {
+      const { data: intent } = await actor.session
+        .from('payment_proof_order_intents')
+        .select('pedido_id')
+        .eq('proof_id', proofId)
+        .order('requested_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (intent?.pedido_id) {
+        await notificarClienteAtualizacaoPedido({
+          pedidoId: intent.pedido_id,
+          tipo: 'status_pagamento',
+          statusPagamento: 'rejeitado',
+          motivo: 'Comprovante não validado ou recusado na conferência.',
+          supabaseClient: actor.session,
+        })
+      } else {
+        const { data: proof } = await actor.session
+          .from('payment_proofs')
+          .select('customer_id, conversation_id')
+          .eq('id', proofId)
+          .single()
+
+        let conversaId = proof?.conversation_id
+        if (!conversaId && proof?.customer_id) {
+          const { data: conv } = await actor.session
+            .from('conversas')
+            .select('id')
+            .eq('cliente_id', proof.customer_id)
+            .order('data_atualizacao', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+          if (conv) conversaId = conv.id
+        }
+
+        if (conversaId) {
+          await actor.session.from('mensagens').insert({
+            conversa_id: conversaId,
+            remetente: 'operador',
+            conteudo: '❌ Seu comprovante de pagamento não pôde ser validado na conferência. Por favor, verifique e envie um comprovante legível.',
+            data_criacao: new Date().toISOString(),
+          })
+        }
+      }
+    } catch (notifErr) {
+      console.warn('Falha ao notificar rejeição de comprovante:', notifErr)
+    }
+
+    revalidatePath('/atendimento')
+    revalidatePath('/atendimento/pedidos')
+    revalidatePath('/atendimento/admin')
+    return { success: true as const }
+  } catch {
+    try {
+      await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
+    } catch {}
+    return { success: false as const, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
+  }
 }

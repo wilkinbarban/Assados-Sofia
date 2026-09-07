@@ -1,4 +1,7 @@
+select to_regclass('private.payment_proof_alert_delivery_failures') is null as apply_unresolved_diagnostics \gset
+\if :apply_unresolved_diagnostics
 \ir ../migrations/20260828370000_payment_proof_unresolved_diagnostics.sql
+\endif
 \ir ../migrations/20260828390000_payment_proof_purge_fencing_and_replay_purge.sql
 begin;
 select plan(53);
@@ -113,7 +116,7 @@ select is(public.get_payment_proof_operational_metrics()->'lifecycle','{"receive
 select is(public.get_payment_proof_operational_metrics()->'outbox'->>'unresolved_dead_letter','2','unresolved dead-letter metric aggregates both sources');
 select ok(public.get_payment_proof_operational_metrics()->'outbox'->>'oldest_unresolved_dead_letter_at' is not null,'oldest unresolved dead-letter timestamp is reported');
 select ok((public.get_payment_proof_operational_metrics()->'outbox'->>'oldest_unresolved_dead_letter_age_seconds')::bigint>=7200,'oldest unresolved dead-letter age is reported');
-select is((public.get_payment_proof_operational_metrics()->'outbox') - array['unresolved_dead_letter','oldest_unresolved_dead_letter_at','oldest_unresolved_dead_letter_age_seconds'],'{"pending":1,"claimed":0,"completed":0,"dead_letter":1,"attempts":{"zero":1,"one":0,"two":0,"three_to_four":0,"five_plus":1},"dead_letter_last_60m":1}'::jsonb,'outbox and attempt metrics use fixed values and zero-filled keys');
+select is((public.get_payment_proof_operational_metrics()->'outbox') - array['unresolved_dead_letter','oldest_unresolved_dead_letter_at','oldest_unresolved_dead_letter_age_seconds'],'{"pending":1,"claimed":0,"completed":0,"abandoned":0,"dead_letter":1,"attempts":{"zero":1,"one":0,"two":0,"three_to_four":0,"five_plus":1},"dead_letter_last_60m":1}'::jsonb,'outbox and attempt metrics use fixed values and zero-filled keys');
 select is(public.get_payment_proof_operational_metrics()->'quarantine','{"total":1,"expired":1}'::jsonb,'quarantine metrics expose fixed aggregate values');
 select is(public.get_payment_proof_operational_metrics()->'purge','{"failures_last_60m":1}'::jsonb,'purge metrics expose fixed aggregate values');
 select is(public.get_payment_proof_operational_metrics()->'failures','{"render_last_60m":1,"classifier_last_60m":1}'::jsonb,'failure metrics expose fixed aggregate values');

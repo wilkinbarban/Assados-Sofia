@@ -9,15 +9,25 @@ const harnesses = [
   'admin_user_dual_deletion.sql',
 ]
 const forwardMigrationImports = new Map([
+  ['payment_proof_web_message_idempotency.sql', ['20260906190000_payment_proof_web_message_idempotency.sql']],
+  ['payment_proof_restore_authority.sql', ['20260906170000_payment_proof_restore_actor_snapshot.sql']],
+  ['payment_proof_dead_letter_missing_original_disposition.sql', ['20260907120000_payment_proof_dead_letter_missing_original_disposition.sql']],
   ['payment_proof_dead_letter_replay.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828380000_payment_proof_dead_letter_replay.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql', '20260828400000_payment_proof_replay_audit_hardening.sql']],
   ['payment_proof_dead_letter_replay_concurrency.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828380000_payment_proof_dead_letter_replay.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql', '20260828400000_payment_proof_replay_audit_hardening.sql']],
-  ['payment_proof_leased_amount_confirmation.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828360000_payment_proof_leased_amount_confirmation.sql']],
+  ['payment_proof_leased_amount_confirmation.sql', ['20260903170000_payment_proof_financial_authority.sql']],
+  ['payment_proof_immutable_delivery_provenance.sql', ['20260903190000_payment_proof_immutable_delivery_provenance.sql']],
+  ['payment_proof_extraction.sql', ['20260903190000_payment_proof_immutable_delivery_provenance.sql']],
+  ['payment_proof_intake.sql', ['20260903190000_payment_proof_immutable_delivery_provenance.sql']],
+  ['payment_proof_render.sql', ['20260903190000_payment_proof_immutable_delivery_provenance.sql']],
+  ['payment_proof_chat_projection.sql', ['20260903190000_payment_proof_immutable_delivery_provenance.sql']],
+  ['payment_proof_lifecycle.sql', ['20260903190000_payment_proof_immutable_delivery_provenance.sql']],
+  ['payment_proof_admin_workflow.sql', ['20260903170000_payment_proof_financial_authority.sql', '20260903190000_payment_proof_immutable_delivery_provenance.sql']],
   ['payment_proof_observability_replay.sql', ['20260828370000_payment_proof_unresolved_diagnostics.sql']],
   ['payment_proof_operational_metrics.sql', ['20260828370000_payment_proof_unresolved_diagnostics.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql']],
   ['payment_proof_scheduler.sql', ['20260828390000_payment_proof_purge_fencing_and_replay_purge.sql']],
-  ['payment_proof_order_lock.sql', ['20260828340000_payment_proof_operator_leases.sql']],
+  ['payment_proof_order_lock.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260903190000_payment_proof_immutable_delivery_provenance.sql']],
   ['payment_proof_processing_queue.sql', ['20260828390000_payment_proof_purge_fencing_and_replay_purge.sql']],
-  ['payment_proof_reconciliation.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828350000_payment_proof_exact_reconciliation_fingerprint.sql']],
+  ['payment_proof_reconciliation.sql', ['20260903170000_payment_proof_financial_authority.sql']],
   ['admin_user_dual_deletion.sql', [
     '20260827090000_residual_client_purge.sql',
     '20260827100000_residual_manifest_alias_fix.sql',
@@ -51,7 +61,7 @@ describe('payment proof SQL harness bootstrap', () => {
     expect(migrationImports(sql)).toEqual(forwardMigrationImports.get(name) ?? [])
   })
 
-  it('allows only the isolated payment-proof forward migrations 34 through 40', () => {
+  it('allows only the explicitly isolated payment-proof forward migrations', () => {
     const allowed = new Set(
       [...forwardMigrationImports.entries()]
         .filter(([suite]) => suite !== 'admin_user_dual_deletion.sql')
@@ -59,14 +69,14 @@ describe('payment proof SQL harness bootstrap', () => {
     )
     expect([...allowed]).toEqual(expect.arrayContaining([
       '20260828340000_payment_proof_operator_leases.sql',
-      '20260828350000_payment_proof_exact_reconciliation_fingerprint.sql',
-      '20260828360000_payment_proof_leased_amount_confirmation.sql',
       '20260828370000_payment_proof_unresolved_diagnostics.sql',
       '20260828380000_payment_proof_dead_letter_replay.sql',
       '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql',
       '20260828400000_payment_proof_replay_audit_hardening.sql',
+      '20260903170000_payment_proof_financial_authority.sql',
+      '20260903190000_payment_proof_immutable_delivery_provenance.sql',
     ]))
-    expect([...allowed].every((name) => /^20260828(?:3[4-9]|40)0000_/.test(name))).toBe(true)
+    expect([...allowed].every((name) => /^202609(?:061(?:70000|90000)|07120000)_/.test(name) || /^20260828(?:3[4-9]|40)0000_|^202609031(?:70000|90000)_/.test(name))).toBe(true)
     expect([...allowed]).not.toContain('20260826170000_payment_proof_chat_projection.sql')
   })
 
@@ -74,7 +84,7 @@ describe('payment proof SQL harness bootstrap', () => {
     expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', '20260826170000_payment_proof_chat_projection.sql')).toBe(false)
     expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', 'arbitrary.sql')).toBe(false)
     expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', '20260828380000_payment_proof_dead_letter_replay.sql')).toBe(false)
-    expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', '20260828350000_payment_proof_exact_reconciliation_fingerprint.sql')).toBe(true)
+    expect(isAllowedSuiteImport('payment_proof_reconciliation.sql', '20260903170000_payment_proof_financial_authority.sql')).toBe(true)
     expect(isAllowedSuiteImport('payment_proof_processing_queue.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql')).toBe(true)
     expect(isAllowedSuiteImport('admin_user_dual_deletion.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql')).toBe(true)
   })
