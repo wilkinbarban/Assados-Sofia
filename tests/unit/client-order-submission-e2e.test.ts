@@ -2,8 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   actionCriarPedidoCliente,
   actionListarMeusPedidosCliente,
-  actionAtualizarStatusPedido,
-  actionAtualizarStatusPagamento,
 } from '@/app/actions/pedidos'
 
 vi.mock('@/lib/supabase/server', () => ({
