@@ -35,9 +35,9 @@ import {
   actionAtualizarStatusPedido,
   actionAtualizarStatusPagamento,
   actionAprovarPagamentoExterno,
-  gerarPreferenciaPagamento,
   gerarCobrancaPixPedido,
 } from '@/app/actions/pedidos'
+import { createClient } from '@/lib/supabase/client'
 import ModalCobrancaPix, { DadosPixModal } from '@/components/operator/ModalCobrancaPix'
 
 interface PedidoItem {
@@ -135,7 +135,6 @@ export default function OrdersManagementDashboard({
 
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [filtroData, setFiltroData] = useState<string>('todos')
   const [modalPixPedido, setModalPixPedido] = useState<{
     id: string
     clienteNome: string
@@ -145,6 +144,7 @@ export default function OrdersManagementDashboard({
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [successMsg, setSuccessMsg] = useState<string | null>(null)
   const paymentAttemptKeys = useRef(new Map<string, string>())
+  const supabase = createClient()
 
   const carregarPedidos = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true)
@@ -171,7 +171,32 @@ export default function OrdersManagementDashboard({
     if (pedidosIniciais.length === 0) {
       carregarPedidos()
     }
-  }, [carregarPedidos, pedidosIniciais.length])
+
+    const handleOrderUpdated = () => {
+      carregarPedidos(true)
+    }
+    window.addEventListener('asados:order-updated', handleOrderUpdated)
+
+    const channel = supabase
+      .channel('operator-orders-dashboard-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'pedidos',
+        },
+        () => {
+          carregarPedidos(true)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      window.removeEventListener('asados:order-updated', handleOrderUpdated)
+      supabase.removeChannel(channel)
+    }
+  }, [carregarPedidos, pedidosIniciais.length, supabase])
 
   // KPIs
   const metrics = useMemo(() => {
@@ -413,6 +438,7 @@ export default function OrdersManagementDashboard({
     }
   }
 
+  /* eslint-disable-next-line @typescript-eslint/no-unused-vars */
   const handleAprovarPagamento = async (pedidoId: string) => {
     const pedido = pedidos.find((item) => item.id === pedidoId)
     const method = window.prompt('Método externo confirmado: cash, pix_external, card_external ou bank_transfer_external')?.trim()
@@ -914,10 +940,18 @@ export default function OrdersManagementDashboard({
                   <div className="p-5 space-y-4">
                     {/* Topo do Card: Número e Status */}
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm font-extrabold text-zinc-100">
-                          #{pedido.id.substring(0, 8)}
-                        </span>
+                      <div className="flex items-center gap-2.5">
+                        <div
+                          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500/15 border border-amber-500/40 shadow-sm"
+                          title="Identificador do Pedido"
+                        >
+                          <span className="text-[10px] font-black uppercase tracking-wider text-amber-500">
+                            PEDIDO
+                          </span>
+                          <span className="font-mono text-sm font-black tracking-tight text-amber-300 select-all">
+                            #{pedido.id.substring(0, 8).toUpperCase()}
+                          </span>
+                        </div>
                         <span
                           className={`px-2 py-0.5 rounded-md text-[10px] font-bold border uppercase tracking-wider ${
                             statusColors[pedido.status] || 'bg-zinc-800 text-zinc-400 border-zinc-700'

@@ -134,6 +134,18 @@ export default function ClienteOrdersDashboard({
         {
           event: '*',
           schema: 'public',
+          table: 'payment_proofs',
+          filter: `customer_id=eq.${clienteId}`,
+        },
+        () => {
+          carregarPedidos()
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
           table: 'itens_pedido',
         },
         () => {
@@ -240,6 +252,9 @@ export default function ClienteOrdersDashboard({
           ) : (
             <div className="space-y-4">
               {pedidos.map((pedido) => {
+                const isLocked = pedido.status === 'novo' || pedido.status === 'confirmado'
+                const paymentReviewLocked = pedido.payment_review?.locked === true
+
                 const statusBadgeConfig = {
                   novo: { label: 'Em Atendimento', bg: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
                   confirmado: { label: 'Em Preparo', bg: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
@@ -249,13 +264,13 @@ export default function ClienteOrdersDashboard({
 
                 const paymentBadgeConfig = {
                   aprovado: { label: '💳 Pago (Aprovado)', bg: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
-                  pendente: { label: '⏳ Pagamento Pendente', bg: 'bg-zinc-800 text-zinc-400 border-zinc-700' },
+                  pendente: {
+                    label: paymentReviewLocked ? '⏳ Em Análise / Conferência' : '⏳ Pagamento Pendente',
+                    bg: paymentReviewLocked ? 'bg-sky-500/15 text-sky-300 border-sky-500/30' : 'bg-zinc-800 text-zinc-400 border-zinc-700',
+                  },
                   rejeitado: { label: '❌ Pagamento Recusado', bg: 'bg-red-500/15 text-red-300 border-red-500/30' },
                   reembolsado: { label: '🔄 Reembolsado', bg: 'bg-purple-500/15 text-purple-300 border-purple-500/30' },
                 }[pedido.status_pagamento] || { label: pedido.status_pagamento, bg: 'bg-zinc-800 text-zinc-400 border-zinc-700' }
-
-                const isLocked = pedido.status === 'novo' || pedido.status === 'confirmado'
-                const paymentReviewLocked = pedido.payment_review?.locked === true
 
                 return (
                   <div
@@ -431,7 +446,26 @@ export default function ClienteOrdersDashboard({
             carregarPedidos()
           }}
           onComprovanteEnviado={() => {
+            const pid = modalPagamento?.pedidoId
             setModalPagamento(null)
+            if (pid) {
+              setPedidos((prev) =>
+                prev.map((p) =>
+                  p.id === pid
+                    ? {
+                        ...p,
+                        payment_review: {
+                          locked: true,
+                          status: 'review',
+                          proofId: 'pending',
+                          lockedAt: new Date().toISOString(),
+                          paymentReviewUnavailable: false,
+                        },
+                      }
+                    : p
+                )
+              )
+            }
             carregarPedidos()
           }}
         />
