@@ -17,6 +17,7 @@
     "lin": "npm run lint",
     "test": "scripts/workspace-preflight.sh run -- vitest run",
     "test:unit": "vitest run",
+    "test:unit:supabase": "scripts/run-local-supabase-service-tests.sh",
     "test:unit:watch": "vitest",
     "test:coverage": "vitest run --coverage tests/unit/integration-mode-policy.test.ts tests/unit/mercadopago-webhook-security.test.ts tests/unit/telegram-webhook-security.test.ts tests/unit/webhook-global-gates.test.ts tests/unit/safe-redirect.test.ts",
     "test:e2e": "env -u NO_COLOR playwright test",
