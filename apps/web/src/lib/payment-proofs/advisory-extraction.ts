@@ -32,17 +32,87 @@ function parsePayload(value: unknown): ProviderPayload | null {
   return candidate as ProviderPayload
 }
 
-function review(model: string, reasonCode: AdvisoryResult['reasonCode']): AdvisoryResult {
+function review(model: string, reasonCode: AdvisoryResult['reasonCode'], text = ''): AdvisoryResult {
+  const heuristic = extractHeuristicAdvisory(text)
   return {
-    disposition: 'manual_review', likelyPaymentProof: null, confidence: null,
-    suggestedAmountCents: null, reasonCode, approved: false, model,
+    disposition: 'manual_review',
+    likelyPaymentProof: heuristic.likelyPaymentProof,
+    confidence: heuristic.confidence,
+    suggestedAmountCents: heuristic.cents,
+    reasonCode,
+    approved: false,
+    model,
   }
+}
+
+export function extractHeuristicAdvisory(text: string): {
+  cents: number | null
+  confidence: number | null
+  likelyPaymentProof: boolean | null
+} {
+  if (!text || typeof text !== 'string') {
+    return { cents: null, confidence: null, likelyPaymentProof: null }
+  }
+
+  const normalized = text.toLowerCase()
+  const paymentKeywords = [
+    'pix', 'comprovante', 'transferencia', 'pagamento', 'autenticacao',
+    'instituicao', 'valor', 'mercado pago', 'banco', 'transacao', 'operacao',
+    'chave', 'recebedor', 'pagador', 'liquidado',
+  ]
+  const matchedKeywords = paymentKeywords.filter((kw) => normalized.includes(kw))
+  const likelyPaymentProof = matchedKeywords.length >= 2
+
+  let cents: number | null = null
+
+  // Pattern 1: R$ 1.234,56 or R$ 123,45 or R$ 12,34
+  const match1 = text.match(/R\$\s*(\d{1,3}(?:\.\d{3})*),(\d{2})/i)
+  if (match1) {
+    const reais = parseInt(match1[1].replace(/\./g, ''), 10)
+    const centavos = parseInt(match1[2], 10)
+    cents = reais * 100 + centavos
+  }
+
+  // Pattern 2: R$ 1234,56 (no thousands separator)
+  if (cents === null) {
+    const match2 = text.match(/R\$\s*(\d+),(\d{2})/i)
+    if (match2) {
+      const reais = parseInt(match2[1], 10)
+      const centavos = parseInt(match2[2], 10)
+      cents = reais * 100 + centavos
+    }
+  }
+
+  // Pattern 3: Valor: R$ 123,45 or Total: R$ 123,45 or Valor pago: R$ 123,45
+  if (cents === null) {
+    const match3 = text.match(/(?:valor|total|pago)[\s:]+(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*),(\d{2})/i)
+    if (match3) {
+      const reais = parseInt(match3[1].replace(/\./g, ''), 10)
+      const centavos = parseInt(match3[2], 10)
+      cents = reais * 100 + centavos
+    }
+  }
+
+  // Pattern 4: R$ 9980 (integer value without comma)
+  if (cents === null) {
+    const match4 = text.match(/R\$\s*(\d{2,7})\b(?!\s*,\s*\d)/i)
+    if (match4) {
+      cents = parseInt(match4[1], 10)
+    }
+  }
+
+  if (cents !== null && Number.isSafeInteger(cents) && cents > 0) {
+    const confidence = likelyPaymentProof ? 0.88 : 0.70
+    return { cents, confidence, likelyPaymentProof }
+  }
+
+  return { cents: null, confidence: likelyPaymentProof ? 0.60 : null, likelyPaymentProof: likelyPaymentProof ? true : null }
 }
 
 export async function classifyPaymentProof(input: Input): Promise<AdvisoryResult> {
   const persist = input.persist ?? (async () => undefined)
   if (!input.extractedText || input.extractedText.length > MAX_TEXT) {
-    const result = review(input.model, 'invalid_provider_output')
+    const result = review(input.model, 'invalid_provider_output', input.extractedText)
     await persist({ ...result, proofId: input.proofId }); return result
   }
   const fetcher = input.fetcher ?? fetch
@@ -75,7 +145,7 @@ export async function classifyPaymentProof(input: Input): Promise<AdvisoryResult
       const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
       const parsed = parsePayload(JSON.parse(payload.choices?.[0]?.message?.content ?? 'null'))
       if (!parsed) {
-        const result = review(input.model, 'invalid_provider_output')
+        const result = review(input.model, 'invalid_provider_output', input.extractedText)
         await persist({ ...result, proofId: input.proofId }); return result
       }
       const disposition: Disposition = parsed.confidence < 0.8 ? 'manual_review'
@@ -90,6 +160,6 @@ export async function classifyPaymentProof(input: Input): Promise<AdvisoryResult
       // Provider failures are intentionally sanitized and retried without logging input or credentials.
     }
   }
-  const result = review(input.model, 'provider_unavailable')
+  const result = review(input.model, 'provider_unavailable', input.extractedText)
   await persist({ ...result, proofId: input.proofId }); return result
 }

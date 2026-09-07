@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   gerarCobrancaPixPedido: vi.fn(),
   gerarPreferenciaPagamento: vi.fn(),
   enviarComprovantePagamentoCliente: vi.fn(),
+  preflightComprovantePagamentoCliente: vi.fn(),
+  upload: vi.fn(),
   createClient: vi.fn(),
 }))
 
@@ -14,13 +16,14 @@ vi.mock('@/app/actions/pedidos', () => ({
   gerarCobrancaPixPedido: mocks.gerarCobrancaPixPedido,
   gerarPreferenciaPagamento: mocks.gerarPreferenciaPagamento,
   enviarComprovantePagamentoCliente: mocks.enviarComprovantePagamentoCliente,
+  preflightComprovantePagamentoCliente: mocks.preflightComprovantePagamentoCliente,
 }))
 
 vi.mock('@/lib/supabase/client', () => ({
   createClient: () => ({
     storage: {
       from: () => ({
-        upload: vi.fn().mockResolvedValue({ error: null }),
+        upload: mocks.upload,
       }),
     },
     channel: () => ({
@@ -36,6 +39,7 @@ describe('ModalPagamentoCliente Component', () => {
   afterEach(() => {
     cleanup()
     vi.restoreAllMocks()
+    vi.clearAllMocks()
   })
   it('loads and renders PIX QR code and Copia e Cola on open', async () => {
     mocks.gerarCobrancaPixPedido.mockResolvedValue({
@@ -71,6 +75,8 @@ describe('ModalPagamentoCliente Component', () => {
         qrCodeCopiaCola: '00020126580014br.gov.bcb.pix0136cliente-order',
       },
     })
+    mocks.preflightComprovantePagamentoCliente.mockResolvedValue({ success: true })
+    mocks.upload.mockResolvedValue({ error: null })
     mocks.enviarComprovantePagamentoCliente.mockResolvedValue({ success: true })
 
     render(
@@ -99,6 +105,8 @@ describe('ModalPagamentoCliente Component', () => {
     fireEvent.click(submitBtn)
 
     await waitFor(() => {
+      expect(mocks.preflightComprovantePagamentoCliente).toHaveBeenCalledWith('order-client-1234')
+      expect(mocks.upload).toHaveBeenCalledOnce()
       expect(mocks.enviarComprovantePagamentoCliente).toHaveBeenCalledWith('order-client-1234', {
         urlComprovante: expect.stringMatching(/^comprovantes\/order-client-1234\/.+_comprovante\.pdf$/),
         nomeArquivo: 'comprovante.pdf',
@@ -106,5 +114,31 @@ describe('ModalPagamentoCliente Component', () => {
         texto: 'Comprovante PIX pago ID E999888',
       })
     })
+  })
+
+  it('does not upload or submit when preflight rejects the proof', async () => {
+    mocks.preflightComprovantePagamentoCliente.mockResolvedValue({ success: false })
+
+    render(
+      <ModalPagamentoCliente
+        isOpen={true}
+        onClose={vi.fn()}
+        pedidoId="order-client-1234"
+        valorCentavos={8500}
+        statusPagamento="pendente"
+        abaInicial="comprovante"
+      />
+    )
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    const pdf = new File(['%PDF-test'], 'comprovante.pdf', { type: 'application/pdf' })
+    fireEvent.change(fileInput, { target: { files: [pdf] } })
+    fireEvent.click(screen.getByRole('button', { name: /Enviar Comprovante ao Atendimento/i }))
+
+    await waitFor(() => {
+      expect(mocks.preflightComprovantePagamentoCliente).toHaveBeenCalledWith('order-client-1234')
+    })
+    expect(mocks.upload).not.toHaveBeenCalled()
+    expect(mocks.enviarComprovantePagamentoCliente).not.toHaveBeenCalled()
   })
 })

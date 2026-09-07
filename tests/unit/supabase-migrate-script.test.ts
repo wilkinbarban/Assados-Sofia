@@ -12,6 +12,7 @@ type HarnessOptions = {
   fail?: string
   setup?: (project: string) => void
   timeout?: number
+  env?: Partial<NodeJS.ProcessEnv>
 }
 
 function runHarness(options: HarnessOptions = {}) {
@@ -56,6 +57,7 @@ cat > "$HARNESS_INPUT_LOG"
       HARNESS_ARGS_LOG: argsLog,
       HARNESS_APPLIED: options.applied ?? '',
       HARNESS_FAIL: options.fail ?? '',
+      ...options.env,
     },
   })
   return {
@@ -234,9 +236,31 @@ describe('Supabase migration runner', () => {
     expect(run.input).not.toContain('\\i /tmp/asados-migrations/')
   })
 
-  it('enables stop-on-error and does not expose credentials', () => {
+  it('uses postgres as the default validated migration database user without putting credentials in SQL input', () => {
     const run = runHarness()
-    expect(run.args).toContain('exec psql -U postgres -d postgres -v ON_ERROR_STOP=1')
+    expect(run.result.status).toBe(0)
+    expect(run.args).toContain('-e\nMIGRATION_DB_USER=postgres\n')
+    expect(run.args).toContain('exec psql -U "$MIGRATION_DB_USER" -d postgres -v ON_ERROR_STOP=1')
+    expect(run.input).not.toContain('MIGRATION_DB_USER')
     expect(`${run.result.stdout}${run.result.stderr}${run.args}${run.input}`).not.toMatch(/password|secret|token/i)
   })
+
+  it('passes an explicit valid migration database user through Docker environment only', () => {
+    const run = runHarness({ env: { ASADOS_MIGRATION_DB_USER: 'supabase_admin' } })
+    expect(run.result.status).toBe(0)
+    expect(run.invocations).toHaveLength(1)
+    expect(run.args).toContain('-e\nMIGRATION_DB_USER=supabase_admin\n')
+    expect(run.args).toContain('exec psql -U "$MIGRATION_DB_USER" -d postgres -v ON_ERROR_STOP=1')
+    expect(run.input).not.toContain('supabase_admin')
+  })
+
+  it.each(['', 'postgres;drop', 'postgres admin', 'postgres$role', '-postgres', 'A'.repeat(64)])(
+    'rejects invalid explicit migration database user %j before Docker',
+    migrationDbUser => {
+      const run = runHarness({ env: { ASADOS_MIGRATION_DB_USER: migrationDbUser } })
+      expect(run.result.status).not.toBe(0)
+      expect(run.invocations).toEqual([])
+      expect(`${run.result.stdout}${run.result.stderr}`).toContain('Invalid migration database user')
+    },
+  )
 })

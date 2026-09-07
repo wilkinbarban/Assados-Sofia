@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   verificarHorarioAtendimento: vi.fn(),
   queueCanonicalPaymentProof: vi.fn(),
   downloadTelegramDocument: vi.fn(),
-  gates: { canonicalIngest: { effective: true } },
+  gates: { canonicalIngest: { effective: true }, telegramIngest: { effective: true } },
 }))
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mocks.createAdminClient }))
@@ -69,6 +69,7 @@ function adminClient(customer: { id: string; telefone: string | null } | null = 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.gates.canonicalIngest.effective = true
+  mocks.gates.telegramIngest.effective = true
   mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => {
     if (key === 'TELEGRAM_WEBHOOK_SECRET_TOKEN') return 'secret-token'
     return 'bot-token'
@@ -172,14 +173,20 @@ describe('Telegram canonical payment-proof intake', () => {
     expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
   })
 
-  it('does not admit a PDF when the immutable gate is closed despite DB configuration being open', async () => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+  ])('does not admit or download a PDF unless canonical and Telegram gates are both open (%s, %s)', async (canonical, telegram) => {
     const { client } = adminClient()
     mocks.createAdminClient.mockReturnValue(client)
-    mocks.gates.canonicalIngest.effective = false
+    mocks.gates.canonicalIngest.effective = canonical
+    mocks.gates.telegramIngest.effective = telegram
 
     const response = await POST(request({ file_id: 'file', mime_type: 'application/pdf', file_size: PDF.length }))
 
     expect(response.status).toBe(200)
+    expect(mocks.obterConfiguracaoSistema).not.toHaveBeenCalledWith('TELEGRAM_BOT_TOKEN')
     expect(mocks.downloadTelegramDocument).not.toHaveBeenCalled()
     expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
   })
