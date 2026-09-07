@@ -8,7 +8,7 @@ import { normalizeCuritibaPhone } from '@/lib/auth/phone'
 import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { normalizarMensagemEvolution } from '@/lib/whatsapp/inbound-normalizer'
 import { processarAcaoInterativaWhatsApp } from '@/lib/whatsapp/action-router'
-import { processCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
+import { ingestEvolutionCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 import { downloadEvolutionPdf } from '@/lib/whatsapp/evolution-media-download'
 import { evaluateEvolutionPaymentProofCompatibility } from '@/lib/whatsapp/evolution-payment-proof-compatibility'
 import { resolveEvolutionInboundPhoneLocalPart } from '@/lib/whatsapp/evolution-inbound-sender'
@@ -74,6 +74,20 @@ function isRequestAborted(error: unknown): boolean {
   return error instanceof Error && /aborted/i.test(error.message)
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype
+}
+
+function isCanonicalDeliveryId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value === value.trim()
+    && Buffer.byteLength(value, 'utf8') <= 256 && !/[\x00-\x1f\x7f]/.test(value)
+}
+
+function rejectCanonicalEnvelope() {
+  console.warn('[Evolution Webhook] CANONICAL_ENVELOPE_REJECTED')
+  return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+}
+
 export async function POST(request: Request) {
   try {
     // 1. Preserve legacy whole-route auth, while tracking dedicated-secret trust separately.
@@ -106,6 +120,23 @@ export async function POST(request: Request) {
     }
 
     const data = body.data
+    const isDocumentMessage = isPlainObject(data) && isPlainObject(data.message)
+      && Object.hasOwn(data.message, 'documentMessage')
+    if (isDocumentMessage && paymentProofOperationalGates.whatsappIngest.effective && !hasDedicatedSecretAuth) {
+      console.warn('[Evolution Webhook] DOCUMENT_AUTH_REJECTED')
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    const canonicalDocumentCandidate = hasDedicatedSecretAuth && isPlainObject(data) && (
+      !isPlainObject(data.message) || Object.hasOwn(data.message, 'documentMessage')
+    )
+    if (canonicalDocumentCandidate) {
+      if (!isPlainObject(data) || !isPlainObject(data.key) || !isPlainObject(data.message)
+        || !isPlainObject(data.message.documentMessage) || data.key.fromMe !== false
+        || !isCanonicalDeliveryId(data.key.id)) {
+        return rejectCanonicalEnvelope()
+      }
+    }
+
     if (!data || !data.key) {
       return NextResponse.json({ success: true, message: 'Dados da mensagem ausentes' }, { status: 200 })
     }
@@ -120,72 +151,77 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'ID da mensagem ausente' }, { status: 200 })
     }
 
-    const supabaseAdmin = createAdminClient()
     const inboundPhoneLocalPart = resolveEvolutionInboundPhoneLocalPart(data.key)
     const inboundSender = normalizeCuritibaPhone(inboundPhoneLocalPart)
 
     // Canonical PDF retries intentionally run before the legacy mensagens dedupe.
     // A closed compatibility gate performs no download and falls through unchanged.
     const documentMessage = data.message?.documentMessage
-    const isCanonicalPdfCandidate = documentMessage?.mimetype === 'application/pdf'
-    if (isCanonicalPdfCandidate && hasDedicatedSecretAuth) {
-      const [primaryProvider, fallbackProvider, operationalAttestation] = await Promise.all([
+    let evolutionInstanceName: string | null = null
+    if (documentMessage && hasDedicatedSecretAuth) {
+      const [primaryProvider, fallbackProvider, operationalAttestation, configuredInstanceName] = await Promise.all([
         obterConfiguracaoSistema('PROVEDOR_WHATSAPP_ATIVO'),
         obterConfiguracaoSistema('WHATSAPP_PROVIDER'),
         obterConfiguracaoSistema('EVOLUTION_PAYMENT_PROOF_ATTESTATION'),
+        obterConfiguracaoSistema('EVOLUTION_INSTANCE_NAME'),
       ])
+      evolutionInstanceName = configuredInstanceName
       const compatibility = evaluateEvolutionPaymentProofCompatibility({
         gates: paymentProofOperationalGates,
         primaryProvider,
         fallbackProvider,
         operationalAttestation,
       })
+      if (paymentProofOperationalGates.canonicalIngest.effective && paymentProofOperationalGates.whatsappIngest.effective && !compatibility.open) {
+        console.warn('[Evolution Webhook] CANONICAL_COMPATIBILITY_REJECTED')
+        return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+      }
 
       if (compatibility.open) {
+        const supabaseAdmin = createAdminClient()
+        const normalizedDocumentMimeType = typeof documentMessage.mimetype === 'string'
+          ? documentMessage.mimetype.trim().toLowerCase()
+          : null
+        if (normalizedDocumentMimeType !== 'application/pdf') {
+          console.warn('[Evolution Webhook] CANONICAL_DOCUMENT_MIME_REJECTED')
+          return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+        }
+        if (!inboundSender) {
+          console.warn('[Evolution Webhook] CANONICAL_SENDER_REJECTED')
+          return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+        }
+        if (typeof body.instance !== 'string' || !body.instance || !evolutionInstanceName || body.instance !== evolutionInstanceName) {
+          console.warn('[Evolution Webhook] CANONICAL_INSTANCE_REJECTED')
+          return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+        }
         const sender = inboundSender
-        if (sender) {
+        const deliveryKey = `evolution:${evolutionInstanceName}:${messageId}`
+        const { data: deliveryStateResult, error: deliveryStateError } = await supabaseAdmin.rpc('get_payment_proof_delivery_state', {
+          p_channel: 'whatsapp',
+          p_delivery_key: deliveryKey,
+        })
+        const deliveryState = isPlainObject(deliveryStateResult) ? deliveryStateResult.state : null
+        if (deliveryStateError || typeof deliveryState !== 'string' || !['missing', 'repairable', 'queued', 'complete'].includes(deliveryState)) {
+          console.warn('[Evolution Webhook] CANONICAL_503_DELIVERY_STATE')
+          return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
+        }
+        if (deliveryState === 'queued' || deliveryState === 'complete') {
+          return NextResponse.json({ success: true, status: 'payment_proof_duplicate' }, { status: 200 })
+        }
+        if (deliveryState === 'repairable') {
+          console.warn('[Evolution Webhook] CANONICAL_DELIVERY_PROVENANCE_INCOMPLETE')
+          return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
+        }
+        {
             const declaredSize = decodeEvolutionDocumentSize(documentMessage.fileLength)
             if (declaredSize === null) {
               console.warn('[Evolution Webhook] CANONICAL_DOCUMENT_SIZE_REJECTED')
               return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
             }
 
-            const { data: canonicalCustomer, error: canonicalCustomerError } = await supabaseAdmin
-              .from('clientes')
-              .select('id')
-              .eq('telefone', sender)
-              .maybeSingle()
-            if (canonicalCustomerError) {
-              console.warn('[Evolution Webhook] CANONICAL_503_CUSTOMER_LOOKUP')
-              return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
-            }
-
-            let canonicalCustomerId = canonicalCustomer?.id
-            if (!canonicalCustomerId) {
-              const { data: createdCustomer, error: createCustomerError } = await supabaseAdmin
-                .from('clientes')
-                .insert({ usuario_id: null, nome: data.pushName || 'Contato Evolution', telefone: sender })
-                .select('id')
-                .single()
-              if (createCustomerError || !createdCustomer?.id) {
-                console.warn('[Evolution Webhook] CANONICAL_503_CUSTOMER_CREATE')
-                return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
-              }
-              canonicalCustomerId = createdCustomer.id
-            }
-
-            let canonicalConversationId: string
-            try {
-              canonicalConversationId = await resolveWhatsAppPersistenceConversation(supabaseAdmin, canonicalCustomerId)
-            } catch {
-              console.warn('[Evolution Webhook] CANONICAL_503_CONVERSATION')
-              return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
-            }
-
-            const [evolutionApiUrl, evolutionApiKey, evolutionInstanceName] = await Promise.all([
+            const [evolutionApiUrl, evolutionApiKey] = await Promise.all([
               obterConfiguracaoSistema('EVOLUTION_API_URL'),
               obterConfiguracaoSistema('EVOLUTION_API_KEY'),
-              obterConfiguracaoSistema('EVOLUTION_INSTANCE_NAME'),
             ])
             if (!evolutionApiUrl || !evolutionApiKey || !evolutionInstanceName) {
               console.warn('[Evolution Webhook] CANONICAL_503_EVOLUTION_CONFIG')
@@ -197,7 +233,7 @@ export async function POST(request: Request) {
               apiKey: evolutionApiKey,
               instanceName: evolutionInstanceName,
               message: data,
-              declaredMimeType: documentMessage.mimetype,
+              declaredMimeType: normalizedDocumentMimeType,
               declaredSize,
               timeoutMs: 10_000,
             })
@@ -217,23 +253,16 @@ export async function POST(request: Request) {
               return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
             }
 
-            const [advisoryApiKey, advisoryModel] = await Promise.all([
-              obterConfiguracaoSistema('OPENROUTER_API_KEY'),
-              obterConfiguracaoSistema('OPENROUTER_MODEL'),
-            ])
-            const processed = await processCanonicalPaymentProof({
+            const processed = await ingestEvolutionCanonicalPaymentProof({
               channel: 'whatsapp',
-              deliveryId: `evolution:${evolutionInstanceName}:${messageId}`,
-              customerId: canonicalCustomerId,
+              deliveryId: deliveryKey,
               orderId: null,
-              conversationId: canonicalConversationId,
               sender,
+              displayName: typeof data.pushName === 'string' ? data.pushName.slice(0, 100) : '',
               bytes: downloaded.bytes,
               mimeType: downloaded.mimeType,
               db: supabaseAdmin,
               storage: supabaseAdmin.storage.from('payment-proofs'),
-              apiKey: advisoryApiKey,
-              model: advisoryModel,
             })
             if (processed.status === 'retryable') {
               console.warn('[Evolution Webhook] CANONICAL_503_PROCESSING')
@@ -251,6 +280,8 @@ export async function POST(request: Request) {
         }
       }
     }
+
+    const supabaseAdmin = createAdminClient()
 
     // 5. Idempotência: verificar se whatsapp_mensagem_id já existe
     const { data: mensagemExistente, error: checkError } = await supabaseAdmin
