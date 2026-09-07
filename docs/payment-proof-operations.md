@@ -1,120 +1,98 @@
 # Payment proof operations
 
-Canonical Web and Telegram intake is enabled with `PAYMENT_PROOF_CANONICAL_INGEST_ENABLED=true`. WhatsApp remains independently disabled until its provider compatibility gate passes. Disable the canonical flag to roll consumers back without deleting the ledger. The private bucket is accessed only through row-authorized routes or service workers.
+> **Current answer (2026-09-07 audit):** all 8 operational gates are closed (`false`). The joint A/B/C audit found 5 processing dead letters, so the documented strict stop on `dead_letter > 0` was applied immediately. Completed canaries remain sanitized historical evidence; they do not override the current stop. Telegram evidence remains preserved.
 
-## Verified production state
+## Quick operational path
 
-The Telegram production smoke is complete. The verification used one canonical intake and established all of the following without recording any token, chat identifier, storage key, phone number, or delivery identifier in this runbook:
+1. Keep the current immutable Web image and all closed gates unchanged.
+2. Before any future capability window, obtain explicit authorization, set only its declarative gate, and perform the approved Web-only recreation.
+3. Confirm redacted gate diagnostics, healthy services with zero restarts, and ready/login HTTP 200 before the bounded operation; close the gate and recreate Web on completion or any stop condition.
+4. After all implementation and pre-deployment checks are green, deploy one immutable candidate from the isolated worktree for the owner-authorized bounded production test; roll back immediately on a stop condition.
+5. Push and open a PR only after the final evidence phase is accepted. **Merge still requires distinct explicit permission naming the PR or commit.**
 
-- the original object was retained in private storage;
-- a private PNG preview was present;
-- the durable processing queue entry completed;
-- `intake_received`, `preview_rendered`, and `advisory_extracted` occurred exactly once each;
-- the proof finished in `review` status;
-- neither `approved` nor `payment_confirmed` occurred, so there was no automatic approval;
-- no resend was performed;
-- Telegram reported `pending_update_count=0` and no recent webhook error;
-- the sensitive-log scan returned zero matches;
-- live and ready probes returned HTTP 200; and
-- the web and maintenance services were healthy.
+## Current production posture
 
-This evidence verifies the Telegram path only. It must not be generalized to the pending Evolution/WhatsApp path described below.
+| Item | Current verified state |
+| --- | --- |
+| Immutable Web image | `asados-web:abc-audit-fix-579a4d8ffa58-20260907T025314Z` |
+| Image digest | `sha256:e45dbadbc91e…` (sanitized prefix) |
+| Deployment scope | A/B/C audit repair: supervisor/admin-only direct financial actions, durable reconciliation idempotency, and strict-stop posture. |
+| Canonical intake | `PAYMENT_PROOF_CANONICAL_INGEST_ENABLED=false` |
+| Processing | `PAYMENT_PROOF_PROCESSING_ENABLED=false` |
+| Seller reconciliation | `PAYMENT_PROOF_SELLER_RECONCILIATION_ENABLED=false` |
+| Cleanup | `PAYMENT_PROOF_CLEANUP_ENABLED=false` |
+| Privileged replay | `PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false` |
+| WhatsApp intake | `WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED=false` |
+| Telegram intake | `TELEGRAM_PAYMENT_PROOF_INGEST_ENABLED=false` |
+| Restore | `PAYMENT_PROOF_RESTORE_ENABLED=false` |
+| Audit health | Production Web and maintenance scheduler healthy with zero restarts; internal/public smoke passed; processing/outbox dead letters 0/0 after the authorized missing-original disposition; gates remain closed pending explicit reopening. |
 
-## Intake, processing, and replay
+Gate values are startup-captured declarative configuration. Missing, malformed, unreadable, cache-local, database, runtime-override, or live-process changes fail closed or have no effect. Do not treat this record as authorization to change any gate.
 
-Canonical intake performs durable admission: the intake ledger, exact-hash decision, and processing-queue admission are committed together after the private original has been uploaded. The webhook can therefore acknowledge accepted work without performing PDF rendering or advisory extraction inline. Workers claim queue entries with bounded leases and attempt identity, then render, persist the private preview, perform advisory extraction, and complete the claim.
+## Current local validation evidence
 
-PDF page-one rendering runs in an isolated worker thread through the deterministic production entry point `/app/payment-proof-render-worker.mjs`. The image build copies that non-transformed ESM runner to the fixed path so runtime package resolution and worker startup do not depend on a webpack-generated filename. Rendering is bounded by input size, output dimensions, and a timeout; failures are represented by a stage rather than by logging document content.
+These checks validate the current checkout only. They do **not** establish production migration, immutable-image, deployment, gate-adoption, or canary completion.
 
-Queue claims retry with bounded backoff. After the fifth unsuccessful attempt, work becomes `dead_letter` and a proof still in an intermediate processing state is returned to `review` for manual-safe handling; it is never auto-approved. Lease-token and attempt checks prevent stale workers from completing newer claims. Replays use the channel delivery key and exact-hash controls: a completed delivery is treated as complete, active queued work remains queued, and a fully persisted intake missing its queue row can be repaired atomically. Preview persistence and advisory attempt keys make repeated processing idempotent rather than creating duplicate render or extraction events.
+- `npm run selfhost:config`: passed.
+- Focused Telegram and restore gate validation: passed.
+- Prior global Vitest baseline: 207 files passed and 1 skipped; 1,281 tests passed and 1 skipped.
+- 2026-09-07 focused Vitest regression: passed, including direct financial-action authority and admitted-vs-reconciled behavior.
+- 2026-09-07 isolated SQL pgTAP: restore 28/28, replay 45/45, replay concurrency 4/4, reconciliation 20/20, admin workflow 2/2, lifecycle 1/1.
+- Real PostgREST v14.12 dispatcher idempotency integration: passed.
+- `npx tsc --noEmit`: passed.
+- Lint: passed with 0 errors and 0 warnings.
+- `git diff --check`: passed.
+- Local production build: passed on Next.js 16.3.0.
+- Dependencies: npm-only local React/ReactDOM 19.2.4 tree; no pnpm.
 
-## Rollout readiness
+## Completed baseline canaries
 
-This is **readiness only**: commands and steps are not executed automatically, and this candidate performs no production operation. Production remains unchanged and `PAYMENT_PROOF_PROCESSING_ENABLED=false`.
+| Canary | Sanitized completed evidence | Boundary |
+| --- | --- | --- |
+| Web | Canonical admission, asynchronous processing, privileged reconciliation, delivered-order transition, authenticated PDF receipt, and directed cleanup were observed under a controlled window; the private original/PNG preview path and bounded queue/health observations completed successfully. | No customer content, storage paths, or full identifiers are retained here. This is not authorization for permanent processing or reconciliation. |
+| Telegram | Duplicate and unique canonical admission branches, asynchronous processing, privileged reconciliation, delivered-order transition, authenticated PDF receipt, and provider delivery were observed under controlled windows. Provider backlog/error signals were clear at close. | The Telegram fixture is preserved solely as accepted evidence. Do not repeat this canary. A later targeted purge requires separate explicit authorization. |
+| Evolution | The authorized Evolution canary is completed and retained as sanitized accepted evidence, including duplicate delivery, unique processing to review, and supervisor reconciliation. | Do not repeat this canary or send provider traffic without separate future authorization. |
+| Quarantine → Restore | Authorized rejection by supervisor/admin with lease, seller restore denial, and admin-only real Chromium UI restore; verified review transition, cleared retention, immutable admin event, and outbox delivery via repaired idempotency. | Retained as accepted baseline evidence. Restore gate returned to closed. |
+| Expiry → Purge → Tombstone | Manifested synthetic expired quarantine proof claimed, original PDF and derivative PNG deleted by exact path, restore denied during active purge fence, detached hash tombstone retained, and subsequent identical-byte upload returned generic duplicate contract without resurrection or metadata leakage. | Retained as accepted baseline evidence. Cleanup gate returned to closed. |
+| Privileged Replay | Supervisor and admin replay RPC verified; durable same-key idempotency with single effect; key collision and ineligible status rejected; seller/customer denied; positive Server Action replay via real Chromium moved dead letter to pending and natural scheduler completed delivery with exactly 1 projected message. | Retained as accepted baseline evidence. Privileged replay gate returned to closed. |
 
-| Stage | Entry evidence and observation | Stop condition |
-|---|---|---|
-| Stage 0 — closed baseline | Verify all six gates report closed with a redacted reason; retain the privileged diagnostic record. | Any gate is unexpectedly effective, malformed, or unreadable. |
-| 1 — canonical intake | Authorize canonical intake only; observe one bounded canonical admission and its aggregate queue state. | Duplicate admission, unsafe state, or unexpected processing. |
-| 2 — WhatsApp intake | After separate explicit authorization and compatibility evidence, authorize WhatsApp intake; canonical and WhatsApp are observed separately and explicitly. | Missing provenance, compatibility failure, or channel cross-over. |
-| Stage 3 — `PAYMENT_PROOF_PROCESSING_ENABLED` processing | Prior operational conversation called this Stage 2; use this exact capability/gate name with either reference. Canary preparation is HOLD: the sole pending row is quarantined and its original is absent, so MIME, size, and PDF magic cannot be established. | Do not enable the gate. Dead-letter growth, stale lease, render/classifier failure, or automatic approval also stops any later authorized canary. |
-| 4 — seller reconciliation | Authorize seller reconciliation only after processing evidence is accepted; observe one human-confirmed reconciliation. | Amount/order mismatch, authorization failure, or unexpected state transition. |
-| 5 — recovery readiness | Keep replay and cleanup closed absent separate authorization; verify their redacted closed diagnostics and recovery evidence. | Either recovery gate becomes effective without its separate authorization. |
+These records retain aggregate outcomes only. Do not add payloads, tokens, phone numbers, storage keys or URLs, chat/provider/delivery identifiers, or full proof/order identifiers.
 
-The forward-only local migration `20260902160000` is designed and tested but not
-applied. It has an operator-safe boundary: only the narrowly defined pristine,
-unleased pending class with a quarantined proof and absent recorded original may
-be marked abandoned; the proof and Storage remain untouched, `completed_at`
-remains null, and an immutable audit decision is recorded. Applying it requires
-explicit independent authorization.
+## Outbox message contract and Web idempotency
 
-After separately authorized application, run a fresh read-only preflight. It
-must show no eligible pending work before separately asking whether to enable
-Stage 3 `PAYMENT_PROOF_PROCESSING_ENABLED`. This does not mean the gate is ready
-now, and neither migration application nor preflight authorizes a gate change.
+Payment-proof outbox payloads use audited `message_key` values only for new entries. Maintenance resolves those keys to fixed customer text before dispatch; symbolic keys are never sent to a provider. Legacy `payload.message` remains supported only when it is trimmed, non-empty, at most 4096 characters, and contains no control characters. Payloads that contain both fields or otherwise fail validation are permanently completed as `unsupported_payload` without dispatch.
 
-Close declaratively by recording the stage, evidence, observer, and stop-condition result. If a stop condition occurs, return all gates to the closed baseline; Web recreation occurs only under approved change control, followed by verification rollback against bounded diagnostics. Do not replay, clean up, or otherwise operate production automatically.
+For Web outbox messages, forward migration `20260906190000_payment_proof_web_message_idempotency.sql` adds a nullable `public.mensagens.external_id` text column and a non-partial unique index. Web outbox dispatch uses conflict-ignore upsert followed by an explicit post-upsert read confirming that `conversa_id`, `remetente`, `conteudo`, and `url_anexo` match the intended delivery. An exact match acknowledges success; a divergent binding returns permanent `delivery_conflict` without rewriting the existing message; missing rows or PostgREST read failures return retryable `delivery_failed`.
 
-## Database rollout and backups
+## Queue and historical baseline
 
-The following production backups were completed before or during the rollout:
+At close of the authorized Telegram-gate deployment, processing and outbox dead letters were **0/0**. The 2026-09-07 joint audit later found **5/0**: all five processing failures were `load` failures with no current private original object. The accountable human selected **quarantine + abandonment**. Forward migration `20260907120000_payment_proof_dead_letter_missing_original_disposition.sql` added a privileged, idempotent, immutable-audit disposition. Four `review` proofs entered normal ten-day quarantine and their jobs became `abandoned`; the already-`purged` proof remained purged and only its job became `abandoned`. Current processing/outbox dead letters are again **0/0**. No replay, storage deletion, or tombstone reversal occurred. Gates remain closed until a separate reopening decision. The preserved Telegram fixture remains outside general cleanup scope.
 
-- `20260829T151617Z`
-- `20260829T202432Z`
+## Gate and authority rules
 
-Production migration history verified that each of these migrations was applied exactly once:
+- All payment-proof capabilities are currently closed under the strict-stop condition; canonical intake is not an exception.
+- Telegram admission requires both startup-captured `TELEGRAM_PAYMENT_PROOF_INGEST_ENABLED` and canonical intake to be open. The four-state truth table is covered locally; no new live Telegram exercise is authorized by this runbook.
+- Evolution is the only production WhatsApp payment-proof authority. WhatsApp Cloud payment media remains non-admitting.
+- Confirmation, order linking, reconciliation/approval, rejection, lifecycle operations, diagnostics, and replay are **supervisor/admin-only**. Sellers, inactive users, and stale sessions must be denied without protected-state mutation.
+- Gates change only through approved declarative configuration followed by approved Web recreation. Use immutable-image rollback for a code defect; never rewrite migrations or use a legacy proof fallback.
 
-- `20260828300000_payment_proof_operational_metrics.sql`
-- `20260828310000_payment_proof_admin_alerts.sql`
-- `20260828320000_payment_proof_processing_queue.sql`
+## Exact next phases
 
-The production pgTAP run for operational metrics and alerts passed 68/68 assertions. The processing-queue pgTAP run passed 13/13 assertions in a disposable database clone, **not in production**. Keep that distinction in rollout records and incident reports.
+1. **Phase A — handoff and authority correction:** deliver and verify the supervisor/admin-only database, action, and UI contract; retain the sanitized handoff and closed-gate posture.
+2. **Phase B — Evolution WhatsApp E2E:** completed under its separate authorization and retained as sanitized accepted evidence. Do not repeat the Evolution canary, provider send, or gate change without separate future authorization.
+3. **Phase C — Telegram gate verification:** the startup-captured, default-closed Telegram gate is subordinate to canonical intake and its four gate combinations plus process-start immutability are locally covered. Cite, but do not rerun, the completed Telegram canary.
+4. **Phase D — lifecycle canaries:** separately authorize one quarantine-to-restore and one expiry-to-purge-to-tombstone non-sensitive test case. Require supervisor/admin authority, audit, idempotency, leases/fences, and bounded health observation.
+5. **Phase E — privileged replay:** separately authorize one eligible non-sensitive dead-letter replay with a supervisor/admin, idempotency, audit, read-only diagnostics, and no automatic follow-on replay.
+6. **Phase F — final production test, permanence, and release:** after implementation and pre-deployment verification are green, deploy one immutable candidate for the authorized bounded production test with pre/post health and rollback readiness. Then an accountable human records for each capability whether it remains closed, is time-bounded, or is ongoing with owner, thresholds, escalation, and review date. Only after accepted evidence may the branch be pushed and a PR opened; merge needs separate final explicit permission.
 
-## Metrics, alerts, and scheduler health
+## Operational preflight, observation, and rollback
 
-Operational metrics expose bounded aggregate counts by lifecycle, queue/outbox status, attempt bucket, dead-letter state, quarantine state, failure stage, and maintenance health. Never log or export proof payloads, sender references, storage paths, tokens, chat identifiers, phone numbers, delivery identifiers, or extracted document text.
+Before an authorized window, verify the intended project-owned environment path/ownership/mode without printing values; temporary environment links must not become configuration authority. Record only a path alias and redacted effective diagnostic result.
 
-Production verification established:
+Use bounded aggregate diagnostics: effective gate state/reason (including Telegram), queue and dead-letter counts, worker/maintenance/health and circuit-breaker state, restart count, and HTTP status. Do not use authenticated alert probes merely for connectivity because they can cause real notification effects.
 
-- authenticated metrics returned HTTP 200;
-- unauthenticated metrics returned HTTP 401;
-- metrics responses used `Cache-Control: no-store`;
-- alerts with an incorrect bearer returned HTTP 401; and
-- after deployment, alert state contained zero active alerts and zero `pending`, `claimed`, `dead_letter`, or `sent` notifications.
-
-Do **not** perform an authenticated alerts smoke merely to test connectivity: that operation can reconcile state and send real Telegram notifications. Validate alert delivery through the scheduled operational path and aggregate state, using approved incident procedures when a real notification test is necessary.
-
-The scheduler invokes maintenance and alerts independently on every interval and records a separate last-success marker for each call. Its healthcheck requires both markers to exist, contain valid timestamps, and remain fresh. A successful maintenance call does not mask a failing alerts call, and a successful alerts call does not mask failing maintenance. Alert on dead-letter growth, expired quarantines, repeated render/classifier failures, and either stale health marker.
-
-Secret-safe checks should pass credentials only through the deployed secret mechanism, suppress response bodies unless aggregate output is required, and record only status codes and bounded counts. Never paste bearer values into commands, shell history, tickets, or this document. Do not probe private objects by constructing storage URLs; use the authorized application or service-worker boundary.
-
-## Evolution/WhatsApp: pending action
-
-Evolution API remains pinned to the expected `2.3.7` compatibility line, and payment-proof ingestion remains disabled and fail-closed with `WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED=false`. Compatibility code and tests exist, but no Evolution payment-proof production smoke has been completed. Meta intake is outside this rollout's scope.
-
-Do not enable the flag based on Telegram evidence or unit tests. Enabling requires valid, fresh Evolution provenance and operational attestation that match the pinned release/profile/fixture contract, followed by an explicitly approved production smoke. Missing, malformed, mismatched, stale, or future attestation must leave ingestion closed. Until those prerequisites and the Evolution smoke are complete, this is the only pending channel action; Telegram verification remains complete.
-
-## Workspace quota recovery
-
-Use the workspace preflight before local test or Web build work when `/tmp` is quota-backed. The standard commands already run through it:
-
-```bash
-npm test
-npm run build
-```
-
-To diagnose a target or run another write-heavy command with home-backed temporary and npm cache directories:
-
-```bash
-scripts/workspace-preflight.sh check
-scripts/workspace-preflight.sh check /var/lib/asados/deploy
-scripts/workspace-preflight.sh run -- <command>
-```
-
-The wrapper creates a mode-0700 workspace under `$HOME/.cache/asados/workspace` by default, verifies free bytes and inodes, and performs a write-plus-fsync probe. It exports `TMPDIR`, `TMP`, `TEMP`, and `npm_config_cache` only to the wrapped command. If it reports `EDQUOT` or quota exhaustion, note the target and mount from its diagnostic, free or raise the applicable quota, and rerun with a home-backed workspace. Do not put credentials in paths, command arguments, or incident notes.
-
-Web deployment checks `ASADOS_DEPLOY_STATE_ROOT` before creating its lock or release state. Its default remains `/var/lib/asados/deploy`; set that variable only to an approved, quota-provisioned state location.
+Stop and close the affected capability through declarative configuration plus approved Web recreation for gate bypass, unauthorized mutation, duplicate work or notice, dead-letter growth, stale lease, missing audit/tombstone, unhealthy service/circuit breaker, raw sensitive-data disclosure, or material evidence/health mismatch. Preserve forward migrations, audit, hashes, and tombstones.
 
 ## Delivery governance
 
-Receipt-driven development delivery state for this rollout is `disabled/unmanaged`. Operational evidence above is production verification, not a fabricated review approval or receipt.
+Receipt-driven development is `disabled/unmanaged`. This operational evidence is not a review approval. No deployment, recreation, gate opening, replay, restore, purge, cleanup, or permanent enablement is automatic.
