@@ -3,8 +3,6 @@ import { createClient } from '@/lib/supabase/server'
 import OperatorInboxContainer from '@/components/operator/OperatorInboxContainer'
 import { OperatorWorkspaceHeader } from '@/components/operator/OperatorWorkspaceHeader'
 import { obterStatusSofiaAtendimento } from '@/app/actions/atendimento'
-import { listPaymentProofsForAdmin } from '@/app/actions/payment-proof-admin'
-import PaymentProofAdminPanel from '@/components/operator/PaymentProofAdminPanel'
 import type { SofiaAtendimentoStatus } from '@/app/actions/atendimento'
 import type { Cliente, Conversa, Mensagem } from '@/components/operator/ConversationsQueue'
 
@@ -35,8 +33,6 @@ export default async function AtendimentoPage() {
     redirect('/login')
   }
 
-  const paymentProofsResult = await listPaymentProofsForAdmin()
-
   // 3. Pré-carregamento (SSR) das primeiras 50 conversas ativas (status != 'fechada').
   // Inclui dados de CRM e histórico para que o console não dependa da hidratação
   // do cliente para deixar de parecer vazio/quebrado no primeiro carregamento.
@@ -64,6 +60,7 @@ export default async function AtendimentoPage() {
         remetente,
         conteudo,
         url_anexo,
+        payment_proof_id,
         data_criacao
       )
     `)
@@ -133,11 +130,6 @@ export default async function AtendimentoPage() {
       {/* Área de Trabalho */}
       <main className="flex-1 overflow-auto">
         <OperatorInboxContainer conversasIniciais={conversasIniciais} initialSofiaStatus={initialSofiaStatus} />
-        {perfil.funcao === 'vendedor' && paymentProofsResult.success ? (
-          <section className="border-t border-zinc-800 p-5">
-            <PaymentProofAdminPanel initialProofs={paymentProofsResult.data} role="vendedor" />
-          </section>
-        ) : null}
       </main>
     </div>
   )

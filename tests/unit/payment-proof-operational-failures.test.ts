@@ -11,7 +11,7 @@ vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperation
 
 import { processCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 
-function input(admission = { data: { proof_id: 'proof-1', duplicate: false }, error: null as unknown }) {
+function input(admission: { data: { proof_id: string; duplicate: boolean } | null; error: unknown } = { data: { proof_id: 'proof-1', duplicate: false }, error: null }) {
   const rpc = vi.fn(async (name: string) => name === 'admit_and_enqueue_payment_proof'
     ? admission
     : { data: true, error: null })

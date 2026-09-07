@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   verificarHorarioAtendimento: vi.fn(),
   queueCanonicalPaymentProof: vi.fn(),
   downloadTelegramDocument: vi.fn(),
-  gates: { canonicalIngest: { effective: true } },
+  gates: { canonicalIngest: { effective: true }, telegramIngest: { effective: true } },
 }))
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: mocks.createAdminClient }))
@@ -43,7 +43,7 @@ function adminClient(customer: { id: string; telefone: string | null } | null = 
   const storageBucket = { upload: vi.fn(), remove: vi.fn() }
   const client = {
     storage: { from: vi.fn(() => storageBucket) },
-    rpc: vi.fn(async () => ({ data: { state: 'missing' }, error: null })),
+    rpc: vi.fn(async (): Promise<{ data: { state: string; proof_id?: string }; error: null }> => ({ data: { state: 'missing' }, error: null })),
     from: vi.fn((table: string) => {
       const builder: any = {
         select: vi.fn(() => builder),
@@ -55,6 +55,7 @@ function adminClient(customer: { id: string; telefone: string | null } | null = 
         maybeSingle: vi.fn(async () => {
           if (table === 'mensagens') return { data: null, error: null }
           if (table === 'clientes') return { data: customer, error: null }
+          if (table === 'conversas') return { data: { id: 'conversation-1', ia_ativa: true }, error: null }
           return { data: null, error: null }
         }),
         single: vi.fn(async () => ({ data: { id: 'created-customer' }, error: null })),
@@ -68,6 +69,7 @@ function adminClient(customer: { id: string; telefone: string | null } | null = 
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.gates.canonicalIngest.effective = true
+  mocks.gates.telegramIngest.effective = true
   mocks.obterConfiguracaoSistema.mockImplementation(async (key: string) => {
     if (key === 'TELEGRAM_WEBHOOK_SECRET_TOKEN') return 'secret-token'
     return 'bot-token'
@@ -94,6 +96,7 @@ describe('Telegram canonical payment-proof intake', () => {
       deliveryId: 'telegram:1001:77',
       customerId: 'customer-1',
       orderId: null,
+      conversationId: 'conversation-1',
       bytes: PDF,
       mimeType: 'application/pdf',
       db: client,
@@ -170,14 +173,20 @@ describe('Telegram canonical payment-proof intake', () => {
     expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
   })
 
-  it('does not admit a PDF when the immutable gate is closed despite DB configuration being open', async () => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+  ])('does not admit or download a PDF unless canonical and Telegram gates are both open (%s, %s)', async (canonical, telegram) => {
     const { client } = adminClient()
     mocks.createAdminClient.mockReturnValue(client)
-    mocks.gates.canonicalIngest.effective = false
+    mocks.gates.canonicalIngest.effective = canonical
+    mocks.gates.telegramIngest.effective = telegram
 
     const response = await POST(request({ file_id: 'file', mime_type: 'application/pdf', file_size: PDF.length }))
 
     expect(response.status).toBe(200)
+    expect(mocks.obterConfiguracaoSistema).not.toHaveBeenCalledWith('TELEGRAM_BOT_TOKEN')
     expect(mocks.downloadTelegramDocument).not.toHaveBeenCalled()
     expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
   })

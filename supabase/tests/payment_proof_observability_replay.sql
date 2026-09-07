@@ -1,4 +1,7 @@
+select to_regclass('private.payment_proof_alert_delivery_failures') is null as apply_unresolved_diagnostics \gset
+\if :apply_unresolved_diagnostics
 \ir ../migrations/20260828370000_payment_proof_unresolved_diagnostics.sql
+\endif
 begin;
 select plan(15);
 set local role postgres;
