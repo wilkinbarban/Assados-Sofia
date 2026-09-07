@@ -284,7 +284,11 @@ export async function POST(request: Request) {
     // Canonical payment proofs are an intake concern, independent from Sofia's
     // automation and business-hours gates. When disabled, preserve the legacy
     // document path without validation, token lookup, or download side effects.
-    const canonicalPaymentProofEnabled = Boolean(message.document && paymentProofOperationalGates.canonicalIngest.effective)
+    const canonicalPaymentProofEnabled = Boolean(
+      message.document &&
+      paymentProofOperationalGates.canonicalIngest.effective &&
+      paymentProofOperationalGates.telegramIngest.effective
+    )
     if (message.document && canonicalPaymentProofEnabled) {
       let canonicalConversationId: string
       try {

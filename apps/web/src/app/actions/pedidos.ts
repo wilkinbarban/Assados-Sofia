@@ -322,7 +322,12 @@ export async function actionEditarItensPedidoOperador(input: {
     // 4. Substituir itens do pedido
     await admin.from('itens_pedido').delete().eq('pedido_id', pedidoId)
 
-    const itensParaInserir = novosItensValidados.map(({ nome, ...resto }) => resto)
+    const itensParaInserir = novosItensValidados.map((it) => ({
+      pedido_id: it.pedido_id,
+      produto_id: it.produto_id,
+      quantidade: it.quantidade,
+      preco_unitario_centavos: it.preco_unitario_centavos,
+    }))
     const { error: insertItensError } = await admin
       .from('itens_pedido')
       .insert(itensParaInserir)
@@ -1773,6 +1778,10 @@ export async function enviarComprovantePagamentoCliente(
       .eq('id', pedidoId)
       .single()
 
+    if (!payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
+      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
+    }
+
     const clienteDono = pedido?.clientes as any
     const elegivel = pedido?.status_pagamento === 'pendente' && pedido?.status !== 'cancelado'
     const conversaId = pedido?.conversa_id
@@ -1786,8 +1795,8 @@ export async function enviarComprovantePagamentoCliente(
 
     const supabaseAdmin = createAdminClient()
 
-    if (!pedido.cliente_id || !payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
-      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
+    if (!pedido.cliente_id) {
+      return { success: false, error: 'COMPROVANTE_INDISPONIVEL' }
     }
 
     const { data: fileBlob, error: downloadError } = await supabaseAdmin.storage
@@ -1830,6 +1839,20 @@ export async function enviarComprovantePagamentoCliente(
           data_atualizacao: new Date().toISOString(),
         })
         .eq('id', conversaId)
+
+      const proofId = (processed as any).proofId
+      if (proofId) {
+        await supabaseAdmin
+          .from('mensagens')
+          .insert({
+            conversa_id: conversaId,
+            remetente: 'cliente',
+            conteudo: '📎 Comprovante de pagamento anexado pelo cliente',
+            url_anexo: `/api/payment-proofs/${proofId}/preview`,
+            payment_proof_id: proofId,
+            data_criacao: new Date().toISOString(),
+          })
+      }
     }
 
     safeRevalidatePath('/atendimento')

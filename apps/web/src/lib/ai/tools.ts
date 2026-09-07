@@ -4,7 +4,6 @@ import {
   removerItemDoCarrinho,
   limparCarrinho,
   converterCarrinhoEmPedido,
-  type CarrinhoCompleto,
 } from '@/lib/carrinho/service'
 import { createAdminClient } from '@/lib/supabase/admin'
 

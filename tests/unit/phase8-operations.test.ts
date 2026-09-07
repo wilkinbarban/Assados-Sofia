@@ -58,6 +58,7 @@ describe('Phase 8 operational artifacts', () => {
     expect(deploy).toContain('deploy <local-immutable-image-ref>')
     expect(deploy).toContain('rollback')
     expect(deploy).toContain('--no-deps --force-recreate web')
+    expect(deploy).toContain('--project-name asados')
     expect(deploy).toContain('ASADOS_EXPECTED_IMAGE_ID="$expected_id"')
     expect(deploy).toContain('Promotion failed; restoring the retained previous image')
     expect(deploy).toContain('recreate_and_verify "$rollback_ref" "$previous_id" true')

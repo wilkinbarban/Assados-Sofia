@@ -5,12 +5,10 @@ import AdminDashboard from '@/components/operator/AdminDashboard'
 import {
   criarUsuarioAdmin,
   editarUsuarioAdmin,
-  deletarUsuarioAdmin,
   obterEstatisticasMensagens,
   obterLogsAuditoria,
   obterComprovantes,
   purgarResidualClienteAdmin,
-  listarRegistrosAnonimizadosPreservados,
 } from '@/app/actions/admin'
 
 vi.mock('next/link', () => ({

@@ -1,9 +1,12 @@
 -- Separate committed setup is required: dblink sessions cannot observe the parent
 -- pgTAP transaction's uncommitted migration or fixtures.
+select to_regclass('private.payment_proof_dead_letter_replay_requests') is null as apply_replay_chain \gset
+\if :apply_replay_chain
 \ir ../migrations/20260828340000_payment_proof_operator_leases.sql
 \ir ../migrations/20260828380000_payment_proof_dead_letter_replay.sql
 \ir ../migrations/20260828390000_payment_proof_purge_fencing_and_replay_purge.sql
 \ir ../migrations/20260828400000_payment_proof_replay_audit_hardening.sql
+\endif
 select plan(4);
 
 insert into auth.users(id,instance_id,aud,role,email,created_at,updated_at) values

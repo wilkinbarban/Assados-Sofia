@@ -62,4 +62,24 @@ describe('advisory payment-proof extraction', () => {
     expect(fetcher).toHaveBeenCalledTimes(2)
     expect(result).toEqual(expect.objectContaining({ disposition: 'manual_review', reasonCode: 'provider_unavailable' }))
   })
+
+  it('extracts heuristic amount and confidence from receipt text when provider is unavailable', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('provider outage'))
+    const extractedText = 'Comprovante de pagamento PIX. Valor R$ 99,80. Transacao concluida com sucesso.'
+    const result = await classifyPaymentProof({ ...base, extractedText, fetcher, maxAttempts: 1, timeoutMs: 5 })
+    expect(result.disposition).toBe('manual_review')
+    expect(result.reasonCode).toBe('provider_unavailable')
+    expect(result.suggestedAmountCents).toBe(9980)
+    expect(result.confidence).toBe(0.88)
+    expect(result.likelyPaymentProof).toBe(true)
+  })
+
+  it('extracts integer cent values like R$ 9980 with PIX markers', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('provider outage'))
+    const extractedText = 'Comprovante de Combo 1\nR$ 9980\nOperação Mercado Pago PIX'
+    const result = await classifyPaymentProof({ ...base, extractedText, fetcher, maxAttempts: 1, timeoutMs: 5 })
+    expect(result.disposition).toBe('manual_review')
+    expect(result.suggestedAmountCents).toBe(9980)
+    expect(result.confidence).toBe(0.88)
+  })
 })

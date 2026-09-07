@@ -6,6 +6,26 @@ here="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 migrations="$root/supabase/migrations"
 cd "$here"
 
+# An unset value uses the standard PostgreSQL superuser. An explicitly supplied
+# value must be a strict unquoted PostgreSQL identifier (NAMEDATALEN - 1 bytes)
+# before Docker is invoked; it is only passed as an environment value.
+if [ "${ASADOS_MIGRATION_DB_USER+x}" = x ]; then
+  migration_db_user=$ASADOS_MIGRATION_DB_USER
+else
+  migration_db_user=postgres
+fi
+case "$migration_db_user" in
+  [a-z_]* ) ;;
+  * ) echo "Invalid migration database user" >&2; exit 1 ;;
+esac
+case "$migration_db_user" in
+  *[!a-z0-9_]* ) echo "Invalid migration database user" >&2; exit 1 ;;
+esac
+[ "${#migration_db_user}" -le 63 ] || {
+  echo "Invalid migration database user" >&2
+  exit 1
+}
+
 # Parse the SQL as a byte-oriented lexical stream. This is deliberately a
 # conservative repository contract, not a complete PostgreSQL parser. Besides
 # psql commands and transaction control, inline COPY data and psql variables are
@@ -280,6 +300,7 @@ SQL
 } | docker compose run --rm -T --no-deps \
   -v "$migrations:/migration-source:ro" \
   -e PGHOST=db \
+  -e "MIGRATION_DB_USER=$migration_db_user" \
   -e "MIGRATION_COUNT=$migration_count" \
   -e "MIGRATION_MANIFEST=$manifest" \
   --entrypoint sh db -eu -c '
@@ -302,7 +323,7 @@ SQL
     if [ "$MIGRATION_COUNT" -gt 0 ]; then cp /migration-source/*.sql "$snapshot"/; fi
     printf "%s" "$MIGRATION_MANIFEST" |
       (cd "$snapshot" && sha256sum -c -) >/dev/null
-    exec psql -U postgres -d postgres -v ON_ERROR_STOP=1
+    exec psql -U "$MIGRATION_DB_USER" -d postgres -v ON_ERROR_STOP=1
   '
 
 echo "Application migrations applied; data was not reseeded"
