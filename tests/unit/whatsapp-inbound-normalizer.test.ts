@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizarMensagemEvolution,
   extrairAcaoInterativa,
-  type MensagemNormalizada,
 } from '@/lib/whatsapp/inbound-normalizer'
 
 describe('WhatsApp Inbound Normalizer (TDD)', () => {
