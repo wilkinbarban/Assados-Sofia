@@ -3,10 +3,7 @@ import {
   obterOuCriarCarrinhoAtivo,
   adicionarItemAoCarrinho,
   removerItemDoCarrinho,
-  atualizarQuantidadeItemCarrinho,
-  limparCarrinho,
   converterCarrinhoEmPedido,
-  type CarrinhoCompleto,
 } from '@/lib/carrinho/service'
 
 // Mocks do Supabase

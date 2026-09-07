@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import {
   Bot,
   Key,
@@ -12,7 +12,6 @@ import {
   Zap,
   Sparkles,
   Crown,
-  Server,
   ShieldCheck,
   ChevronDown,
   ChevronUp,
@@ -25,7 +24,6 @@ import {
   salvarConfiguracaoAdmin,
   testarConexaoOmniRoute,
   testarConexaoLLM,
-  obterModelosDisponiveis
 } from '@/app/actions/admin'
 
 export default function LlmApiCard({ initialConfigs, showToast }: IntegrationCardProps) {
@@ -54,7 +52,7 @@ export default function LlmApiCard({ initialConfigs, showToast }: IntegrationCar
   } | null>(null)
 
   // Legacy models list
-  const [legacyModels, setLegacyModels] = useState<{ id: string; name: string }[]>([
+  const [legacyModels] = useState<{ id: string; name: string }[]>([
     { id: 'deepseek/deepseek-chat', name: 'DeepSeek: DeepSeek Chat (v3)' },
     { id: 'google/gemini-2.5-flash', name: 'Google: Gemini 2.5 Flash' },
     { id: 'google/gemini-2.5-pro', name: 'Google: Gemini 2.5 Pro' },

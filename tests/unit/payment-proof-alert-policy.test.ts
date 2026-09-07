@@ -3,7 +3,7 @@ import { evaluatePaymentProofAlerts, readPaymentProofAlertThresholds } from '@/l
 
 const metrics = {
   lifecycle: { received: 0, identity_pending: 0, processing: 0, review: 0, admitted: 0, quarantined: 0, purging: 0, duplicate: 0, purged: 0 },
-  outbox: { pending: 0, claimed: 0, completed: 0, dead_letter: 1, attempts: { zero: 0, one: 0, two: 0, three_to_four: 0, five_plus: 0 }, dead_letter_last_60m: 0, unresolved_dead_letter: 1, oldest_unresolved_dead_letter_at: '2026-08-28T00:00:00.000Z', oldest_unresolved_dead_letter_age_seconds: 3600 },
+  outbox: { pending: 0, claimed: 0, completed: 0, dead_letter: 1, abandoned: 0, attempts: { zero: 0, one: 0, two: 0, three_to_four: 0, five_plus: 0 }, dead_letter_last_60m: 0, unresolved_dead_letter: 1, oldest_unresolved_dead_letter_at: '2026-08-28T00:00:00.000Z', oldest_unresolved_dead_letter_age_seconds: 3600 },
   quarantine: { total: 1, expired: 1 }, purge: { failures_last_60m: 0 },
   failures: { render_last_60m: 3, classifier_last_60m: 0 },
   maintenance: { running: false, last_started_at: null, last_finished_at: null, last_success_at: null, age_seconds: null, consecutive_failures: 0 },

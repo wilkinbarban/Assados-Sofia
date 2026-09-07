@@ -89,7 +89,7 @@ describe('payment-proof maintenance route', () => {
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ completed: 1, failed: 0 })
     expect(rpc.mock.calls[0][0]).toBe('begin_payment_proof_maintenance')
-    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_success: true, p_error: null, p_lease_token: 'purge-lease-1', p_attempt: 1 })
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_disposition: 'success', p_error: null, p_lease_token: 'purge-lease-1', p_attempt: 1 })
     expect(rpc.mock.calls.at(-1)).toEqual(['finish_payment_proof_maintenance', { p_success: true }])
     if (keyCount) expect(remove).toHaveBeenCalledWith(['a', 'b']); else expect(remove).not.toHaveBeenCalled()
   })
@@ -105,13 +105,54 @@ describe('payment-proof maintenance route', () => {
     expect(rpc).toHaveBeenCalledWith('finish_payment_proof_maintenance', { p_success: false })
   })
 
+  it('permanently completes unsupported outbox payloads without dispatching them', async () => {
+    const { db, rpc } = client([{ kind:'outbox',id:'unsupported',channel:'web',conversation_id:'conversation',payload:{ message_key:'unknown' },delivery_key:'key',attempt:1,lease_token:'lease-unsupported' }])
+    mocks.createAdminClient.mockReturnValue(db)
+
+    const response = await POST(request())
+
+    expect(await response.json()).toEqual({ completed:0, failed:1 })
+    expect(mocks.dispatch).not.toHaveBeenCalled()
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', {
+      p_kind:'outbox', p_id:'unsupported', p_disposition:'permanent', p_error:'unsupported_payload',
+      p_lease_token:'lease-unsupported', p_attempt:1,
+    })
+  })
+
+  it('resolves audited outbox payload keys to customer text before dispatch', async () => {
+    const { db } = client([{ kind:'outbox',id:'resolved',channel:'web',conversation_id:'conversation',payload:{ message_key:'payment_proof_under_review' },delivery_key:'key',attempt:1,lease_token:'lease-resolved' }])
+    mocks.createAdminClient.mockReturnValue(db)
+    mocks.dispatch.mockResolvedValue({ status: 'success' })
+
+    await POST(request())
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Não foi possível validar este comprovante automaticamente. Ele será analisado por um atendente humano.',
+    }))
+  })
+
+  it('forwards an outbox permanent disposition and bounded reason to its fenced completion', async () => {
+    const { db, rpc } = client([{ kind:'outbox',id:'7',channel:'web',conversation_id:null,payload:{ message:'m' },delivery_key:'key',attempt:1,lease_token:'lease-o' }])
+    mocks.createAdminClient.mockReturnValue(db)
+    mocks.dispatch.mockResolvedValue({ status: 'permanent', error: 'invalid_destination' })
+
+    const response = await POST(request())
+
+    expect(await response.json()).toEqual({ completed:0, failed:1 })
+    expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({ conversationId: null }))
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', {
+      p_kind:'outbox', p_id:'7', p_disposition:'permanent', p_error:'invalid_destination',
+      p_lease_token:'lease-o', p_attempt:1,
+    })
+  })
+
   it('processes a durable proof job and completes its exact transition', async () => {
     const { db, rpc } = client([{ kind:'processing',id:'proof-1',attempt:1,lease_token:'lease-b' }])
     mocks.createAdminClient.mockReturnValue(db)
     const response=await POST(request())
     expect(await response.json()).toEqual({completed:1,failed:0})
     expect(mocks.process).toHaveBeenCalledWith(expect.objectContaining({proofId:'proof-1',db}))
-    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance',{p_kind:'processing',p_id:'proof-1',p_success:true,p_error:null,p_lease_token:'lease-b',p_attempt:1})
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance',{p_kind:'processing',p_id:'proof-1',p_disposition:'success',p_error:null,p_lease_token:'lease-b',p_attempt:1})
   })
 
   it('completes an unexpected processing exception with a fixed non-null stage', async () => {
@@ -123,7 +164,7 @@ describe('payment-proof maintenance route', () => {
 
     expect(await response.json()).toEqual({ completed:0, failed:1 })
     expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', {
-      p_kind:'processing', p_id:'proof-1', p_success:false, p_error:'load',
+      p_kind:'processing', p_id:'proof-1', p_disposition:'retryable', p_error:'load',
       p_lease_token:'lease-e', p_attempt:5,
     })
     expect(JSON.stringify(rpc.mock.calls)).not.toContain('private worker detail')
@@ -134,13 +175,13 @@ describe('payment-proof maintenance route', () => {
     mocks.createAdminClient.mockReturnValue(db)
     const response = await POST(request())
     expect(await response.json()).toEqual({ completed: 0, failed: 1 })
-    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_success: false, p_error: 'operation_failed', p_lease_token: 'purge-lease-2', p_attempt: 2 })
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', { p_kind: 'purge', p_id: 'p1', p_disposition: 'retryable', p_error: 'operation_failed', p_lease_token: 'purge-lease-2', p_attempt: 2 })
     expect(rpc).toHaveBeenCalledWith('finish_payment_proof_maintenance', { p_success: true })
   })
 
   it.each(['claim', 'completion'])('returns generic 503 and marks health failed on %s infrastructure failure', async (failure) => {
     const { db, rpc } = client(failure === 'claim' ? [] : [{ kind: 'purge', id: 'p1', original_key: null, preview_key: null, attempt: 1, lease_token: 'purge-lease-1' }], failure === 'completion' ? { completeError: { message: 'secret' } } : {})
-    if (failure === 'claim') rpc.mockImplementation(async (name: string) => name === 'claim_payment_proof_maintenance' ? { data: null, error: { message: 'secret' } } : { data: true, error: null })
+    if (failure === 'claim') (rpc as ReturnType<typeof vi.fn>).mockImplementation(async (name: string) => name === 'claim_payment_proof_maintenance' ? { data: null, error: { message: 'secret' } } : { data: true, error: null })
     mocks.createAdminClient.mockReturnValue(db)
     const response = await POST(request())
     expect(response.status).toBe(503)

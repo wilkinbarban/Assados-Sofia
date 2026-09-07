@@ -1,6 +1,6 @@
 type CountMap<T extends readonly string[]> = { [K in T[number]]: number }
 const lifecycleKeys = ['received','identity_pending','processing','review','admitted','quarantined','purging','duplicate','purged'] as const
-const outboxKeys = ['pending','claimed','completed','dead_letter'] as const
+const outboxKeys = ['pending','claimed','completed','dead_letter','abandoned'] as const
 const attemptKeys = ['zero','one','two','three_to_four','five_plus'] as const
 
 export type PaymentProofOperationalMetrics = {
@@ -36,7 +36,10 @@ function timestamp(value: unknown): string|null {
 
 export function parsePaymentProofOperationalMetrics(value: unknown): PaymentProofOperationalMetrics {
   const root = object(value, ['lifecycle','outbox','quarantine','purge','failures','maintenance'])
-  const outbox = object(root.outbox, [...outboxKeys,'attempts','dead_letter_last_60m','unresolved_dead_letter','oldest_unresolved_dead_letter_at','oldest_unresolved_dead_letter_age_seconds'])
+  const outbox = root.outbox && typeof root.outbox === 'object' && !Array.isArray(root.outbox) ? root.outbox as Record<string, unknown> : (() => { throw new Error('INVALID_METRICS') })()
+  const outboxMetricKeys = ['pending','claimed','completed','dead_letter','attempts','dead_letter_last_60m','unresolved_dead_letter','oldest_unresolved_dead_letter_at','oldest_unresolved_dead_letter_age_seconds']
+  const allowedOutboxKeys = new Set([...outboxMetricKeys, 'abandoned'])
+  if (!outboxMetricKeys.every((key) => key in outbox) || Object.keys(outbox).some((key) => !allowedOutboxKeys.has(key)) || ('abandoned' in outbox && !Number.isSafeInteger(outbox.abandoned))) throw new Error('INVALID_METRICS')
   const quarantine = object(root.quarantine, ['total','expired'])
   const purge = object(root.purge, ['failures_last_60m'])
   const failures = object(root.failures, ['render_last_60m','classifier_last_60m'])
@@ -48,7 +51,7 @@ export function parsePaymentProofOperationalMetrics(value: unknown): PaymentProo
   if ((unresolvedDeadLetter === 0) !== (oldestUnresolvedDeadLetterAt === null) || (unresolvedDeadLetter === 0) !== (oldestUnresolvedDeadLetterAgeSeconds === null)) throw new Error('INVALID_METRICS')
   return {
     lifecycle: counts(root.lifecycle,lifecycleKeys) as CountMap<typeof lifecycleKeys>,
-    outbox: { ...counts(outbox,outboxKeys,false), attempts: counts(outbox.attempts,attemptKeys), dead_letter_last_60m: count(outbox.dead_letter_last_60m), unresolved_dead_letter: unresolvedDeadLetter, oldest_unresolved_dead_letter_at: oldestUnresolvedDeadLetterAt, oldest_unresolved_dead_letter_age_seconds: oldestUnresolvedDeadLetterAgeSeconds } as PaymentProofOperationalMetrics['outbox'],
+    outbox: { ...(counts(outbox,outboxKeys.filter((key) => key !== 'abandoned'),false) as Omit<CountMap<typeof outboxKeys>, 'abandoned'>), abandoned: 'abandoned' in outbox ? count(outbox.abandoned) : 0, attempts: counts(outbox.attempts,attemptKeys) as CountMap<typeof attemptKeys>, dead_letter_last_60m: count(outbox.dead_letter_last_60m), unresolved_dead_letter: unresolvedDeadLetter, oldest_unresolved_dead_letter_at: oldestUnresolvedDeadLetterAt, oldest_unresolved_dead_letter_age_seconds: oldestUnresolvedDeadLetterAgeSeconds },
     quarantine: { total: count(quarantine.total), expired: count(quarantine.expired) },
     purge: { failures_last_60m: count(purge.failures_last_60m) },
     failures: { render_last_60m: count(failures.render_last_60m), classifier_last_60m: count(failures.classifier_last_60m) },

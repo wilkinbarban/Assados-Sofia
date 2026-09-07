@@ -1,8 +1,13 @@
 
+\ir ../migrations/20260903190000_payment_proof_immutable_delivery_provenance.sql
 select plan(1);
 set role postgres;
 insert into public.clientes(id,nome,telefone) values
 ('30303030-3030-4030-8030-303030303021','Render customer','5541999999983') on conflict do nothing;
+insert into public.conversas(id,cliente_id,status,ia_ativa) values
+('30303030-3030-4030-8030-303030303041','30303030-3030-4030-8030-303030303021','aberta',false) on conflict do nothing;
+insert into public.pedidos(id,cliente_id,status,status_pagamento,tipo_entrega,meio_pagamento,total_produtos_centavos,taxa_entrega_centavos,total_pedido_centavos) values
+('30303030-3030-4030-8030-303030303061','30303030-3030-4030-8030-303030303021','confirmado','pendente','retirada','pix',4200,0,4200) on conflict do nothing;
 reset role;
 set role service_role;
 select set_config('request.jwt.claim','{"role":"service_role"}',false);
@@ -11,7 +16,8 @@ declare p record; first_event bigint; replay_event bigint;
 begin
  select * into p from public.admit_payment_proof_intake(
   'web','render-one','30303030-3030-4030-8030-303030303021',null,
-  'proofs/private/render-one.pdf',100,'application/pdf');
+  'proofs/private/render-one.pdf',100,'application/pdf','30303030-3030-4030-8030-303030303061',
+  '30303030-3030-4030-8030-303030303041',repeat('2',64));
  select public.record_payment_proof_render(
   p.proof_id,'render-one','proofs/private/render-one.png',repeat('b',64),1200,600,'pdf-parse-2.4.5/w1200'
  ) into first_event;
