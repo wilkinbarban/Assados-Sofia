@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createClient } from '@supabase/supabase-js'
-import { getRoleRedirectPath, safeInternalRedirect } from '@/lib/auth/safe-redirect'
+import { getRoleRedirectPath } from '@/lib/auth/safe-redirect'
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'http://127.0.0.1:8000'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzg2NjMxMzM5LCJleHAiOjE5NDQzMTEzMzl9._X-OI8hh_bFU-7iYDjOnXfHFFoPl6ybpD5-mfuogNys'

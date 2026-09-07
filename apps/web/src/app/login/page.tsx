@@ -5,7 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/client'
-import { Flame, Eye, EyeOff, Loader2, Mail, Lock, Phone, KeyRound, CheckCircle2 } from 'lucide-react'
+import { Eye, EyeOff, Loader2, Mail, Lock, Phone, KeyRound, CheckCircle2 } from 'lucide-react'
 import { BrandLogo } from '@/components/ui/BrandLogo'
 import { getRoleRedirectPath, safeInternalRedirect } from '@/lib/auth/safe-redirect'
 

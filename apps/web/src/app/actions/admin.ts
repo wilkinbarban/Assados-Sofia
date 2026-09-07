@@ -84,7 +84,7 @@ export async function listarUsuariosAdmin() {
 
     const { data: clientes } = await adminSupabase
       .from('clientes')
-      .select('id, telefone')
+      .select('id, usuario_id, telefone')
 
     const consolidated = consolidateAdminUsers(perfis, authUsers, clientes || [])
 

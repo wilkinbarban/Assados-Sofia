@@ -288,10 +288,11 @@ export async function approvePaymentProofDirectly(proofId: string, orderId: stri
 
   // Verificação de idempotência: somente uma conciliação persistida ou o pedido
   // já pago prova que esta associação foi efetivamente concluída.
-  const { data: existingRec } = await actor.session
-    .from('payment_proof_reconciliations')
-    .select('id')
+  const { data: existingLink } = await actor.session
+    .from('payment_proof_order_links')
+    .select('proof_id,pedido_id')
     .eq('proof_id', proofId)
+    .eq('pedido_id', orderId)
     .maybeSingle()
 
   const { data: currentOrder } = await actor.session
@@ -300,7 +301,7 @@ export async function approvePaymentProofDirectly(proofId: string, orderId: stri
     .eq('id', orderId)
     .single()
 
-  if (existingRec || currentOrder?.status_pagamento === 'aprovado') {
+  if (existingLink && currentOrder?.status_pagamento === 'aprovado') {
     return { success: true as const, alreadyReconciled: true }
   }
 
@@ -343,9 +344,6 @@ export async function approvePaymentProofDirectly(proofId: string, orderId: stri
     })
     if (recErr) {
       await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
-      if ((recErr as any)?.message?.includes('PAYMENT_PROOF_ALREADY_RECONCILED')) {
-        return { success: true as const, alreadyReconciled: true }
-      }
       return { success: false as const, error: safeError(recErr) }
     }
 
