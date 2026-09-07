@@ -98,7 +98,7 @@ export async function obterStatusSofiaClienteAction(
     }
 
     return { silenciada: Boolean(silenciada) }
-  } catch (err) {
+  } catch {
     return { silenciada: false }
   }
 }

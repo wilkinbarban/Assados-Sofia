@@ -1,6 +1,5 @@
 begin;
-\ir ../migrations/20260828340000_payment_proof_operator_leases.sql
-\ir ../migrations/20260828360000_payment_proof_leased_amount_confirmation.sql
+\ir ../migrations/20260903170000_payment_proof_financial_authority.sql
 select plan(34);
 set role postgres;
 insert into auth.users(id,instance_id,aud,role,email,created_at,updated_at) values
@@ -64,8 +63,8 @@ select lives_ok($$select public.confirm_payment_proof_amount('63636363-6363-4363
 select is((select actor_role from public.payment_proof_events where proof_id='63636363-6363-4363-8363-636363636344' and event_type='amount_confirmed'),'supervisor'::public.tipo_funcao,'supervisor role snapshot is immutable');
 select set_config('request.jwt.claim.sub','63636363-6363-4363-8363-636363636303',false);
 insert into amount_tokens select '63636363-6363-4363-8363-636363636303',lease_token from public.acquire_payment_proof_lease('63636363-6363-4363-8363-636363636345');
-select lives_ok($$select public.confirm_payment_proof_amount('63636363-6363-4363-8363-636363636345',4400,(select token from amount_tokens where actor_id='63636363-6363-4363-8363-636363636303'))$$,'seller confirms an eligible proof');
-select is((select actor_role from public.payment_proof_events where proof_id='63636363-6363-4363-8363-636363636345' and event_type='amount_confirmed'),'vendedor'::public.tipo_funcao,'seller role snapshot is immutable');
+select throws_ok($$select public.confirm_payment_proof_amount('63636363-6363-4363-8363-636363636345',4400,(select token from amount_tokens where actor_id='63636363-6363-4363-8363-636363636303'))$$,'42501','PAYMENT_PROOF_FINANCIAL_AUTHORITY_REQUIRED','active seller cannot confirm amount');
+select is((select status from public.payment_proofs where id='63636363-6363-4363-8363-636363636345'),'review','seller denial leaves proof unchanged');
 select set_config('request.jwt.claim.sub','63636363-6363-4363-8363-636363636302',false);
 select throws_ok($$select public.confirm_payment_proof_amount('63636363-6363-4363-8363-636363636344',0,(select token from amount_tokens where actor_id='63636363-6363-4363-8363-636363636302' order by ctid desc limit 1))$$,'22023','PAYMENT_PROOF_AMOUNT_REQUIRED','zero amount is denied');
 select set_config('request.jwt.claim.sub','63636363-6363-4363-8363-636363636301',false);

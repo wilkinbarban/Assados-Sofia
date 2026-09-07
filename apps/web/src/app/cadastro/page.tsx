@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/client'
-import { Flame, Eye, EyeOff, Loader2, CheckCircle2, User, Phone, Lock, ArrowRight, RefreshCw, KeyRound } from 'lucide-react'
+import { Eye, EyeOff, Loader2, CheckCircle2, User, Phone, Lock, ArrowRight, RefreshCw, KeyRound } from 'lucide-react'
 import { BrandLogo } from '@/components/ui/BrandLogo'
 
 // Schema de validação Phone-First

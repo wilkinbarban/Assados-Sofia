@@ -15,8 +15,6 @@ import {
   Minus,
   Trash2,
   Check,
-  X,
-  ShoppingBag,
   Sparkles,
 } from 'lucide-react'
 import { getOrderContinuation, type OrderAction } from '@/components/operator/orderContinuation'
@@ -25,11 +23,11 @@ import {
   actionAtualizarStatusPedido,
   actionAtualizarStatusPagamento,
   actionEditarItensPedidoOperador,
-  gerarPreferenciaPagamento,
   gerarCobrancaPixPedido,
 } from '@/app/actions/pedidos'
 import ModalCobrancaPix, { DadosPixModal } from '@/components/operator/ModalCobrancaPix'
 import { actionListarCatalogoProdutos } from '@/app/actions/produtos'
+import { createClient } from '@/lib/supabase/client'
 
 interface PedidoItem {
   id: string
@@ -100,7 +98,6 @@ export default function OperatorClientOrdersList({
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
-  const [editandoItensPedidoId, setEditandoItensPedidoId] = useState<string | null>(null)
   const [modalPixPedido, setModalPixPedido] = useState<{
     id: string
     clienteNome: string
@@ -118,6 +115,7 @@ export default function OperatorClientOrdersList({
   const [catalogoProdutos, setCatalogoProdutos] = useState<Array<{ id: string; nome: string; preco_centavos: number }>>([])
   const [produtoSelecionadoParaAdicionar, setProdutoSelecionadoParaAdicionar] = useState<string>('')
   const [salvandoEdicao, setSalvandoEdicao] = useState(false)
+  const supabase = createClient()
 
   const carregarPedidos = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true)
@@ -142,7 +140,33 @@ export default function OperatorClientOrdersList({
 
   useEffect(() => {
     carregarPedidos()
-  }, [carregarPedidos])
+
+    const handleOrderUpdated = () => {
+      carregarPedidos(true)
+    }
+    window.addEventListener('asados:order-updated', handleOrderUpdated)
+
+    const channel = supabase
+      .channel(`operator-client-orders-${clienteId || 'all'}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'pedidos',
+          filter: clienteId ? `cliente_id=eq.${clienteId}` : undefined,
+        },
+        () => {
+          carregarPedidos(true)
+        }
+      )
+      .subscribe()
+
+    return () => {
+      window.removeEventListener('asados:order-updated', handleOrderUpdated)
+      supabase.removeChannel(channel)
+    }
+  }, [carregarPedidos, clienteId, supabase])
 
   // Iniciar modo de edição de componentes do pedido
   const handleIniciarEdicao = async (pedido: Pedido) => {
@@ -496,10 +520,18 @@ export default function OperatorClientOrdersList({
                 {/* Cabeçalho do Card */}
                 <div className="p-3">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-mono text-xs font-bold text-zinc-100">
-                        #{pedido.id.substring(0, 8)}
-                      </span>
+                    <div className="flex items-center gap-2">
+                      <div
+                        className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/40 shadow-sm"
+                        title="Identificador do Pedido"
+                      >
+                        <span className="text-[9px] font-black uppercase tracking-wider text-amber-500">
+                          PEDIDO
+                        </span>
+                        <span className="font-mono text-xs font-black tracking-tight text-amber-300 select-all">
+                          #{pedido.id.substring(0, 8).toUpperCase()}
+                        </span>
+                      </div>
                       <span
                         className={`px-1.5 py-0.5 rounded text-[10px] font-bold border uppercase tracking-wider ${
                           statusColors[pedido.status] || 'bg-zinc-800 text-zinc-400 border-zinc-700'
