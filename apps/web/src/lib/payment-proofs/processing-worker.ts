@@ -72,7 +72,7 @@ export async function processPaymentProofJob(input:{proofId:string;db:any;apiKey
     try { rendered=await (input.render??renderPaymentProofWithWorker)(bytes) } catch { return {ok:false as const,stage:'render' as const} }
     try {
       const previewKey=`proofs/private/${createHash('sha256').update(`${proof.channel}:${input.proofId}`).digest('hex')}.png`
-      if((await bucket.upload(previewKey,rendered.png,{contentType:'image/png',upsert:true})).error)return {ok:false as const,stage:'preview' as const}
+      if((await bucket.upload(previewKey,Buffer.from(rendered.png),{contentType:'image/png',upsert:true})).error)return {ok:false as const,stage:'preview' as const}
       const recorded=await input.db.rpc('record_payment_proof_render',{p_proof_id:input.proofId,p_render_key:'page-1',p_storage_key:previewKey,p_sha256:rendered.sha256,p_width:rendered.width,p_height:rendered.height,p_version:rendered.version})
       if(recorded.error)return {ok:false as const,stage:'preview' as const}
     } catch { return {ok:false as const,stage:'preview' as const} }
