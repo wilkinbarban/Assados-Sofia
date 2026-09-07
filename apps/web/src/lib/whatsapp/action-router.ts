@@ -33,7 +33,7 @@ function formatarResumoCarrinho(carrinho: CarrinhoCompleto): string {
     return `🛒 *Seu carrinho está vazio.*\n\nQue tal dar uma olhadinha no nosso cardápio de assados especiais para o domingo?`
   }
 
-  const linhas = itens.map((item, idx) => {
+  const linhas = itens.map((item) => {
     const nome = item.produtos?.nome || 'Item'
     const total = formatarMoeda(item.preco_total_centavos)
     return `• *${item.quantidade}x ${nome}* — ${total}`

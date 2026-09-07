@@ -56,6 +56,7 @@ export interface PedidoClienteRecord {
     status: string | null
     proofId: string | null
     lockedAt: string | null
+    paymentReviewUnavailable?: boolean
   }
 }
 
@@ -74,6 +75,7 @@ export default function ClienteOrdersDashboard({
     pedidoId: string
     valorCentavos: number
     statusPagamento: 'pendente' | 'aprovado' | 'rejeitado' | 'reembolsado'
+    abaInicial?: 'pix' | 'cartao' | 'comprovante'
   } | null>(null)
   const [modalVisualizador, setModalVisualizador] = useState<{
     isOpen: boolean
@@ -98,6 +100,17 @@ export default function ClienteOrdersDashboard({
     }
   }, [])
 
+  const hasPaymentReviewLock = pedidos.some(
+    (pedido) => pedido.payment_review?.locked && !pedido.payment_review?.paymentReviewUnavailable,
+  )
+
+  useEffect(() => {
+    if (!hasPaymentReviewLock) return
+
+    const interval = window.setInterval(carregarPedidos, 7500)
+    return () => window.clearInterval(interval)
+  }, [hasPaymentReviewLock, carregarPedidos])
+
   // Sincronização em tempo real via canal Supabase
   useEffect(() => {
     if (!clienteId) return
@@ -111,6 +124,18 @@ export default function ClienteOrdersDashboard({
           schema: 'public',
           table: 'pedidos',
           filter: `cliente_id=eq.${clienteId}`,
+        },
+        () => {
+          carregarPedidos()
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'payment_proofs',
+          filter: `customer_id=eq.${clienteId}`,
         },
         () => {
           carregarPedidos()
@@ -227,6 +252,9 @@ export default function ClienteOrdersDashboard({
           ) : (
             <div className="space-y-4">
               {pedidos.map((pedido) => {
+                const isLocked = pedido.status === 'novo' || pedido.status === 'confirmado'
+                const paymentReviewLocked = pedido.payment_review?.locked === true
+
                 const statusBadgeConfig = {
                   novo: { label: 'Em Atendimento', bg: 'bg-amber-500/15 text-amber-300 border-amber-500/30' },
                   confirmado: { label: 'Em Preparo', bg: 'bg-blue-500/15 text-blue-300 border-blue-500/30' },
@@ -236,13 +264,13 @@ export default function ClienteOrdersDashboard({
 
                 const paymentBadgeConfig = {
                   aprovado: { label: '💳 Pago (Aprovado)', bg: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' },
-                  pendente: { label: '⏳ Pagamento Pendente', bg: 'bg-zinc-800 text-zinc-400 border-zinc-700' },
+                  pendente: {
+                    label: paymentReviewLocked ? '⏳ Em Análise / Conferência' : '⏳ Pagamento Pendente',
+                    bg: paymentReviewLocked ? 'bg-sky-500/15 text-sky-300 border-sky-500/30' : 'bg-zinc-800 text-zinc-400 border-zinc-700',
+                  },
                   rejeitado: { label: '❌ Pagamento Recusado', bg: 'bg-red-500/15 text-red-300 border-red-500/30' },
                   reembolsado: { label: '🔄 Reembolsado', bg: 'bg-purple-500/15 text-purple-300 border-purple-500/30' },
                 }[pedido.status_pagamento] || { label: pedido.status_pagamento, bg: 'bg-zinc-800 text-zinc-400 border-zinc-700' }
-
-                const isLocked = pedido.status === 'novo' || pedido.status === 'confirmado'
-                const paymentReviewLocked = pedido.payment_review?.locked === true
 
                 return (
                   <div
@@ -320,9 +348,12 @@ export default function ClienteOrdersDashboard({
                       >
                         <FileCheck className="mt-0.5 h-4 w-4 shrink-0 text-sky-300" />
                         <div>
-                          <strong>Comprovante recebido — aguardando verificação.</strong>{' '}
-                          O pagamento deste pedido está protegido enquanto o atendente confere o
-                          documento. Se ele for rejeitado, você poderá enviar outro PDF.
+                          <strong>{pedido.payment_review?.paymentReviewUnavailable
+                            ? 'Revisão de pagamento indisponível — aguardando atualização.'
+                            : 'Comprovante recebido — aguardando verificação.'}</strong>{' '}
+                          {pedido.payment_review?.paymentReviewUnavailable
+                            ? 'Por segurança, as opções de pagamento e comprovante estão temporariamente bloqueadas. Tente atualizar em instantes.'
+                            : 'O pagamento deste pedido está protegido enquanto o atendente confere o documento. Se ele for rejeitado, você poderá enviar outro PDF.'}
                         </div>
                       </div>
                     )}
@@ -338,7 +369,7 @@ export default function ClienteOrdersDashboard({
                       </Link>
 
                       <div className="flex flex-wrap items-center gap-2">
-                        {pedido.status_pagamento === 'pendente' &&
+                        {(pedido.status_pagamento === 'pendente' || pedido.status_pagamento === 'rejeitado') &&
                           pedido.status !== 'cancelado' &&
                           !paymentReviewLocked && (
                           <>
@@ -357,20 +388,21 @@ export default function ClienteOrdersDashboard({
                               <span>⚡ Pagar Pedido (PIX / Cartão)</span>
                             </button>
 
-                            <button
+                            {pedido.status_pagamento === 'pendente' && <button
                               type="button"
                               onClick={() =>
                                 setModalPagamento({
                                   pedidoId: pedido.id,
                                   valorCentavos: pedido.total_pedido_centavos || pedido.total_produtos_centavos,
                                   statusPagamento: pedido.status_pagamento,
+                                  abaInicial: 'comprovante',
                                 })
                               }
                               className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-300 rounded-xl text-xs font-semibold border border-zinc-800 transition-all cursor-pointer select-none"
                             >
                               <FileCheck className="h-3.5 w-3.5 text-amber-400" />
                               <span>Comprovante</span>
-                            </button>
+                            </button>}
                           </>
                         )}
 
@@ -409,11 +441,31 @@ export default function ClienteOrdersDashboard({
           pedidoId={modalPagamento.pedidoId}
           valorCentavos={modalPagamento.valorCentavos}
           statusPagamento={modalPagamento.statusPagamento}
+          abaInicial={modalPagamento.abaInicial}
           onPagamentoConfirmado={() => {
             carregarPedidos()
           }}
           onComprovanteEnviado={() => {
+            const pid = modalPagamento?.pedidoId
             setModalPagamento(null)
+            if (pid) {
+              setPedidos((prev) =>
+                prev.map((p) =>
+                  p.id === pid
+                    ? {
+                        ...p,
+                        payment_review: {
+                          locked: true,
+                          status: 'review',
+                          proofId: 'pending',
+                          lockedAt: new Date().toISOString(),
+                          paymentReviewUnavailable: false,
+                        },
+                      }
+                    : p
+                )
+              )
+            }
             carregarPedidos()
           }}
         />

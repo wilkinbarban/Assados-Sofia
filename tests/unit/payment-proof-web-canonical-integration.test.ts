@@ -12,11 +12,14 @@ describe('canonical web payment-proof integration', () => {
     expect(pedidos).not.toContain("status: 'review'")
     expect(pedidos).not.toContain("mime_type: isPdf ? 'application/pdf' : 'image/png'")
     expect(pedidos).not.toContain("nome_arquivo: payload.nomeArquivo || (isPdf ?")
+    expect(pedidos).toContain('conversationId: conversaId')
   })
 
-  it('uses the atomic queued intake RPC and hashes the original PDF bytes', () => {
+  it('uses the atomic queued intake RPC, hashes the original PDF bytes, and sends its authoritative conversation', () => {
     expect(intake).toContain("rpc('admit_and_enqueue_payment_proof'")
     expect(intake).toContain("createHash('sha256').update(input.bytes)")
+    expect(intake).toContain('conversationId?: string | null')
+    expect(intake).toContain('p_conversation_id: input.conversationId ?? null')
   })
 
   it('keeps confirmation and reconciliation leased, while chat visibility remains DB-authoritative', () => {

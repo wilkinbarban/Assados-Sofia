@@ -97,7 +97,7 @@ describe('PIX Payment & Customer Receipt Actions', () => {
     }
 
     const supabaseAdminMock = {
-      from: vi.fn((table: string) => ({
+      from: vi.fn(() => ({
         update: vi.fn().mockReturnValue({
           eq: vi.fn().mockResolvedValue({ data: null, error: null }),
         }),

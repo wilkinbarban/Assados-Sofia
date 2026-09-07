@@ -322,7 +322,12 @@ export async function actionEditarItensPedidoOperador(input: {
     // 4. Substituir itens do pedido
     await admin.from('itens_pedido').delete().eq('pedido_id', pedidoId)
 
-    const itensParaInserir = novosItensValidados.map(({ nome, ...resto }) => resto)
+    const itensParaInserir = novosItensValidados.map((it) => ({
+      pedido_id: it.pedido_id,
+      produto_id: it.produto_id,
+      quantidade: it.quantidade,
+      preco_unitario_centavos: it.preco_unitario_centavos,
+    }))
     const { error: insertItensError } = await admin
       .from('itens_pedido')
       .insert(itensParaInserir)
@@ -638,11 +643,24 @@ export async function actionListarMeusPedidosCliente() {
 
     const orderIds = (pedidos || []).map((pedido: any) => pedido.id)
     const { data: locks, error: locksError } = orderIds.length
-      ? await admin.rpc('list_order_payment_proof_locks', { p_order_ids: orderIds })
+      ? await supabase.rpc('list_order_payment_proof_locks', { p_order_ids: orderIds })
       : { data: [], error: null }
     if (locksError) {
       console.error('[actionListarMeusPedidosCliente] Erro ao projetar revisão:', locksError)
-      return { success: false, error: locksError.message, data: [] }
+      return {
+        success: true,
+        error: 'REVISAO_PAGAMENTO_INDISPONIVEL',
+        data: (pedidos || []).map((pedido: any) => ({
+          ...pedido,
+          payment_review: {
+            locked: true,
+            status: 'unavailable',
+            proofId: null,
+            lockedAt: null,
+            paymentReviewUnavailable: true,
+          },
+        })),
+      }
     }
     const lockByOrder = new Map(
       (locks || []).map((lock: any) => [lock.pedido_id, lock]),
@@ -1682,6 +1700,47 @@ export async function despacharCobrancaPixMulticanal(
 export const enviarCobrancaPixAoCliente = despacharCobrancaPixMulticanal
 
 /**
+ * Authorizes a client-side proof upload without exposing order, customer, or
+ * conversation details. The canonical submission action repeats this check to
+ * close the interval between this preflight and storage admission.
+ */
+export async function preflightComprovantePagamentoCliente(pedidoId: string) {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) {
+      return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+    }
+
+    const { data: pedido, error: pedidoError } = await createAdminClient()
+      .from('pedidos')
+      .select(`
+        cliente_id,
+        conversa_id,
+        status,
+        status_pagamento,
+        clientes:cliente_id (
+          usuario_id
+        )
+      `)
+      .eq('id', pedidoId)
+      .maybeSingle()
+
+    const clienteDono = pedido?.clientes as any
+    const conversaId = pedido?.conversa_id
+    const elegivel = pedido?.status_pagamento === 'pendente' && pedido?.status !== 'cancelado'
+    if (pedidoError || !pedido || clienteDono?.usuario_id !== user.id || !elegivel || !conversaId) {
+      return { success: false, error: 'COMPROVANTE_INDISPONIVEL' }
+    }
+
+    return { success: true }
+  } catch (error: any) {
+    console.error('Erro na action preflightComprovantePagamentoCliente:', error)
+    return { success: false, error: 'COMPROVANTE_INDISPONIVEL' }
+  }
+}
+
+/**
  * Registra o comprovante enviado pelo cliente (PDF/imagem ou anexo de storage) na tabela de comprovantes
  * e na conversa do pedido, notificando os atendentes e operadores no painel.
  */
@@ -1708,6 +1767,8 @@ export async function enviarComprovantePagamentoCliente(
         id,
         conversa_id,
         cliente_id,
+        status,
+        status_pagamento,
         clientes:cliente_id (
           id,
           usuario_id,
@@ -1717,36 +1778,25 @@ export async function enviarComprovantePagamentoCliente(
       .eq('id', pedidoId)
       .single()
 
-    if (pedidoError || !pedido) {
-      return { success: false, error: 'PEDIDO_NAO_ENCONTRADO' }
+    if (!payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
+      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
     }
 
-    const clienteDono = pedido.clientes as any
-    const isDono = clienteDono && clienteDono.usuario_id === user.id
-    if (!isDono) {
-      const check = await verificarPermissaoOperador()
-      if (!check.authorized) {
-        return { success: false, error: 'ACESSO_NEGADO_PERMISSAO_INSUFICIENTE' }
-      }
+    const clienteDono = pedido?.clientes as any
+    const elegivel = pedido?.status_pagamento === 'pendente' && pedido?.status !== 'cancelado'
+    const conversaId = pedido?.conversa_id
+
+    // Re-read every authority predicate after the client-side preflight. This
+    // remains the TOCTOU boundary for canonical admission and never infers a
+    // newer customer conversation.
+    if (pedidoError || !pedido || clienteDono?.usuario_id !== user.id || !elegivel || !conversaId) {
+      return { success: false, error: 'COMPROVANTE_INDISPONIVEL' }
     }
 
     const supabaseAdmin = createAdminClient()
-    let conversaId = pedido.conversa_id
 
-    if (!conversaId && pedido.cliente_id) {
-      const { data: conversa } = await supabaseAdmin
-        .from('conversas')
-        .select('id')
-        .eq('cliente_id', pedido.cliente_id)
-        .order('data_atualizacao', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-
-      conversaId = conversa?.id || null
-    }
-
-    if (!pedido.cliente_id || !payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
-      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
+    if (!pedido.cliente_id) {
+      return { success: false, error: 'COMPROVANTE_INDISPONIVEL' }
     }
 
     const { data: fileBlob, error: downloadError } = await supabaseAdmin.storage
@@ -1764,6 +1814,7 @@ export async function enviarComprovantePagamentoCliente(
       deliveryId,
       customerId: pedido.cliente_id,
       orderId: pedidoId,
+      conversationId: conversaId,
       sender: user.id,
       bytes: new Uint8Array(await fileBlob.arrayBuffer()),
       mimeType: fileBlob.type || 'application/pdf',
@@ -1788,6 +1839,20 @@ export async function enviarComprovantePagamentoCliente(
           data_atualizacao: new Date().toISOString(),
         })
         .eq('id', conversaId)
+
+      const proofId = (processed as any).proofId
+      if (proofId) {
+        await supabaseAdmin
+          .from('mensagens')
+          .insert({
+            conversa_id: conversaId,
+            remetente: 'cliente',
+            conteudo: '📎 Comprovante de pagamento anexado pelo cliente',
+            url_anexo: `/api/payment-proofs/${proofId}/preview`,
+            payment_proof_id: proofId,
+            data_criacao: new Date().toISOString(),
+          })
+      }
     }
 
     safeRevalidatePath('/atendimento')

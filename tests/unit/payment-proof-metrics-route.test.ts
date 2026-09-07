@@ -25,9 +25,15 @@ describe('payment-proof operational metrics', () => {
     mocks.obterConfiguracaoSistema.mockResolvedValue('metrics-secret')
   })
 
+  it('normalizes a rollout-compatible missing abandoned wire key and requires it in parsed results', () => {
+    expect(parsePaymentProofOperationalMetrics(valid)).toEqual({ ...valid, outbox: { ...valid.outbox, abandoned: 0 } })
+    expect(parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, abandoned: 3 } })).toEqual({ ...valid, outbox: { ...valid.outbox, abandoned: 3 } })
+  })
+
   it('strictly accepts only the fixed response shape', () => {
-    expect(parsePaymentProofOperationalMetrics(valid)).toEqual(valid)
+    expect(parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, abandoned: 0 } })).toEqual({ ...valid, outbox: { ...valid.outbox, abandoned: 0 } })
     expect(() => parsePaymentProofOperationalMetrics({ ...valid, proof_id: 'forbidden' })).toThrow()
+    expect(() => parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, unexpected: 123 } })).toThrow()
     expect(() => parsePaymentProofOperationalMetrics({ ...valid, lifecycle: { ...valid.lifecycle, received: -1 } })).toThrow()
     expect(() => parsePaymentProofOperationalMetrics({ ...valid, maintenance: { ...valid.maintenance, age_seconds: 1.5 } })).toThrow()
     expect(() => parsePaymentProofOperationalMetrics({ ...valid, outbox: { ...valid.outbox, unresolved_dead_letter: '1' } })).toThrow()
@@ -50,7 +56,7 @@ describe('payment-proof operational metrics', () => {
     expect(response.headers.get('cache-control')).toContain('no-store')
     expect(rpc).toHaveBeenCalledTimes(1)
     expect(rpc).toHaveBeenCalledWith('get_payment_proof_operational_metrics')
-    expect(await response.json()).toEqual(valid)
+    expect(await response.json()).toEqual({ ...valid, outbox: { ...valid.outbox, abandoned: 0 } })
   })
 
   it.each([

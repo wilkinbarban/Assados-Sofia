@@ -19,12 +19,20 @@ describe('Comprovantes PIX admin workflow', () => {
     expect(mutate).toHaveBeenCalledWith(expect.objectContaining({ operation: 'restore', proofId: proof.id }))
   })
   it('shows an accessible empty state', () => { render(panel({initialProofs:[],mutate:vi.fn(),now:'2026-08-27T12:00:00Z'})); expect(screen.getByRole('status')).toHaveTextContent('Nenhum comprovante nesta fila') })
-  it('requires a local lease before rejection controls appear and releases after success', async () => {
+  it('allows rejecting a proof directly to quarantine with confirmation and releases lease after success', async () => {
     const mutate = leasedMutation({ proof: { status: 'quarantined', purge_after: '2026-09-06T12:00:00.000Z' } }); render(panel({initialProofs:[{...proof,status:'review',purge_after:null}],mutate,now:'2026-08-27T12:00:00Z'}))
-    expect(screen.queryByRole('button', { name: 'Rejeitar' })).not.toBeInTheDocument(); fireEvent.click(screen.getByRole('button', { name: 'Reservar análise' })); fireEvent.click(await screen.findByRole('button', { name: 'Rejeitar' })); fireEvent.click(screen.getByRole('button', { name: 'Confirmar ação' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Rejeitar' })); fireEvent.click(screen.getByRole('button', { name: 'Confirmar ação' }))
     expect(await screen.findByText(/eliminação automática em: 10d 0h/i)).toBeInTheDocument(); expect(mutate).toHaveBeenCalledWith({ operation: 'release', proofId: proof.id, leaseToken: 'a'.repeat(64) })
   })
-  it('allows vendedores to reject ordinary proofs', async () => { render(panel({initialProofs:[{...proof,status:'review'}],role:'vendedor',mutate:leasedMutation()})); fireEvent.click(screen.getByRole('button', { name: 'Reservar análise' })); expect(await screen.findByRole('button', { name: 'Rejeitar' })).toBeInTheDocument() })
+  it('renders no financial proof controls for vendedores even when directly instantiated', () => {
+    render(panel({ initialProofs: [{ ...proof, status: 'review' }], role: 'vendedor', mutate: leasedMutation() }))
+    expect(screen.queryByRole('heading', { name: 'Comprovantes PIX' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /reservar análise|rejeitar|confirmar valor|conciliar pedidos/i })).not.toBeInTheDocument()
+  })
+  it('does not offer the admin-only restore control to supervisors', () => {
+    render(panel({ initialProofs: [{ ...proof, status: 'quarantined', purge_after: '2026-09-01T12:00:00Z' }], role: 'supervisor', now: '2026-08-22T12:00:00Z' }))
+    expect(screen.queryByRole('button', { name: 'Restaurar' })).not.toBeInTheDocument()
+  })
   it('uses an explicit privileged manual replay request and preserves its key only for retry', async () => {
     const diagnostics = vi.fn().mockResolvedValue({ success: true, data: { processing_queue_dead_letter: 1, outbox_dead_letter: 2, unresolved_dead_letter: 3, oldest_unresolved_dead_letter_at: null, oldest_unresolved_dead_letter_age_seconds: null } }); const replay = vi.fn().mockResolvedValue({ success: true, outcome: 'ineligible' })
     render(panel({initialProofs:[proof],diagnostics,replay}))
@@ -34,7 +42,7 @@ describe('Comprovantes PIX admin workflow', () => {
     fireEvent.change(screen.getByRole('combobox',{name:/fonte/i}),{target:{value:'outbox'}}); fireEvent.change(target,{target:{value:'09'}}); expect(screen.getByRole('button',{name:/reprocessar carta morta/i})).toBeDisabled(); fireEvent.change(target,{target:{value:'9'}}); fireEvent.click(screen.getByRole('checkbox',{name:/confirmo/i})); await waitFor(()=>expect(screen.getByRole('button',{name:/reprocessar carta morta/i})).toBeEnabled())
   })
   it('renders redacted operational gate state for privileged staff and hides it from vendedores', async () => {
-    const gateDiagnostics = vi.fn().mockResolvedValue({ success: true, data: { canonicalIngest: { effective: false, reason: 'DISABLED' }, whatsappIngest: { effective: false, reason: 'MISSING' }, processing: { effective: false, reason: 'MALFORMED' }, sellerReconciliation: { effective: false, reason: 'DISABLED' }, privilegedReplay: { effective: false, reason: 'UNREADABLE' }, cleanup: { effective: false, reason: 'DISABLED' } } })
+    const gateDiagnostics = vi.fn().mockResolvedValue({ success: true, data: { canonicalIngest: { effective: false, reason: 'DISABLED' }, whatsappIngest: { effective: false, reason: 'MISSING' }, telegramIngest: { effective: false, reason: 'DISABLED' }, processing: { effective: false, reason: 'MALFORMED' }, sellerReconciliation: { effective: false, reason: 'DISABLED' }, privilegedReplay: { effective: false, reason: 'UNREADABLE' }, cleanup: { effective: false, reason: 'DISABLED' }, restore: { effective: false, reason: 'DISABLED' } } })
     render(panel({initialProofs:[proof],gateDiagnostics}))
     expect(await screen.findByLabelText(/portões operacionais/i)).toHaveTextContent(/entrada canônica: fechada.*disabled/i)
     expect(screen.getByLabelText(/portões operacionais/i)).toHaveTextContent(/limpeza: fechada.*disabled/i)
