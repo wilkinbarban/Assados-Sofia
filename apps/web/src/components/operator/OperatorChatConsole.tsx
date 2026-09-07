@@ -8,16 +8,16 @@ import {
   AlertCircle,
   AlertTriangle,
   Loader2,
-  Edit3,
   CheckCircle2,
   FileText,
   Image as ImageIcon,
-  ExternalLink,
   Eye,
-  Download,
+  ExternalLink,
+  ShieldX,
   X,
 } from 'lucide-react'
 import { alternarIaConversa, enviarMensagemOperador } from '@/app/actions/atendimento'
+import { getPaymentProofForPreviewModal } from '@/app/actions/payment-proof-admin'
 import { Conversa, Mensagem } from './ConversationsQueue'
 import CreateOrderModal from './CreateOrderModal'
 import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante'
@@ -60,7 +60,6 @@ export function AttachmentCard({
   urlArquivo: string
   onVisualizar: (url: string, nome: string) => void
 }) {
-  const [downloading, setDownloading] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
@@ -254,16 +253,51 @@ export default function OperatorChatConsole({
     isOpen: boolean
     urlArquivo: string | null
     nomeArquivo?: string
+    proofId?: string | null
+    pedidoId?: string | null
   }>({
     isOpen: false,
     urlArquivo: null,
   })
+  const [proofStatus, setProofStatus] = useState<'review' | 'admitted' | 'quarantined' | 'canceled' | null>(null)
 
-  const handleAbrirVisualizador = (urlArquivo: string, nomeArquivo?: string) => {
+  useEffect(() => {
+    const proofMsg = conversa?.mensagens?.slice().reverse().find((m) => m.payment_proof_id)
+    if (!proofMsg?.payment_proof_id) {
+      setProofStatus(null)
+      return
+    }
+
+    let ativo = true
+    getPaymentProofForPreviewModal(proofMsg.payment_proof_id)
+      .then((res) => {
+        if (ativo && res.success && res.data) {
+          if (res.data.order?.status === 'cancelado') {
+            setProofStatus('canceled')
+          } else {
+            setProofStatus(res.data.proof.status as any)
+          }
+        }
+      })
+      .catch(() => {})
+
+    return () => {
+      ativo = false
+    }
+  }, [conversa?.id, conversa?.mensagens])
+
+  const handleAbrirVisualizador = (
+    urlArquivo: string,
+    nomeArquivo?: string,
+    proofId?: string | null,
+    pedidoId?: string | null
+  ) => {
     setComprovanteModal({
       isOpen: true,
       urlArquivo,
       nomeArquivo: nomeArquivo || urlArquivo.split('/').pop() || 'comprovante.pdf',
+      proofId: proofId || null,
+      pedidoId: pedidoId || null,
     })
   }
   
@@ -533,6 +567,78 @@ export default function OperatorChatConsole({
           }
         }
 
+        // Caso específico de Comprovante: status dinâmico em tempo real
+        if (tipoDetectado === 'comprovante') {
+          if (proofStatus === 'admitted' || resolvido) {
+            return (
+              <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-emerald-950/90 via-zinc-900 to-emerald-950/40 border border-emerald-500/60 p-3.5 text-xs text-emerald-200 shadow-xl shadow-emerald-950/40 shrink-0 animate-in fade-in">
+                <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
+                  <CheckCircle2 className="h-5 w-5" />
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="text-emerald-300 font-black tracking-wide uppercase text-[11px]">
+                      ✅ COMPROVANTE APROVADO & PAGAMENTO CONFIRMADO
+                    </strong>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                      Comprovante Validado & Pago
+                    </span>
+                  </div>
+                  <p className="text-zinc-300 text-xs leading-relaxed">
+                    O comprovante PIX enviado pelo cliente foi revisado e o pagamento do pedido foi aprovado com sucesso.
+                  </p>
+                </div>
+              </div>
+            )
+          }
+
+          if (proofStatus === 'quarantined') {
+            return (
+              <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-rose-950/90 via-zinc-900 to-rose-950/40 border border-rose-500/60 p-3.5 text-xs text-rose-200 shadow-xl shadow-rose-950/40 shrink-0 animate-in fade-in">
+                <div className="p-2 rounded-xl bg-rose-500/20 text-rose-400 shrink-0">
+                  <ShieldX className="h-5 w-5" />
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="text-rose-300 font-black tracking-wide uppercase text-[11px]">
+                      ❌ COMPROVANTE REJEITADO NA CONFERÊNCIA
+                    </strong>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+                      Desaprovado (Quarentena)
+                    </span>
+                  </div>
+                  <p className="text-zinc-300 text-xs leading-relaxed">
+                    O comprovante enviado pelo cliente foi recusado pelo atendimento e enviado para quarentena. O cliente foi notificado nos canais cadastrados.
+                  </p>
+                </div>
+              </div>
+            )
+          }
+
+          if (proofStatus === 'canceled') {
+            return (
+              <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-700 p-3.5 text-xs text-zinc-300 shadow-xl shrink-0 animate-in fade-in">
+                <div className="p-2 rounded-xl bg-zinc-800 text-zinc-400 shrink-0">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="text-zinc-300 font-black tracking-wide uppercase text-[11px]">
+                      ⚠️ PEDIDO / COMPROVANTE CANCELADO
+                    </strong>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-800 text-zinc-400 border border-zinc-700">
+                      Cancelado
+                    </span>
+                  </div>
+                  <p className="text-zinc-400 text-xs leading-relaxed">
+                    O pedido ou comprovante vinculado a este atendimento foi cancelado.
+                  </p>
+                </div>
+              </div>
+            )
+          }
+        }
+
         if (resolvido) {
           return (
             <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-emerald-950/90 via-zinc-900 to-emerald-950/40 border border-emerald-500/60 p-3.5 text-xs text-emerald-200 shadow-xl shadow-emerald-950/40 shrink-0">
@@ -547,16 +653,12 @@ export default function OperatorChatConsole({
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
                     {tipoDetectado === 'cancelamento'
                       ? 'Cancelamento Atendido'
-                      : tipoDetectado === 'comprovante'
-                      ? 'Comprovante Validado & Pago'
                       : 'Alteração de Pedido Concluída'}
                   </span>
                 </div>
                 <p className="text-zinc-300 text-xs leading-relaxed">
                   {tipoDetectado === 'cancelamento'
                     ? 'A solicitação de cancelamento foi tratada e confirmada pelo atendimento com o cliente.'
-                    : tipoDetectado === 'comprovante'
-                    ? 'O comprovante enviado pelo cliente foi revisado e o pagamento foi aprovado com sucesso.'
                     : 'A alteração dos componentes/horário do pedido foi salva e notificada com sucesso ao cliente.'}
                 </p>
               </div>
@@ -591,20 +693,38 @@ export default function OperatorChatConsole({
               </p>
 
               {tipoDetectado === 'comprovante' && (() => {
-                const mensagemRecente = mensagens.slice().reverse().find((m) => m.url_anexo)
+                const mensagemRecente = mensagens.slice().reverse().find((m) => m.url_anexo || m.payment_proof_id)
                 if (!mensagemRecente) return null
                 return (
-                  <div className="pt-2 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => window.dispatchEvent(new CustomEvent('asados:open-attachment-preview', {
-                        detail: { messageId: mensagemRecente.id },
-                      }))}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+                  <div className="pt-2 flex flex-wrap items-center gap-2">
+                    {(mensagemRecente.url_anexo || mensagemRecente.payment_proof_id) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          window.dispatchEvent(new CustomEvent('asados:open-attachment-preview', {
+                            detail: { messageId: mensagemRecente.id },
+                          }))
+                          if (mensagemRecente.payment_proof_id) {
+                            handleAbrirVisualizador(
+                              `/api/payment-proofs/${mensagemRecente.payment_proof_id}/preview`,
+                              'comprovante.png',
+                              mensagemRecente.payment_proof_id,
+                            )
+                          }
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
+                      >
+                        <Eye className="h-3.5 w-3.5" />
+                        <span>Visualizar Comprovante Anexo</span>
+                      </button>
+                    )}
+                    <a
+                      href="/atendimento/admin?tab=comprovantes"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-100 font-bold text-xs border border-zinc-700 shadow-md transition-all active:scale-95 cursor-pointer"
                     >
-                      <Eye className="h-3.5 w-3.5" />
-                      <span>Visualizar Comprovante Anexo</span>
-                    </button>
+                      <ExternalLink className="h-3.5 w-3.5 text-amber-400" />
+                      <span>Gerenciar em Comprovantes PIX</span>
+                    </a>
                   </div>
                 )
               })()}
@@ -648,7 +768,18 @@ export default function OperatorChatConsole({
 
                   <p className="whitespace-pre-wrap leading-relaxed break-words">{msg.conteudo}</p>
                   
-                  {msg.payment_proof_id ? <PaymentProofChatCard proofId={msg.payment_proof_id} /> : msg.url_anexo && (
+                  {msg.payment_proof_id ? (
+                    <PaymentProofChatCard
+                      proofId={msg.payment_proof_id}
+                      onOpenPreview={() => {
+                        handleAbrirVisualizador(
+                          `/api/payment-proofs/${msg.payment_proof_id}/preview`,
+                          'comprovante.png',
+                          msg.payment_proof_id,
+                        )
+                      }}
+                    />
+                  ) : msg.url_anexo && (
                     <AttachmentCard
                       messageId={msg.id}
                       urlArquivo={msg.url_anexo}
@@ -734,10 +865,24 @@ export default function OperatorChatConsole({
       {/* Modal de Visualização de Comprovante */}
       <ModalVisualizadorComprovante
         isOpen={comprovanteModal.isOpen}
-        onClose={() => setComprovanteModal({ isOpen: false, urlArquivo: null })}
+        onClose={() => setComprovanteModal({ isOpen: false, urlArquivo: null, proofId: null, pedidoId: null })}
         urlArquivo={comprovanteModal.urlArquivo}
         nomeArquivo={comprovanteModal.nomeArquivo}
         clienteNome={conversa?.clientes?.nome}
+        proofId={comprovanteModal.proofId}
+        pedidoId={comprovanteModal.pedidoId}
+        onAprovarSuccess={() => {
+          setProofStatus('admitted')
+          if (onConversaUpdated) {
+            onConversaUpdated(conversa.id, conversa.ia_ativa, 'aberta')
+          }
+        }}
+        onRejeitarSuccess={() => {
+          setProofStatus('quarantined')
+          if (onConversaUpdated) {
+            onConversaUpdated(conversa.id, conversa.ia_ativa, 'aberta')
+          }
+        }}
       />
     </div>
   )
