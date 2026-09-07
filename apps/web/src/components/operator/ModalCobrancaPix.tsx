@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useState } from 'react'
-import Image from 'next/image'
 import {
   QrCode,
   Copy,
@@ -12,7 +11,6 @@ import {
   ExternalLink,
   ShieldCheck,
   AlertCircle,
-  Sparkles,
 } from 'lucide-react'
 import { enviarCobrancaPixAoCliente } from '@/app/actions/pedidos'
 
@@ -82,7 +80,7 @@ export default function ModalCobrancaPix({
       } else {
         setErroEnvio(res.error || 'Não foi possível enviar a cobrança.')
       }
-    } catch (err: any) {
+    } catch {
       setErroEnvio('Erro técnico ao disparar cobrança.')
     } finally {
       setEnviando(false)
@@ -150,6 +148,7 @@ export default function ModalCobrancaPix({
         <div className="flex flex-col items-center justify-center p-5 rounded-2xl bg-white border border-zinc-200 shadow-inner">
           {dadosPix.qrCodeBase64 ? (
             <div className="relative h-48 w-48 bg-white p-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`data:image/png;base64,${dadosPix.qrCodeBase64}`}
                 alt="QR Code PIX"
