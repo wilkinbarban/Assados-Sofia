@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 const root = process.cwd()
 const wrapper = join(root, 'scripts/workspace-preflight.sh')
 
-function run(args: string[], env: NodeJS.ProcessEnv = {}) {
+function run(args: string[], env: Partial<NodeJS.ProcessEnv> = {}) {
   return execFileSync(wrapper, args, {
     cwd: root,
     encoding: 'utf8',
@@ -36,7 +36,7 @@ describe('workspace preflight', () => {
     ['npm-cache', 'ASADOS_PREFLIGHT_TEST_FORCE_MKDIR_FAILURE_TARGET', 'could not create workspace directory'],
     ['tmp', 'ASADOS_PREFLIGHT_TEST_FORCE_CHMOD_FAILURE_TARGET', 'could not set private workspace permissions'],
     ['npm-cache', 'ASADOS_PREFLIGHT_TEST_FORCE_CHMOD_FAILURE_TARGET', 'could not set private workspace permissions'],
-  ])('reports EDQUOT/quota guidance when run-mode %s provisioning fails', (subdirectory, failureHook, reason) => {
+  ] as const)('reports EDQUOT/quota guidance when run-mode %s provisioning fails', (subdirectory, failureHook, reason) => {
     const home = mkdtempSync(join(tmpdir(), 'asados-home-'))
     const workspace = join(home, 'approved-workspace')
 
@@ -81,7 +81,7 @@ describe('workspace preflight', () => {
       ASADOS_PREFLIGHT_MIN_FREE_BYTES: '0',
       ASADOS_PREFLIGHT_MIN_FREE_INODES: '0',
       ASADOS_PREFLIGHT_TEST_FORCE_MKDIR_FAILURE: '1',
-    })).toThrow(/Workspace preflight failed for target .*missing\/nested\/workspace.*EDQUOT\/quota.*Mitigation:/s)
+    })).toThrow(new RegExp('Workspace preflight failed for target .*missing/nested/workspace.*EDQUOT/quota.*Mitigation:','s'))
   })
 
   it('rejects failed write probes with EDQUOT recovery guidance', () => {
