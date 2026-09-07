@@ -123,7 +123,7 @@ describe('eligible payment-proof orders', () => {
     expect(proofQuery.select).not.toHaveBeenCalled()
   })
 
-  it('does not treat an admitted proof as reconciled without durable reconciliation or approved order', async () => {
+  it('does not treat an admitted proof as reconciled without a durable order link and approved order', async () => {
     const rpc = vi.fn().mockResolvedValueOnce({
       data: { lease_token: 'a'.repeat(64), expires_at: '2026-09-07T03:00:00.000Z' }, error: null,
     }).mockResolvedValue({ data: true, error: null })
@@ -150,6 +150,52 @@ describe('eligible payment-proof orders', () => {
       p_order_ids: [orderId],
       p_lease_token: 'a'.repeat(64),
     }))
+  })
+
+  it('does not report success when a proof is reconciled to a different order', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { message: 'PAYMENT_PROOF_ALREADY_RECONCILED' } })
+    const rows = [
+      { data: null, error: null },
+      { data: { status_pagamento: 'aprovado' }, error: null },
+    ]
+    let row = 0
+    createClientMock.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'supervisor-1' } } }) },
+      from: vi.fn((table: string) => table === 'perfis'
+        ? query({ data: { funcao: 'supervisor', ativo: true } })
+        : query(rows[row++])),
+      rpc,
+    })
+    const proofId = '11111111-1111-4111-8111-111111111111'
+    const orderId = '33333333-3333-4333-8333-333333333341'
+
+    await expect(approvePaymentProofDirectly(proofId, orderId)).resolves.toEqual({
+      success: false,
+      error: 'PAYMENT_PROOF_ALREADY_RECONCILED',
+    })
+    expect(rpc).toHaveBeenCalledWith('acquire_payment_proof_lease', { p_proof_id: proofId })
+  })
+
+  it('accepts an idempotent retry only for the exact durably linked approved order', async () => {
+    const rpc = vi.fn()
+    const rows = [
+      { data: { proof_id: '11111111-1111-4111-8111-111111111111', pedido_id: '33333333-3333-4333-8333-333333333341' }, error: null },
+      { data: { status_pagamento: 'aprovado' }, error: null },
+    ]
+    let row = 0
+    createClientMock.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'supervisor-1' } } }) },
+      from: vi.fn((table: string) => table === 'perfis'
+        ? query({ data: { funcao: 'supervisor', ativo: true } })
+        : query(rows[row++])),
+      rpc,
+    })
+
+    await expect(approvePaymentProofDirectly(
+      '11111111-1111-4111-8111-111111111111',
+      '33333333-3333-4333-8333-333333333341',
+    )).resolves.toEqual({ success: true, alreadyReconciled: true })
+    expect(rpc).not.toHaveBeenCalled()
   })
 
   it.each(['1e3', '0x10', '1.5', '01', '9999999999999', '', 1.5, 1e20])('rejects non-canonical confirmed amounts before RPC: %j', async (value) => {
