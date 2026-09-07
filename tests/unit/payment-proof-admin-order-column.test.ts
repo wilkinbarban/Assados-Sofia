@@ -12,7 +12,14 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: createAdminClientMoc
 vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: gates }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 
-import { listEligiblePaymentProofOrders, listPaymentProofsForAdmin, mutatePaymentProofAdmin } from '@/app/actions/payment-proof-admin'
+import {
+  approvePaymentProofDirectly,
+  getPaymentProofForPreviewModal,
+  listEligiblePaymentProofOrders,
+  listPaymentProofsForAdmin,
+  mutatePaymentProofAdmin,
+  rejectPaymentProofDirectly,
+} from '@/app/actions/payment-proof-admin'
 
 function query(result: unknown) {
   return {
@@ -22,6 +29,7 @@ function query(result: unknown) {
     order: orderMock.mockReturnThis(),
     limit: vi.fn().mockResolvedValue(result),
     single: vi.fn().mockResolvedValue(result),
+    maybeSingle: vi.fn().mockResolvedValue(result),
   }
 }
 
@@ -43,12 +51,12 @@ describe('eligible payment-proof orders', () => {
     expect(orderMock).not.toHaveBeenCalledWith('created_at', expect.anything())
   })
 
-  it('uses leases and the canonical confirmation RPC without exposing database errors', async () => {
+  it('uses leases and the canonical confirmation RPC for privileged staff without exposing database errors', async () => {
     const rpc = vi.fn().mockResolvedValue({ data: true, error: null })
     createClientMock.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'seller-1' } } }) },
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'supervisor-1' } } }) },
       from: vi.fn((table: string) => table === 'perfis'
-        ? query({ data: { funcao: 'vendedor', ativo: true } })
+        ? query({ data: { funcao: 'supervisor', ativo: true } })
         : query({ data: { status: 'admitted', purge_after: null }, error: null })),
       rpc,
     })
@@ -64,11 +72,91 @@ describe('eligible payment-proof orders', () => {
     expect(result).toEqual(expect.objectContaining({ success: true }))
   })
 
-  it.each(['1e3', '0x10', '1.5', '01', '9999999999999', '', 1.5, 1e20])('rejects non-canonical confirmed amounts before RPC: %j', async (value) => {
+  it.each(['confirm_amount', 'reconcile', 'reject'] as const)('denies active vendedores before financial RPC: %s', async (operation) => {
     const rpc = vi.fn()
     createClientMock.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'seller-1' } } }) },
-      from: vi.fn((table: string) => query({ data: table === 'perfis' ? { funcao: 'vendedor', ativo: true } : { status: 'review', purge_after: null }, error: null })), rpc,
+      from: vi.fn((table: string) => query({ data: table === 'perfis' ? { funcao: 'vendedor', ativo: true } : { status: 'review', purge_after: null }, error: null })),
+      rpc,
+    })
+    const input = operation === 'confirm_amount'
+      ? { operation, proofId: '11111111-1111-4111-8111-111111111111', value: 4200, leaseToken: 'a'.repeat(64) }
+      : operation === 'reconcile'
+        ? { operation, proofId: '11111111-1111-4111-8111-111111111111', orderIds: ['33333333-3333-4333-8333-333333333341'], leaseToken: 'a'.repeat(64) }
+        : { operation, proofId: '11111111-1111-4111-8111-111111111111', leaseToken: 'a'.repeat(64) }
+
+    await expect(mutatePaymentProofAdmin(input)).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
+    expect(rpc).not.toHaveBeenCalled()
+  })
+
+  it('denies inactive sellers before financial RPC', async () => {
+    const rpc = vi.fn()
+    createClientMock.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'seller-1' } } }) },
+      from: vi.fn((table: string) => query({ data: table === 'perfis' ? { funcao: 'vendedor', ativo: false } : { status: 'review', purge_after: null }, error: null })),
+      rpc,
+    })
+
+    await expect(mutatePaymentProofAdmin({ operation: 'reject', proofId: '11111111-1111-4111-8111-111111111111', leaseToken: 'a'.repeat(64) })).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
+    expect(rpc).not.toHaveBeenCalled()
+  })
+
+  it('denies vendedores before direct preview, approval, or rejection work', async () => {
+    const rpc = vi.fn()
+    const proofQuery = query({ data: { status: 'review' }, error: null })
+    const from = vi.fn((table: string) => table === 'perfis'
+      ? query({ data: { funcao: 'vendedor', ativo: true } })
+      : proofQuery)
+    createClientMock.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'seller-1' } } }) },
+      from,
+      rpc,
+    })
+    const proofId = '11111111-1111-4111-8111-111111111111'
+    const orderId = '33333333-3333-4333-8333-333333333341'
+
+    await expect(getPaymentProofForPreviewModal(proofId)).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
+    await expect(approvePaymentProofDirectly(proofId, orderId)).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
+    await expect(rejectPaymentProofDirectly(proofId)).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
+    expect(rpc).not.toHaveBeenCalled()
+    expect(from).toHaveBeenCalledTimes(3)
+    expect(proofQuery.select).not.toHaveBeenCalled()
+  })
+
+  it('does not treat an admitted proof as reconciled without durable reconciliation or approved order', async () => {
+    const rpc = vi.fn().mockResolvedValueOnce({
+      data: { lease_token: 'a'.repeat(64), expires_at: '2026-09-07T03:00:00.000Z' }, error: null,
+    }).mockResolvedValue({ data: true, error: null })
+    const rows = [
+      { data: null, error: null },
+      { data: { status_pagamento: 'pendente' }, error: null },
+      { data: { status: 'admitted', confirmed_cents: 4200, suggested_cents: 4200 }, error: null },
+      { data: { total_pedido_centavos: 4200 }, error: null },
+    ]
+    let row = 0
+    createClientMock.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'supervisor-1' } } }) },
+      from: vi.fn((table: string) => table === 'perfis'
+        ? query({ data: { funcao: 'supervisor', ativo: true } })
+        : query(rows[row++])),
+      rpc,
+    })
+    const proofId = '11111111-1111-4111-8111-111111111111'
+    const orderId = '33333333-3333-4333-8333-333333333341'
+
+    await expect(approvePaymentProofDirectly(proofId, orderId)).resolves.toEqual({ success: true })
+    expect(rpc).toHaveBeenCalledWith('reconcile_payment_proof', expect.objectContaining({
+      p_proof_id: proofId,
+      p_order_ids: [orderId],
+      p_lease_token: 'a'.repeat(64),
+    }))
+  })
+
+  it.each(['1e3', '0x10', '1.5', '01', '9999999999999', '', 1.5, 1e20])('rejects non-canonical confirmed amounts before RPC: %j', async (value) => {
+    const rpc = vi.fn()
+    createClientMock.mockResolvedValue({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'supervisor-1' } } }) },
+      from: vi.fn((table: string) => query({ data: table === 'perfis' ? { funcao: 'supervisor', ativo: true } : { status: 'review', purge_after: null }, error: null })), rpc,
     })
     await expect(mutatePaymentProofAdmin({ operation: 'confirm_amount', proofId: '11111111-1111-4111-8111-111111111111', value, leaseToken: 'a'.repeat(64) })).resolves.toEqual({ success: false, error: 'INVALID_AMOUNT' })
     expect(rpc).not.toHaveBeenCalled()
@@ -77,8 +165,8 @@ describe('eligible payment-proof orders', () => {
   it('rejects duplicate, oversized, and non-array orders before reconciliation RPC', async () => {
     const rpc = vi.fn()
     createClientMock.mockResolvedValue({
-      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'seller-1' } } }) },
-      from: vi.fn((table: string) => query({ data: table === 'perfis' ? { funcao: 'vendedor', ativo: true } : { status: 'admitted', purge_after: null }, error: null })), rpc,
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'supervisor-1' } } }) },
+      from: vi.fn((table: string) => query({ data: table === 'perfis' ? { funcao: 'supervisor', ativo: true } : { status: 'admitted', purge_after: null }, error: null })), rpc,
     })
     const id = '33333333-3333-4333-8333-333333333341'
     for (const orderIds of [[id, id], Array.from({ length: 101 }, () => id), 'not-an-array'] as unknown as string[][]) {
