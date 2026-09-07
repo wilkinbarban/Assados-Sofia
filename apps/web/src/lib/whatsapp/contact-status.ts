@@ -1,5 +1,4 @@
 import { SupabaseClient } from '@supabase/supabase-js'
-import { createAdminClient } from '@/lib/supabase/admin'
 
 export type TipoStatusWhatsApp = 'ativo' | 'opted_out' | 'bloqueado'
 export type TipoContatoCliente = 'cliente' | 'candidato_emprego' | 'fornecedor' | 'outro'
