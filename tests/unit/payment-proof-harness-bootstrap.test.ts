@@ -11,6 +11,7 @@ const harnesses = [
 const forwardMigrationImports = new Map([
   ['payment_proof_web_message_idempotency.sql', ['20260906190000_payment_proof_web_message_idempotency.sql']],
   ['payment_proof_restore_authority.sql', ['20260906170000_payment_proof_restore_actor_snapshot.sql']],
+  ['payment_proof_dead_letter_missing_original_disposition.sql', ['20260907120000_payment_proof_dead_letter_missing_original_disposition.sql']],
   ['payment_proof_dead_letter_replay.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828380000_payment_proof_dead_letter_replay.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql', '20260828400000_payment_proof_replay_audit_hardening.sql']],
   ['payment_proof_dead_letter_replay_concurrency.sql', ['20260828340000_payment_proof_operator_leases.sql', '20260828380000_payment_proof_dead_letter_replay.sql', '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql', '20260828400000_payment_proof_replay_audit_hardening.sql']],
   ['payment_proof_leased_amount_confirmation.sql', ['20260903170000_payment_proof_financial_authority.sql']],
@@ -75,7 +76,7 @@ describe('payment proof SQL harness bootstrap', () => {
       '20260903170000_payment_proof_financial_authority.sql',
       '20260903190000_payment_proof_immutable_delivery_provenance.sql',
     ]))
-    expect([...allowed].every((name) => /^202609061(?:70000|90000)_/.test(name) || /^20260828(?:3[4-9]|40)0000_|^202609031(?:70000|90000)_/.test(name))).toBe(true)
+    expect([...allowed].every((name) => /^202609(?:061(?:70000|90000)|07120000)_/.test(name) || /^20260828(?:3[4-9]|40)0000_|^202609031(?:70000|90000)_/.test(name))).toBe(true)
     expect([...allowed]).not.toContain('20260826170000_payment_proof_chat_projection.sql')
   })
 
