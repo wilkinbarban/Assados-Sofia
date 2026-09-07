@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { createClientMock, gates } = vi.hoisted(() => ({ createClientMock: vi.fn(), gates: {
-  canonicalIngest: { effective: false, reason: 'DISABLED' }, whatsappIngest: { effective: false, reason: 'MISSING' }, processing: { effective: false, reason: 'MALFORMED' }, sellerReconciliation: { effective: false, reason: 'DISABLED' }, privilegedReplay: { effective: false, reason: 'UNREADABLE' }, cleanup: { effective: false, reason: 'DISABLED' },
+  canonicalIngest: { effective: false, reason: 'DISABLED' }, whatsappIngest: { effective: false, reason: 'MISSING' }, telegramIngest: { effective: false, reason: 'MALFORMED' }, processing: { effective: false, reason: 'MALFORMED' }, sellerReconciliation: { effective: false, reason: 'DISABLED' }, privilegedReplay: { effective: false, reason: 'UNREADABLE' }, cleanup: { effective: false, reason: 'DISABLED' }, restore: { effective: false, reason: 'DISABLED' },
 } }))
 vi.mock('@/lib/supabase/server', () => ({ createClient: createClientMock }))
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
@@ -18,10 +18,10 @@ const actor = (role = 'admin') => ({
 describe('payment-proof operational gate diagnostics', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('returns a fixed, copied six-gate redacted DTO after privileged active-role authorization without DB reads', async () => {
+  it('returns a fixed, copied seven-gate redacted DTO after privileged active-role authorization without DB reads', async () => {
     const session = actor('supervisor'); createClientMock.mockResolvedValue(session)
     await expect(getPaymentProofOperationalGatesDiagnostics()).resolves.toEqual({ success: true, data: {
-      canonicalIngest: { effective: false, reason: 'DISABLED' }, whatsappIngest: { effective: false, reason: 'MISSING' }, processing: { effective: false, reason: 'MALFORMED' }, sellerReconciliation: { effective: false, reason: 'DISABLED' }, privilegedReplay: { effective: false, reason: 'UNREADABLE' }, cleanup: { effective: false, reason: 'DISABLED' },
+      canonicalIngest: { effective: false, reason: 'DISABLED' }, whatsappIngest: { effective: false, reason: 'MISSING' }, telegramIngest: { effective: false, reason: 'MALFORMED' }, processing: { effective: false, reason: 'MALFORMED' }, sellerReconciliation: { effective: false, reason: 'DISABLED' }, privilegedReplay: { effective: false, reason: 'UNREADABLE' }, cleanup: { effective: false, reason: 'DISABLED' }, restore: { effective: false, reason: 'DISABLED' },
     } })
     expect(session.rpc).not.toHaveBeenCalled()
     expect(Object.values(session.from.mock.results)).toHaveLength(1)
