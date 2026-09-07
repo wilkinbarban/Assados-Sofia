@@ -43,15 +43,17 @@ recreate_and_verify() {
   if [[ "$close_payment_proof_gates" == true ]]; then
     PAYMENT_PROOF_CANONICAL_INGEST_ENABLED=false \
     WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED=false \
+    TELEGRAM_PAYMENT_PROOF_INGEST_ENABLED=false \
     PAYMENT_PROOF_PROCESSING_ENABLED=false \
     PAYMENT_PROOF_SELLER_RECONCILIATION_ENABLED=false \
     PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false \
     PAYMENT_PROOF_CLEANUP_ENABLED=false \
+    PAYMENT_PROOF_RESTORE_ENABLED=false \
     ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
-      --project-directory "$root" up -d --no-deps --force-recreate web
+      --project-directory "$root" --project-name asados up -d --no-deps --force-recreate web
   else
     ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
-      --project-directory "$root" up -d --no-deps --force-recreate web
+      --project-directory "$root" --project-name asados up -d --no-deps --force-recreate web
   fi
   wait_healthy
   ASADOS_EXPECTED_IMAGE_ID="$expected_id" "$smoke"

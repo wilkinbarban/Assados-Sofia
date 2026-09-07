@@ -40,12 +40,12 @@ describe('payment-proof dead-letter operations', () => {
     expect(rpc).not.toHaveBeenCalledWith('replay_payment_proof_dead_letter', expect.anything())
   })
 
-  it('denies seller reconciliation mutations before RPC while leaving lease and ordinary rejection available', async () => {
+  it('keeps the operational gate for privileged confirmation and reconciliation, while privileged rejection remains available', async () => {
     gates.sellerReconciliation.effective = false
     const rpc = vi.fn(async (name: string) => name === 'acquire_payment_proof_lease'
       ? { data: { lease_token: 'a'.repeat(64), expires_at: '2026-08-27T12:00:00Z' }, error: null }
       : { data: null, error: null })
-    createClientMock.mockResolvedValue(actor(rpc))
+    createClientMock.mockResolvedValue(actor(rpc, 'supervisor'))
     const proofId = '11111111-1111-4111-8111-111111111111'
     const leaseToken = 'a'.repeat(64)
 
