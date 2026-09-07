@@ -42,5 +42,14 @@ jobs:
       - name: Type-check
         run: npx tsc --noEmit
 
-      - name: Run unit tests
-        run: npm run test:unit -- --allowOnly=false
+      - name: Build production bundle
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder
+        run: npm run build --workspace @asados/web -- --webpack
+
+      - name: Run hermetic tests
+        run: >-
+          npm run test:unit -- --allowOnly=false
+          --exclude tests/unit/roles-authentication-e2e.test.ts
+          --exclude tests/unit/web-client-operator-cart-flow.test.ts
