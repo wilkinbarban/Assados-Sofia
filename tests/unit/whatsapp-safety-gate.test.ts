@@ -1,9 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import {
   validarEnvioWhatsAppSafety,
-  gerarChaveDedupCardapio,
-  gerarChaveDedupConteudo,
-  TipoCategoriaMensagem,
 } from '@/lib/whatsapp/safety'
 
 describe('WhatsApp Safety Gate: Governança, Limites e Bloqueio Proativo', () => {
