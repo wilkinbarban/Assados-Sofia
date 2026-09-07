@@ -1,8 +1,13 @@
 
+\ir ../migrations/20260903190000_payment_proof_immutable_delivery_provenance.sql
 select plan(1);
 set role postgres;
 insert into public.clientes(id,nome,telefone) values
 ('29292929-2929-4292-8292-292929292921','Extraction customer','5541999999982') on conflict do nothing;
+insert into public.conversas(id,cliente_id,status,ia_ativa) values
+('29292929-2929-4292-8292-292929292941','29292929-2929-4292-8292-292929292921','aberta',false) on conflict do nothing;
+insert into public.pedidos(id,cliente_id,status,status_pagamento,tipo_entrega,meio_pagamento,total_produtos_centavos,taxa_entrega_centavos,total_pedido_centavos) values
+('29292929-2929-4292-8292-292929292961','29292929-2929-4292-8292-292929292921','confirmado','pendente','retirada','pix',4200,0,4200) on conflict do nothing;
 reset role;
 set role service_role;
 select set_config('request.jwt.claim','{"role":"service_role"}',false);
@@ -11,7 +16,8 @@ declare p record; first_event bigint; replay_event bigint;
 begin
  select * into p from public.admit_payment_proof_intake(
   'web','extract-one','29292929-2929-4292-8292-292929292921',null,
-  'proofs/private/extract-one.pdf',100,'application/pdf');
+  'proofs/private/extract-one.pdf',100,'application/pdf','29292929-2929-4292-8292-292929292961',
+  '29292929-2929-4292-8292-292929292941',repeat('1',64));
  select public.record_payment_proof_advisory(
   p.proof_id,'attempt-one','accepted',true,0.91,4200,'payment_markers_present','test/model'
  ) into first_event;

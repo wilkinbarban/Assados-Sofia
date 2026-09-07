@@ -1,8 +1,10 @@
+\ir ../migrations/20260903190000_payment_proof_immutable_delivery_provenance.sql
 select plan(1);set role postgres;
 insert into public.clientes(id,nome,telefone) values('32323232-3232-4232-8232-323232323221','Chat customer','5541999999985') on conflict do nothing;
-insert into public.conversas(id,cliente_id,status,ia_ativa) values('32323232-3232-4232-8232-323232323241','32323232-3232-4232-8232-323232323221','aberta',false) on conflict do nothing;reset role;
+insert into public.conversas(id,cliente_id,status,ia_ativa) values('32323232-3232-4232-8232-323232323241','32323232-3232-4232-8232-323232323221','aberta',false) on conflict do nothing;
+insert into public.pedidos(id,cliente_id,status,status_pagamento,tipo_entrega,meio_pagamento,total_produtos_centavos,taxa_entrega_centavos,total_pedido_centavos) values('32323232-3232-4232-8232-323232323261','32323232-3232-4232-8232-323232323221','confirmado','pendente','retirada','pix',4200,0,4200) on conflict do nothing;reset role;
 set role service_role;select set_config('request.jwt.claim','{"role":"service_role"}',false);
-do $$declare p record;a uuid;b uuid;begin select * into p from public.admit_payment_proof_intake('web','chat-proof','32323232-3232-4232-8232-323232323221',null,'proofs/private/chat.pdf',100,'application/pdf');
+do $$declare p record;a uuid;b uuid;begin select * into p from public.admit_payment_proof_intake('web','chat-proof','32323232-3232-4232-8232-323232323221',null,'proofs/private/chat.pdf',100,'application/pdf','32323232-3232-4232-8232-323232323261','32323232-3232-4232-8232-323232323241',repeat('3',64));
  update public.payment_proofs set status='admitted',preview_storage_key='proofs/private/chat.png' where id=p.proof_id;
  select public.project_payment_proof_to_chat(p.proof_id,'32323232-3232-4232-8232-323232323241') into a;
  select public.project_payment_proof_to_chat(p.proof_id,'32323232-3232-4232-8232-323232323241') into b;

@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { NextResponse } from 'next/server'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { dispatchPaymentProofOutbox } from '@/lib/payment-proofs/outbox-dispatch'
+import { resolvePaymentProofOutboxMessage } from '@/lib/payment-proofs/outbox-message'
 import { processPaymentProofJob } from '@/lib/payment-proofs/processing-worker'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
@@ -68,16 +69,22 @@ export async function POST(request: Request) {
             ok = !removal.error
           }
         } else {
-          const result = await dispatchPaymentProofOutbox({
-            channel: job.channel,
-            conversationId: job.conversation_id ?? null,
-            message: job.payload.message ?? job.payload.message_key ?? '',
-            deliveryKey: job.delivery_key,
-            db,
-          })
-          outboxDisposition = result.status
-          outboxError = result.error ?? null
-          ok = result.status === 'success'
+          const message = resolvePaymentProofOutboxMessage(job.payload)
+          if (!message.ok) {
+            outboxDisposition = 'permanent'
+            outboxError = 'unsupported_payload'
+          } else {
+            const result = await dispatchPaymentProofOutbox({
+              channel: job.channel,
+              conversationId: job.conversation_id ?? null,
+              message: message.text,
+              deliveryKey: job.delivery_key,
+              db,
+            })
+            outboxDisposition = result.status
+            outboxError = result.error ?? null
+            ok = result.status === 'success'
+          }
         }
       } catch {
         ok = false

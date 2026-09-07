@@ -7,7 +7,7 @@ describe('CRM workspace visual hierarchy', () => {
   it('gives the commercial workspace more room than the queue and labels the regions', () => {
     const source = read('apps/web/src/components/operator/OperatorInboxContainer.tsx')
     expect(source).toContain('2xl:w-[22rem]')
-    expect(source).toContain('xl:w-[24rem] 2xl:w-[30rem]')
+    expect(source).toContain('xl:w-[28rem] 2xl:w-[32rem]')
     expect(source).toContain('Atendimento')
     expect(source).toContain('Venda e relacionamento')
   })
