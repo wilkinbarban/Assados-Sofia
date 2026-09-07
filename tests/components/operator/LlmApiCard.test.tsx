@@ -2,7 +2,7 @@ import React from 'react'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import LlmApiCard from '@/components/operator/integrations/LlmApiCard'
-import { salvarConfiguracaoAdmin, testarConexaoOmniRoute, testarConexaoLLM } from '@/app/actions/admin'
+import { salvarConfiguracaoAdmin, testarConexaoOmniRoute } from '@/app/actions/admin'
 
 vi.mock('@/app/actions/admin', () => ({
   salvarConfiguracaoAdmin: vi.fn().mockResolvedValue({ success: true }),

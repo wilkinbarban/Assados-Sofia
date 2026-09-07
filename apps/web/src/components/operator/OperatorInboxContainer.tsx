@@ -4,11 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import {
   AlertTriangle,
   Package,
-  Bell,
-  CheckCircle2,
   X,
-  ExternalLink,
-  Flame,
   ArrowRight,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -617,7 +613,7 @@ export default function OperatorInboxContainer({
           data-testid="commercial-region"
           aria-label="Carrinho, pedidos e dados do cliente"
           data-workspace-label="Venda e relacionamento"
-          className="h-[36rem] w-full shrink-0 overflow-hidden xl:h-full xl:w-[24rem] 2xl:w-[30rem]"
+          className="h-[36rem] w-full shrink-0 overflow-hidden xl:h-full xl:w-[28rem] 2xl:w-[32rem]"
         >
           <ClientCrmPanel
             cliente={activeConversa?.clientes || null}

@@ -18,7 +18,6 @@ import {
   UploadCloud,
   FileText,
   Trash2,
-  Paperclip,
 } from 'lucide-react'
 import {
   gerarCobrancaPixPedido,
@@ -140,7 +139,7 @@ export default function ModalPagamentoCliente({
         } else {
           setErroPix(res.error || 'Não foi possível gerar a chave PIX.')
         }
-      } catch (err: any) {
+      } catch {
         if (!ativo) return
         setErroPix('Erro ao conectar ao serviço de pagamentos.')
       } finally {
@@ -170,7 +169,7 @@ export default function ModalPagamentoCliente({
         } else {
           setErroMp(res.error || 'Não foi possível gerar o link de pagamento.')
         }
-      } catch (err: any) {
+      } catch {
         if (!ativo) return
         setErroMp('Erro ao gerar checkout com cartão.')
       } finally {
@@ -405,6 +404,7 @@ export default function ModalPagamentoCliente({
                 <div className="flex flex-col items-center justify-center p-4 rounded-2xl bg-white border border-zinc-200 shadow-inner">
                   {dadosPix.qrCodeBase64 ? (
                     <div className="relative h-44 w-44 bg-white p-1">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
                         src={`data:image/png;base64,${dadosPix.qrCodeBase64}`}
                         alt="QR Code PIX Mercado Pago"

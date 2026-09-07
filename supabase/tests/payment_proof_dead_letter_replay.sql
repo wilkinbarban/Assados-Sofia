@@ -1,7 +1,10 @@
+select to_regclass('private.payment_proof_dead_letter_replay_requests') is null as apply_replay_chain \gset
+\if :apply_replay_chain
 \ir ../migrations/20260828340000_payment_proof_operator_leases.sql
 \ir ../migrations/20260828380000_payment_proof_dead_letter_replay.sql
 \ir ../migrations/20260828390000_payment_proof_purge_fencing_and_replay_purge.sql
 \ir ../migrations/20260828400000_payment_proof_replay_audit_hardening.sql
+\endif
 begin;
 select plan(45);
 set local role postgres;
@@ -97,7 +100,7 @@ select is(public.replay_payment_proof_dead_letter('processing_queue','38383838-3
 reset role;
 set local role postgres;
 select ok((select status='pending' and attempts=0 and failure_stage is null and claimed_until is null and lease_token is null from private.payment_proof_processing_queue where proof_id='38383838-3838-4383-8383-383838383811') and (select count(*)=1 from private.payment_proof_dead_letter_replay_requests where idempotency_key='38383838-3838-4383-8383-383838383822'),'conflict leaves target untouched and retains one original key');
-select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests),7,'private immutable ledger retains one row for each keyed request');
+select is((select count(*)::integer from private.payment_proof_dead_letter_replay_requests where idempotency_key between '38383838-3838-4383-8383-383838383821'::uuid and '38383838-3838-4383-8383-383838383830'::uuid),7,'private immutable ledger retains one row for each keyed fixture request');
 select ok(not exists(select 1 from pg_constraint where conrelid='private.payment_proof_dead_letter_replay_requests'::regclass and contype='u' and pg_get_constraintdef(oid) like '%request_fingerprint%'),'request fingerprint is not a uniqueness key');
 select ok(not exists(select 1 from information_schema.columns where table_schema='private' and table_name='payment_proof_dead_letter_replay_requests' and column_name~'(error|payload|token|secret)'),'request ledger has no raw error, payload, token, or secret column');
 select ok(not exists(select 1 from pg_trigger t join pg_class c on c.oid=t.tgrelid where c.relname in('payment_proof_processing_queue','payment_proof_outbox') and t.tgname ilike '%replay%'),'replay has no automatic trigger');
