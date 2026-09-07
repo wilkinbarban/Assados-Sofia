@@ -13,7 +13,6 @@ import {
   User, 
   UserCheck, 
   Loader2, 
-  Download,
   ShoppingCart,
   Plus,
   Minus,
@@ -24,11 +23,9 @@ import {
   Package,
   Lock,
   ReceiptText,
-  ExternalLink,
   Eye,
   QrCode,
   FileCheck,
-  CreditCard,
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { novaMensagemSchema } from '@/lib/validation/chat';
@@ -423,7 +420,7 @@ export default function ChatContainer({
     const fetchSignedUrls = async () => {
       const pendingPaths = mensagens
         .map((m) => m.url_anexo)
-        .filter((url): url is string => !!url && !url.startsWith('http') && !signedUrls[url]);
+        .filter((url): url is string => !!url && !url.startsWith('http') && !url.startsWith('/api/') && !signedUrls[url]);
 
       if (pendingPaths.length === 0) return;
 
