@@ -105,6 +105,32 @@ describe('payment-proof maintenance route', () => {
     expect(rpc).toHaveBeenCalledWith('finish_payment_proof_maintenance', { p_success: false })
   })
 
+  it('permanently completes unsupported outbox payloads without dispatching them', async () => {
+    const { db, rpc } = client([{ kind:'outbox',id:'unsupported',channel:'web',conversation_id:'conversation',payload:{ message_key:'unknown' },delivery_key:'key',attempt:1,lease_token:'lease-unsupported' }])
+    mocks.createAdminClient.mockReturnValue(db)
+
+    const response = await POST(request())
+
+    expect(await response.json()).toEqual({ completed:0, failed:1 })
+    expect(mocks.dispatch).not.toHaveBeenCalled()
+    expect(rpc).toHaveBeenCalledWith('complete_payment_proof_maintenance', {
+      p_kind:'outbox', p_id:'unsupported', p_disposition:'permanent', p_error:'unsupported_payload',
+      p_lease_token:'lease-unsupported', p_attempt:1,
+    })
+  })
+
+  it('resolves audited outbox payload keys to customer text before dispatch', async () => {
+    const { db } = client([{ kind:'outbox',id:'resolved',channel:'web',conversation_id:'conversation',payload:{ message_key:'payment_proof_under_review' },delivery_key:'key',attempt:1,lease_token:'lease-resolved' }])
+    mocks.createAdminClient.mockReturnValue(db)
+    mocks.dispatch.mockResolvedValue({ status: 'success' })
+
+    await POST(request())
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Não foi possível validar este comprovante automaticamente. Ele será analisado por um atendente humano.',
+    }))
+  })
+
   it('forwards an outbox permanent disposition and bounded reason to its fenced completion', async () => {
     const { db, rpc } = client([{ kind:'outbox',id:'7',channel:'web',conversation_id:null,payload:{ message:'m' },delivery_key:'key',attempt:1,lease_token:'lease-o' }])
     mocks.createAdminClient.mockReturnValue(db)

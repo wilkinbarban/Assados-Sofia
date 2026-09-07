@@ -19,6 +19,7 @@ type DownloadError =
   | 'EVOLUTION_MEDIA_SIZE_INVALID'
   | 'EVOLUTION_MEDIA_SIZE_MISMATCH'
   | 'EVOLUTION_MEDIA_BASE64_INVALID'
+  | 'EVOLUTION_MEDIA_PDF_SIGNATURE_INVALID'
   | 'EVOLUTION_MEDIA_DOWNLOAD_FAILED'
   | 'EVOLUTION_MEDIA_HTTP_AUTH'
   | 'EVOLUTION_MEDIA_HTTP_CONTRACT'
@@ -46,14 +47,19 @@ function validSize(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
-async function readBoundedJsonBody(response: Response): Promise<Uint8Array | null> {
+async function readBoundedJsonBody(response: Response, signal: AbortSignal): Promise<Uint8Array | null> {
   if (!response.body) return null
   const reader = response.body.getReader()
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const abort = () => reject(new DOMException('Aborted', 'AbortError'))
+    if (signal.aborted) abort()
+    else signal.addEventListener('abort', abort, { once: true })
+  })
   const chunks: Uint8Array[] = []
   let total = 0
   try {
     while (true) {
-      const { done, value } = await reader.read()
+      const { done, value } = await Promise.race([reader.read(), aborted])
       if (done) break
       total += value.byteLength
       if (total > MAX_EVOLUTION_MEDIA_JSON_BYTES) {
@@ -62,6 +68,9 @@ async function readBoundedJsonBody(response: Response): Promise<Uint8Array | nul
       }
       chunks.push(value)
     }
+  } catch (error) {
+    if (signal.aborted) void reader.cancel().catch(() => undefined)
+    throw error
   } finally {
     reader.releaseLock()
   }
@@ -119,7 +128,7 @@ export async function downloadEvolutionPdf(input: DownloadInput) {
         return failure('EVOLUTION_MEDIA_TOO_LARGE', false)
       }
     }
-    const encodedPayload = await readBoundedJsonBody(response)
+    const encodedPayload = await readBoundedJsonBody(response, controller.signal)
     if (!encodedPayload) return failure('EVOLUTION_MEDIA_TOO_LARGE', false)
     let payload: any = null
     try {
@@ -134,6 +143,9 @@ export async function downloadEvolutionPdf(input: DownloadInput) {
 
     const bytes = decodeStrictBase64(payload.base64)
     if (!bytes) return failure('EVOLUTION_MEDIA_BASE64_INVALID', false)
+    if (bytes[0] !== 0x25 || bytes[1] !== 0x50 || bytes[2] !== 0x44 || bytes[3] !== 0x46 || bytes[4] !== 0x2d) {
+      return failure('EVOLUTION_MEDIA_PDF_SIGNATURE_INVALID', false)
+    }
     if (bytes.byteLength > MAX_EVOLUTION_PDF_BYTES) return failure('EVOLUTION_MEDIA_TOO_LARGE', false)
     if (bytes.byteLength !== responseSize || (input.declaredSize !== undefined && bytes.byteLength !== input.declaredSize)) {
       return failure('EVOLUTION_MEDIA_SIZE_MISMATCH', false)
