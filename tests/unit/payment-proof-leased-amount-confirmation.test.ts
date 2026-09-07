@@ -39,10 +39,9 @@ describe('leased payment-proof amount confirmation', () => {
     expect(migration).toContain("set status='admitted',confirmed_cents=p_confirmed_cents,updated_at=now()")
   })
 
-  it('ships a harness that imports leases before confirmation and rejects every non-review lifecycle state', () => {
+  it('ships a harness that imports the current financial authority boundary and rejects every non-review lifecycle state', () => {
     const harness = readFileSync('supabase/tests/payment_proof_leased_amount_confirmation.sql', 'utf8')
-    expect(harness).toContain('\\ir ../migrations/20260828340000_payment_proof_operator_leases.sql')
-    expect(harness).toContain('\\ir ../migrations/20260828360000_payment_proof_leased_amount_confirmation.sql')
+    expect(harness).toContain('\\ir ../migrations/20260903170000_payment_proof_financial_authority.sql')
     for (const status of ['received', 'identity_pending', 'processing', 'quarantined', 'duplicate', 'purged']) {
       expect(harness).toContain(`'${status}'`)
     }
