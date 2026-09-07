@@ -1,0 +1,61 @@
+name: Change proposal
+description: Propose an approved, reviewable product, operations, or maintenance change
+title: "[Change]: "
+labels: []
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or opportunity
+      description: Describe the current behavior, risk, or opportunity using repository evidence.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: State the observable result and acceptance criteria.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Change type
+      description: Select the single best classification.
+      options:
+        - Bug fix
+        - Feature
+        - Documentation
+        - Refactor
+        - Chore
+        - Breaking change
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope and exclusions
+      description: List included work, explicit exclusions, dependencies, and rollout or rollback boundaries.
+    validations:
+      required: true
+
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification plan
+      description: Describe focused automated checks and any manual or production verification required.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: acknowledgement
+    attributes:
+      label: Submission checks
+      options:
+        - label: I reviewed this proposal for secrets, credentials, private paths, personal data, and unsafe production instructions.
+          required: true
+        - label: I understand that implementation and merge require a separate reviewed pull request.
+          required: true
