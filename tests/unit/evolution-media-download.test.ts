@@ -51,6 +51,29 @@ describe('Evolution media download boundary', () => {
     await expect(downloadEvolutionPdf(input)).resolves.toEqual({ ok: false, error, retryable: false })
   })
 
+  it.each([
+    new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+    new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x20, 0x31]),
+  ])('rejects truncated or wrong-signature bytes', async (bytes) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      mimetype: 'application/pdf', base64: Buffer.from(bytes).toString('base64'), size: { fileLength: bytes.length },
+    }), { status: 200 })))
+
+    await expect(downloadEvolutionPdf(input)).resolves.toEqual({ ok: false, error: 'EVOLUTION_MEDIA_PDF_SIGNATURE_INVALID', retryable: false })
+  })
+
+  it('times out and cancels a response stream stalled after headers', async () => {
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      pull() { return new Promise<void>(() => undefined) },
+      cancel() { cancelled = true },
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { status: 200 })))
+
+    await expect(downloadEvolutionPdf({ ...input, timeoutMs: 10 })).resolves.toEqual({ ok: false, error: 'EVOLUTION_MEDIA_DOWNLOAD_TIMEOUT', retryable: true })
+    expect(cancelled).toBe(true)
+  })
+
   it('rejects an oversized chunked response during streaming and cancels the reader', async () => {
     let cancelled = false
     const chunk = new Uint8Array(1024 * 1024)

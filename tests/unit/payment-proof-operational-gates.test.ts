@@ -7,6 +7,8 @@ const variables = {
   reconciliation: 'PAYMENT_PROOF_SELLER_RECONCILIATION_ENABLED',
   replay: 'PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED',
   cleanup: 'PAYMENT_PROOF_CLEANUP_ENABLED',
+  telegram: 'TELEGRAM_PAYMENT_PROOF_INGEST_ENABLED',
+  restore: 'PAYMENT_PROOF_RESTORE_ENABLED',
 } as const
 
 describe('payment-proof operational startup gates', () => {
@@ -19,6 +21,8 @@ describe('payment-proof operational startup gates', () => {
       [variables.reconciliation]: undefined,
       [variables.replay]: 1,
       [variables.cleanup]: ' false',
+      [variables.telegram]: 'true',
+      [variables.restore]: 'true',
       UNRELATED_FLAG: 'true',
     })
 
@@ -29,6 +33,8 @@ describe('payment-proof operational startup gates', () => {
       sellerReconciliation: { effective: false, reason: 'MISSING' },
       privilegedReplay: { effective: false, reason: 'MALFORMED' },
       cleanup: { effective: false, reason: 'MALFORMED' },
+      telegramIngest: { effective: true, reason: 'ENABLED' },
+      restore: { effective: true, reason: 'ENABLED' },
     })
     expect(Object.isFrozen(gates)).toBe(true)
     expect(JSON.stringify(gates)).not.toContain('UNRELATED_FLAG')
@@ -38,21 +44,36 @@ describe('payment-proof operational startup gates', () => {
     const { createPaymentProofOperationalGates } = await import('@/lib/payment-proofs/operational-gates')
     const unreadable = createPaymentProofOperationalGates(new Proxy({}, { get() { throw new Error('unreadable') } }))
     expect(unreadable.canonicalIngest).toEqual({ effective: false, reason: 'UNREADABLE' })
+    expect(unreadable.telegramIngest).toEqual({ effective: false, reason: 'UNREADABLE' })
 
     const originalCanonical = process.env[variables.canonical]
+    const originalTelegram = process.env[variables.telegram]
+    const originalRestore = process.env[variables.restore]
     try {
       vi.resetModules()
       process.env[variables.canonical] = 'true'
+      process.env[variables.telegram] = 'true'
+      process.env[variables.restore] = 'true'
       const first = await import('@/lib/payment-proofs/operational-gates')
       process.env[variables.canonical] = 'false'
+      process.env[variables.telegram] = 'false'
+      process.env[variables.restore] = 'false'
       expect(first.paymentProofOperationalGates.canonicalIngest).toEqual({ effective: true, reason: 'ENABLED' })
+      expect(first.paymentProofOperationalGates.telegramIngest).toEqual({ effective: true, reason: 'ENABLED' })
+      expect(first.paymentProofOperationalGates.restore).toEqual({ effective: true, reason: 'ENABLED' })
 
       vi.resetModules()
       const fresh = await import('@/lib/payment-proofs/operational-gates')
       expect(fresh.paymentProofOperationalGates.canonicalIngest).toEqual({ effective: false, reason: 'DISABLED' })
+      expect(fresh.paymentProofOperationalGates.telegramIngest).toEqual({ effective: false, reason: 'DISABLED' })
+      expect(fresh.paymentProofOperationalGates.restore).toEqual({ effective: false, reason: 'DISABLED' })
     } finally {
       if (originalCanonical === undefined) delete process.env[variables.canonical]
       else process.env[variables.canonical] = originalCanonical
+      if (originalTelegram === undefined) delete process.env[variables.telegram]
+      else process.env[variables.telegram] = originalTelegram
+      if (originalRestore === undefined) delete process.env[variables.restore]
+      else process.env[variables.restore] = originalRestore
     }
   })
 })
