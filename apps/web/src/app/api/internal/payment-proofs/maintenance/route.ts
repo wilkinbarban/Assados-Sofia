@@ -47,6 +47,8 @@ export async function POST(request: Request) {
       }
 
       let ok = false
+      let outboxDisposition: 'success'|'retryable'|'permanent' = 'retryable'
+      let outboxError: string | null = null
       // A throw before the worker can return a narrower stage is a load-boundary failure.
       let failureStage: 'load'|'render'|'preview'|'classifier'|null = job.kind === 'processing' ? 'load' : null
       try {
@@ -68,11 +70,13 @@ export async function POST(request: Request) {
         } else {
           const result = await dispatchPaymentProofOutbox({
             channel: job.channel,
-            conversationId: job.payload.conversation_id ?? null,
+            conversationId: job.conversation_id ?? null,
             message: job.payload.message ?? job.payload.message_key ?? '',
             deliveryKey: job.delivery_key,
             db,
           })
+          outboxDisposition = result.status
+          outboxError = result.error ?? null
           ok = result.status === 'success'
         }
       } catch {
@@ -85,8 +89,10 @@ export async function POST(request: Request) {
       const transition = await db.rpc('complete_payment_proof_maintenance', {
         p_kind: job.kind,
         p_id: String(job.id),
-        p_success: ok,
-        p_error: ok ? null : (job.kind === 'processing' ? failureStage : 'operation_failed'),
+        p_disposition: job.kind === 'outbox'
+          ? outboxDisposition
+          : ok ? 'success' : 'retryable',
+        p_error: ok ? null : (job.kind === 'processing' ? failureStage : job.kind === 'outbox' ? outboxError : 'operation_failed'),
         p_lease_token: leaseToken,
         p_attempt: attempt,
       })

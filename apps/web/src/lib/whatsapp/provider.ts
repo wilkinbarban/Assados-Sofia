@@ -26,6 +26,13 @@ export interface ProvedorWhatsApp {
   enviarMensagem(conversaId: string, payload: EnviarMensagemPayload): Promise<ResultadoEnvio>;
 }
 
+export class WhatsAppWindowClosedError extends Error {
+  constructor() {
+    super('Janela de 24 horas excedida. É obrigatório o envio de um template homologado.')
+    this.name = 'WhatsAppWindowClosedError'
+  }
+}
+
 /**
  * Infere o tipo de mídia a partir da extensão do arquivo
  */
@@ -89,7 +96,7 @@ export async function validarJanelaEnvio(conversaId: string, payload: EnviarMens
 
   // 4. Aplicar restrição da janela de 24 horas
   if (janelaExcedida && !payload.templateName) {
-    throw new Error('Janela de 24 horas excedida. É obrigatório o envio de um template homologado.')
+    throw new WhatsAppWindowClosedError()
   }
 
   return { telefone, supabase }
