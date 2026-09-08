@@ -1,6 +1,6 @@
 import React from 'react'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import AdminDashboard from '@/components/operator/AdminDashboard'
 import { obterMetricasFinanceirasOperacionais } from '@/app/actions/admin'
 
@@ -25,6 +25,7 @@ const metrics = { period: { startAt: '2026-08-01T00:00:00.000Z', endAt: '2026-08
 
 describe('AdminDashboard financial metrics', () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(obterMetricasFinanceirasOperacionais).mockResolvedValue({ success: true, data: metrics, fetchedAt: '2026-08-31T12:00:00.000Z' }) })
+  afterEach(cleanup)
   it('loads the default 30-day operational-financial audit and retains unavailable margin disclosure', async () => {
     render(<AdminDashboard {...props} />)
     await waitFor(() => expect(obterMetricasFinanceirasOperacionais).toHaveBeenCalledOnce())
