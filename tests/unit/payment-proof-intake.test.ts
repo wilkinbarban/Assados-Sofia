@@ -1,3 +1,4 @@
+import sharp from 'sharp'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { normalizePaymentProofDelivery, validatePaymentProofPdf } from '@/lib/payment-proofs/intake'
 
@@ -120,9 +121,19 @@ describe('payment proof intake adapters', () => {
     const edge = boundary()
 
     await expect(ingestCanonicalPaymentProof({ ...input('web', 'invalid', edge), bytes: new Uint8Array([1,2,3,4,5]) }))
-      .resolves.toEqual({ status: 'rejected', error: 'PDF_SIGNATURE_INVALID' })
+      .resolves.toEqual({ status: 'rejected', error: 'PAYMENT_PROOF_SIGNATURE_INVALID' })
     expect(edge.upload).not.toHaveBeenCalled()
     expect(edge.rpc).not.toHaveBeenCalled()
+  })
+
+  it('admits PNG proofs through the same canonical queue with their normalized MIME type', async () => {
+    const edge = boundary({ data: { proof_id: 'proof-image-1', duplicate: false } })
+    const png = new Uint8Array(await sharp({ create: { width: 1, height: 1, channels: 4, background: 'red' } }).png().toBuffer())
+
+    await expect(ingestCanonicalPaymentProof({ ...input('web', 'image-1', edge), bytes: png, mimeType: 'image/png' }))
+      .resolves.toEqual({ status: 'accepted', proofId: 'proof-image-1', storageKey: expect.stringMatching(/\.png$/) })
+    expect(edge.upload).toHaveBeenCalledWith(expect.stringMatching(/\.png$/), expect.any(Uint8Array), expect.objectContaining({ contentType: 'image/png' }))
+    expect(edge.rpc).toHaveBeenCalledWith('admit_and_enqueue_payment_proof', expect.objectContaining({ p_mime_type: 'image/png' }))
   })
 
   it('stops at accepted admission without doing worker-owned processing', async () => {

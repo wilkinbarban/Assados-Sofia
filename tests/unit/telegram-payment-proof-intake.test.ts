@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   verificarHorarioAtendimento: vi.fn(),
   queueCanonicalPaymentProof: vi.fn(),
   downloadTelegramDocument: vi.fn(),
+  enviarOrientacaoComprovanteTelegram: vi.fn(),
   gates: { canonicalIngest: { effective: true }, telegramIngest: { effective: true } },
 }))
 
@@ -18,6 +19,10 @@ vi.mock('@/lib/config/sistema', () => ({
 vi.mock('@/lib/horarios/verificar', () => ({ verificarHorarioAtendimento: mocks.verificarHorarioAtendimento }))
 vi.mock('@/lib/payment-proofs/canonical-intake', () => ({ queueCanonicalPaymentProof: mocks.queueCanonicalPaymentProof }))
 vi.mock('@/lib/telegram/document-download', () => ({ downloadTelegramDocument: mocks.downloadTelegramDocument }))
+vi.mock('@/lib/telegram/send', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/lib/telegram/send')>(),
+  enviarOrientacaoComprovanteTelegram: mocks.enviarOrientacaoComprovanteTelegram,
+}))
 vi.mock('@/lib/payment-proofs/operational-gates', () => ({ paymentProofOperationalGates: mocks.gates }))
 
 import { POST } from '@/app/api/webhooks/telegram/route'
@@ -25,6 +30,10 @@ import { POST } from '@/app/api/webhooks/telegram/route'
 const PDF = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31])
 
 function request(document: Record<string, unknown>, secret = 'secret-token') {
+  return mediaRequest({ document }, secret)
+}
+
+function mediaRequest(media: Record<string, unknown>, secret = 'secret-token') {
   return new Request('https://asados.test/api/webhooks/telegram', {
     method: 'POST',
     headers: { 'x-telegram-bot-api-secret-token': secret },
@@ -33,7 +42,7 @@ function request(document: Record<string, unknown>, secret = 'secret-token') {
         message_id: 77,
         chat: { id: 1001, first_name: 'Ana' },
         from: { id: 1001 },
-        document,
+        ...media,
       },
     }),
   })
@@ -151,13 +160,62 @@ describe('Telegram canonical payment-proof intake', () => {
     mocks.createAdminClient.mockReturnValue(client)
 
     for (const document of [
-      { file_id: 'file', mime_type: 'image/png', file_size: 100 },
+      { file_id: 'file', mime_type: 'image/gif', file_size: 100 },
       { file_id: 'file', mime_type: 'application/pdf', file_size: 5 * 1024 * 1024 + 1 },
     ]) {
       const response = await POST(request(document))
       expect(response.status).toBe(422)
-      expect(await response.json()).toEqual({ ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
+      expect(await response.json()).toEqual({ ok: false, status: 'payment_proof_rejected', message: 'Arquivo não suportado.' })
     }
+    expect(mocks.downloadTelegramDocument).not.toHaveBeenCalled()
+  })
+
+  it('selects the largest Telegram photo and queues it through canonical intake', async () => {
+    const { client, storageBucket } = adminClient()
+    mocks.createAdminClient.mockReturnValue(client)
+    mocks.downloadTelegramDocument.mockResolvedValue({ ok: true, bytes: PDF, mimeType: 'image/jpeg' })
+
+    const response = await POST(mediaRequest({ photo: [
+      { file_id: 'small', width: 90, height: 90, file_size: 100 },
+      { file_id: 'largest', width: 1280, height: 720, file_size: 1000 },
+      { file_id: 'tall', width: 800, height: 1000, file_size: 1000 },
+    ] }))
+
+    expect(response.status).toBe(202)
+    expect(mocks.downloadTelegramDocument).toHaveBeenCalledWith(expect.objectContaining({ fileId: 'largest' }))
+    expect(mocks.queueCanonicalPaymentProof).toHaveBeenCalledWith(expect.objectContaining({
+      deliveryId: 'telegram:1001:77',
+      bytes: PDF,
+      mimeType: 'image/jpeg',
+      db: client,
+      storage: storageBucket,
+    }))
+  })
+
+  it('accepts JPEG and PNG documents through the canonical processor', async () => {
+    const { client } = adminClient()
+    mocks.createAdminClient.mockReturnValue(client)
+
+    for (const [mimeType, expectedMimeType] of [
+      ['image/jpeg', 'image/jpeg'],
+      ['image/png', 'image/png'],
+    ] as const) {
+      mocks.downloadTelegramDocument.mockResolvedValueOnce({ ok: true, bytes: PDF, mimeType: expectedMimeType })
+      const response = await POST(request({ file_id: 'file', mime_type: mimeType, file_size: PDF.length }))
+      expect(response.status).toBe(202)
+      expect(mocks.queueCanonicalPaymentProof).toHaveBeenLastCalledWith(expect.objectContaining({ mimeType: expectedMimeType }))
+    }
+  })
+
+  it('sends non-admission guidance for unsupported documents without downloading them', async () => {
+    const { client } = adminClient()
+    mocks.createAdminClient.mockReturnValue(client)
+
+    const response = await POST(request({ file_id: 'file', mime_type: 'image/gif', file_size: 100 }))
+
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({ ok: false, status: 'payment_proof_rejected', message: 'Arquivo não suportado.' })
+    expect(mocks.enviarOrientacaoComprovanteTelegram).toHaveBeenCalledWith('1001')
     expect(mocks.downloadTelegramDocument).not.toHaveBeenCalled()
   })
 
@@ -169,7 +227,7 @@ describe('Telegram canonical payment-proof intake', () => {
     const response = await POST(request({ file_id: 'file', mime_type: 'application/pdf', file_size: PDF.length }))
 
     expect(response.status).toBe(422)
-    expect(await response.json()).toEqual({ ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' })
+    expect(await response.json()).toEqual({ ok: false, status: 'payment_proof_rejected', message: 'Arquivo não suportado.' })
     expect(mocks.queueCanonicalPaymentProof).not.toHaveBeenCalled()
   })
 
@@ -236,7 +294,7 @@ describe('Telegram document download boundary', () => {
       .mockResolvedValueOnce(new Response(PDF, { status: 200, headers: { 'content-length': String(PDF.length) } }))
     vi.stubGlobal('fetch', fetchMock)
 
-    const result = await (await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 5 * 1024 * 1024, timeoutMs: 1000 })
+    const result = await (await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 5 * 1024 * 1024, timeoutMs: 1000, mimeType: 'application/pdf' })
 
     expect(result).toEqual({ ok: true, bytes: PDF, mimeType: 'application/pdf' })
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
@@ -254,7 +312,7 @@ describe('Telegram document download boundary', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect((await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000 }))
+    await expect((await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000, mimeType: 'application/pdf' }))
       .resolves.toEqual({ ok: false, error: 'TELEGRAM_GET_FILE_FAILED', retryable: true })
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/getFile?'), expect.objectContaining({ redirect: 'error' }))
@@ -269,7 +327,7 @@ describe('Telegram document download boundary', () => {
       })
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect((await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000 }))
+    await expect((await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000, mimeType: 'application/pdf' }))
       .resolves.toEqual({ ok: false, error: 'TELEGRAM_FILE_DOWNLOAD_FAILED', retryable: true })
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(fetchMock.mock.calls[1]).toEqual([
@@ -281,12 +339,12 @@ describe('Telegram document download boundary', () => {
   it('rejects unsafe paths and actual oversized downloads', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, result: { file_path: 'https://evil.test/proof.pdf' } }), { status: 200 })))
     const download = await actualDownloader()
-    await expect(download({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000 })).resolves.toEqual({ ok: false, error: 'TELEGRAM_FILE_PATH_INVALID', retryable: false })
+    await expect(download({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000, mimeType: 'application/pdf' })).resolves.toEqual({ ok: false, error: 'TELEGRAM_FILE_PATH_INVALID', retryable: false })
 
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, result: { file_path: 'documents/proof.pdf' } }), { status: 200 }))
       .mockResolvedValueOnce(new Response(new Uint8Array(11), { status: 200 })))
-    await expect(download({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000 })).resolves.toEqual({ ok: false, error: 'TELEGRAM_FILE_TOO_LARGE', retryable: false })
+    await expect(download({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1000, mimeType: 'application/pdf' })).resolves.toEqual({ ok: false, error: 'TELEGRAM_FILE_TOO_LARGE', retryable: false })
   })
 
   it('turns a download timeout into a safe retryable failure', async () => {
@@ -294,7 +352,7 @@ describe('Telegram document download boundary', () => {
       init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
     })))
 
-    await expect((await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1 }))
+    await expect((await actualDownloader())({ token: 'token', fileId: 'opaque', maxBytes: 10, timeoutMs: 1, mimeType: 'application/pdf' }))
       .resolves.toEqual({ ok: false, error: 'TELEGRAM_FILE_DOWNLOAD_TIMEOUT', retryable: true })
   })
 })

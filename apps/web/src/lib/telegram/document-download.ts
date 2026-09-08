@@ -10,6 +10,7 @@ type DownloadInput = {
   fileId: string
   maxBytes: number
   timeoutMs: number
+  mimeType: 'application/pdf' | 'image/jpeg' | 'image/png'
 }
 
 type DownloadFailure = {
@@ -80,7 +81,7 @@ export async function downloadTelegramDocument(input: DownloadInput) {
 
     const bytes = await readWithLimit(downloadResponse, input.maxBytes)
     if (!(bytes instanceof Uint8Array)) return bytes
-    return { ok: true as const, bytes, mimeType: 'application/pdf' as const }
+    return { ok: true as const, bytes, mimeType: input.mimeType }
   } catch (error) {
     if (controller.signal.aborted || (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError')) {
       return failure('TELEGRAM_FILE_DOWNLOAD_TIMEOUT', true)

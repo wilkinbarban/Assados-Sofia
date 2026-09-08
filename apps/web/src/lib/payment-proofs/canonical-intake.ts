@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
-import { normalizePaymentProofDelivery, validatePaymentProofPdf, type PaymentProofChannel } from './intake'
+import { normalizePaymentProofDelivery, type PaymentProofChannel } from './intake'
+import { normalizePaymentProofUpload } from './safe-upload'
 import { paymentProofOperationalGates } from './operational-gates'
 
 type IntakeInput = {
@@ -58,15 +59,16 @@ export async function ingestCanonicalPaymentProof(input: IntakeInput) {
   if (!paymentProofOperationalGates.canonicalIngest.effective) return { status: 'disabled' as const }
   if (input.channel === 'whatsapp' && !paymentProofOperationalGates.whatsappIngest.effective) return { status: 'disabled' as const }
 
-  const valid = validatePaymentProofPdf(input.bytes, input.mimeType)
+  const valid = await normalizePaymentProofUpload(input.bytes, input.mimeType)
   if (!valid.ok) return { status: 'rejected' as const, error: valid.error }
 
   const delivery = normalizePaymentProofDelivery(input)
-  const contentSha256 = createHash('sha256').update(input.bytes).digest('hex')
+  const contentSha256 = createHash('sha256').update(valid.bytes).digest('hex')
   const deliveryStorageId = createHash('sha256').update(delivery.deliveryKey).digest('hex')
-  const storageKey = `proofs/private/${input.channel}/${deliveryStorageId}/${contentSha256}.pdf`
-  const { error: uploadError } = await input.storage.upload(storageKey, input.bytes, {
-    contentType: 'application/pdf',
+  const extension = valid.mimeType === 'application/pdf' ? 'pdf' : valid.mimeType === 'image/png' ? 'png' : 'jpg'
+  const storageKey = `proofs/private/${input.channel}/${deliveryStorageId}/${contentSha256}.${extension}`
+  const { error: uploadError } = await input.storage.upload(storageKey, valid.bytes, {
+    contentType: valid.mimeType,
     upsert: false,
   })
   if (uploadError && !String(uploadError.message).includes('already exists')) {
@@ -80,7 +82,7 @@ export async function ingestCanonicalPaymentProof(input: IntakeInput) {
     p_sender_reference: delivery.senderReference,
     p_storage_key: storageKey,
     p_size_bytes: valid.sizeBytes,
-    p_mime_type: 'application/pdf',
+    p_mime_type: valid.mimeType,
     p_order_id: input.orderId ?? null,
     p_conversation_id: input.conversationId ?? null,
     p_sha256: contentSha256,
@@ -107,15 +109,16 @@ export async function ingestCanonicalPaymentProof(input: IntakeInput) {
 export async function ingestEvolutionCanonicalPaymentProof(input: EvolutionIntakeInput) {
   if (!paymentProofOperationalGates.canonicalIngest.effective || !paymentProofOperationalGates.whatsappIngest.effective) return { status: 'disabled' as const }
 
-  const valid = validatePaymentProofPdf(input.bytes, input.mimeType)
+  const valid = await normalizePaymentProofUpload(input.bytes, input.mimeType)
   if (!valid.ok) return { status: 'rejected' as const, error: valid.error }
 
   const delivery = normalizePaymentProofDelivery(input)
-  const contentSha256 = createHash('sha256').update(input.bytes).digest('hex')
+  const contentSha256 = createHash('sha256').update(valid.bytes).digest('hex')
   const deliveryStorageId = createHash('sha256').update(delivery.deliveryKey).digest('hex')
-  const storageKey = `proofs/private/${input.channel}/${deliveryStorageId}/${contentSha256}.pdf`
-  const { error: uploadError } = await input.storage.upload(storageKey, input.bytes, {
-    contentType: 'application/pdf', upsert: false,
+  const extension = valid.mimeType === 'application/pdf' ? 'pdf' : valid.mimeType === 'image/png' ? 'png' : 'jpg'
+  const storageKey = `proofs/private/${input.channel}/${deliveryStorageId}/${contentSha256}.${extension}`
+  const { error: uploadError } = await input.storage.upload(storageKey, valid.bytes, {
+    contentType: valid.mimeType, upsert: false,
   })
   if (uploadError && !String(uploadError.message).includes('already exists')) return { status: 'retryable' as const, error: 'PAYMENT_PROOF_STORAGE_FAILED' }
 
@@ -125,7 +128,7 @@ export async function ingestEvolutionCanonicalPaymentProof(input: EvolutionIntak
     p_delivery_key: delivery.deliveryKey,
     p_storage_key: storageKey,
     p_size_bytes: valid.sizeBytes,
-    p_mime_type: 'application/pdf',
+    p_mime_type: valid.mimeType,
     p_order_id: input.orderId ?? null,
     p_sha256: contentSha256,
   })

@@ -181,26 +181,15 @@ describe('Chat Handoff & PDF Upload Database Interactions (Tasks 2.5 & 2.6)', ()
       expect(insertedMessages.some(m => m.remetente === 'cliente' && m.conteudo === 'Segue comprovante')).toBe(true)
     })
 
-    // 2. Expect comprovantes entry to be inserted
-    expect(insertedComprovantes.length).toBe(1)
-    expect(insertedComprovantes[0]).toEqual(expect.objectContaining({
-      cliente_id: 'cliente-123',
-      nome_arquivo: 'recibo.pdf',
-      tamanho_bytes: validPdfFile.size,
-    }))
-    expect(insertedComprovantes[0].url_arquivo).toContain('recibo')
+    // Canonical proof admission belongs to the payment modal/action. Generic chat
+    // attachments must not create legacy proof rows, change handoff authority, or
+    // fabricate an AI receipt acknowledgement.
+    expect(insertedComprovantes).toHaveLength(0)
+    expect(updatedConversas).toHaveLength(0)
+    expect(insertedMessages.some(m => m.remetente === 'ia' && m.conteudo.toLowerCase().includes('recebemos'))).toBe(false)
 
-    // 3. Expect conversa status to be set to status = 'aberta' and ia_ativa = false
-    expect(updatedConversas.length).toBe(1)
-    expect(updatedConversas[0]).toEqual({
-      ia_ativa: false,
-      status: 'aberta',
-    })
-
-    // 4. Expect confirmation message from 'ia' to be inserted
-    expect(insertedMessages.some(m => m.remetente === 'ia' && m.conteudo.toLowerCase().includes('recebemos'))).toBe(true)
-
-    // 5. Expect processarIaChat NOT to have been called
+    // Attachments are never forwarded to the free-form AI pipeline.
+    expect(processarIaChatMock).not.toHaveBeenCalled()
     expect(processarIaChatMock).not.toHaveBeenCalled()
   })
 })

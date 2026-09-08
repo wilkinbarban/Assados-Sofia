@@ -50,9 +50,14 @@ export async function GET(request: NextRequest) {
         .from('clientes').select('id').eq('usuario_id', user.id).single()
       if (cliente) {
         const basePath = storagePath.replace(/_preview\.(png|jpg|webp)$/i, '.pdf')
-        const { data: msg } = await admin
-          .from('mensagens').select('id').or(`url_anexo.eq.${storagePath},url_anexo.eq.${basePath}`).limit(1)
-        if (msg?.length) authorized = true
+        const { data: ownConversations } = await admin
+          .from('conversas').select('id').eq('cliente_id', cliente.id)
+        const ownConversationIds = ownConversations?.map((conversation) => conversation.id) ?? []
+        if (ownConversationIds.length > 0) {
+          const { data: msg } = await admin
+            .from('mensagens').select('id').in('conversa_id', ownConversationIds).or(`url_anexo.eq.${storagePath},url_anexo.eq.${basePath}`).limit(1)
+          if (msg?.length) authorized = true
+        }
         if (!authorized) {
           const { data: receipts } = await admin
             .from('comprovantes').select('id').eq('cliente_id', cliente.id).or(`url_arquivo.eq.${storagePath},url_arquivo.eq.${basePath}`).limit(1)

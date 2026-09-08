@@ -17,19 +17,19 @@ function renderablePdf(width = 20, height = 20, content = '') {
   return new Uint8Array(Buffer.from(body))
 }
 
-function db(options: { preview?: string | null; advisory?: boolean } = {}) {
+function db(options: { preview?: string | null; advisory?: boolean; mimeType?: string; bytes?: Uint8Array } = {}) {
   const rpc = vi.fn(async () => ({ data: true, error: null }))
   const from = vi.fn((table: string) => {
     const builder: any = {
       select: vi.fn(() => builder), eq: vi.fn(() => builder), limit: vi.fn(() => builder),
       maybeSingle: vi.fn(async () => table === 'payment_proof_advisory_attempts'
         ? { data: options.advisory ? { proof_id: 'proof-1' } : null, error: null }
-        : { data: { id: 'proof-1', status: 'received', channel: 'telegram', original_storage_key: 'proofs/private/telegram/a.pdf', preview_storage_key: options.preview ?? null, sha256: 'a'.repeat(64) }, error: null }),
+        : { data: { id: 'proof-1', status: 'received', channel: 'telegram', original_storage_key: 'proofs/private/telegram/a.pdf', preview_storage_key: options.preview ?? null, sha256: 'a'.repeat(64), mime_type: options.mimeType ?? 'application/pdf' }, error: null }),
     }
     return builder
   })
   const upload = vi.fn(async () => ({ error: null }))
-  const download = vi.fn(async () => ({ data: new Blob([PDF]), error: null }))
+  const download = vi.fn(async () => ({ data: new Blob([Buffer.from(options.bytes ?? PDF)]), error: null }))
   return { client: { rpc, from, storage: { from: vi.fn(() => ({ upload, download })) } }, rpc, upload, download }
 }
 
@@ -57,6 +57,18 @@ describe('payment-proof processing worker', () => {
       expect((rpc.mock.calls as unknown[][]).filter(([name]) => name === 'record_payment_proof_render')).toHaveLength(state.preview ? 0 : 1)
       expect((rpc.mock.calls as unknown[][]).filter(([name]) => name === 'record_payment_proof_advisory')).toHaveLength(state.advisory ? 0 : 1)
     }
+  })
+
+  it('uses canonical image bytes as preview and visual advisory input without PDF rendering or parsing', async () => {
+    render.mockClear()
+    const image = new Uint8Array([137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1])
+    const { client, upload } = db({ mimeType:'image/png', bytes:image })
+    const imageClassify = vi.fn(async (input: any) => { await input.persist({ disposition:'manual_review', likelyPaymentProof:true, confidence:0.9, suggestedAmountCents:123, reasonCode:'payment_markers_present', model:'test' }) })
+    const result = await processPaymentProofJob({ proofId:'proof-1', db:client as any, render, classify:imageClassify as any })
+    expect(result).toEqual({ ok:true })
+    expect(render).not.toHaveBeenCalled()
+    expect(upload).toHaveBeenCalledWith(expect.any(String), Buffer.from(image), expect.any(Object))
+    expect(imageClassify).toHaveBeenCalledWith(expect.objectContaining({ extractedText:'', imageDataUrl:`data:image/png;base64,${Buffer.from(image).toString('base64')}` }))
   })
 
   it('maps an original blob read exception to the fixed load stage instead of throwing', async () => {

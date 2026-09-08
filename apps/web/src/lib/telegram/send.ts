@@ -54,6 +54,16 @@ export async function enviarCatalogoTelegram(chatId: string, products: ProdutoCa
   }
 }
 
+export async function enviarOrientacaoComprovanteTelegram(chatId: string): Promise<void> {
+  const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
+  if (!token) return
+
+  await postTelegram(token, 'sendMessage', {
+    chat_id: chatId,
+    text: 'Envie o comprovante como PDF, imagem JPEG ou PNG para que possamos analisar.',
+  }).catch(() => undefined)
+}
+
 export async function responderCallbackTelegram(callbackQueryId: string, text: string) {
   const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
   if (!token) throw new Error('Token do bot do Telegram não configurado.')

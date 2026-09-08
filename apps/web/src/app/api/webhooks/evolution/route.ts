@@ -9,7 +9,7 @@ import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { normalizarMensagemEvolution } from '@/lib/whatsapp/inbound-normalizer'
 import { processarAcaoInterativaWhatsApp } from '@/lib/whatsapp/action-router'
 import { ingestEvolutionCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
-import { downloadEvolutionPdf } from '@/lib/whatsapp/evolution-media-download'
+import { downloadEvolutionMedia } from '@/lib/whatsapp/evolution-media-download'
 import { evaluateEvolutionPaymentProofCompatibility } from '@/lib/whatsapp/evolution-payment-proof-compatibility'
 import { resolveEvolutionInboundPhoneLocalPart } from '@/lib/whatsapp/evolution-inbound-sender'
 import { decodeEvolutionDocumentSize } from '@/lib/whatsapp/evolution-document-size'
@@ -120,18 +120,19 @@ export async function POST(request: Request) {
     }
 
     const data = body.data
-    const isDocumentMessage = isPlainObject(data) && isPlainObject(data.message)
-      && Object.hasOwn(data.message, 'documentMessage')
-    if (isDocumentMessage && paymentProofOperationalGates.whatsappIngest.effective && !hasDedicatedSecretAuth) {
+    const isCanonicalMediaMessage = isPlainObject(data) && isPlainObject(data.message)
+      && (Object.hasOwn(data.message, 'documentMessage') || Object.hasOwn(data.message, 'imageMessage'))
+    if (isCanonicalMediaMessage && paymentProofOperationalGates.whatsappIngest.effective && !hasDedicatedSecretAuth) {
       console.warn('[Evolution Webhook] DOCUMENT_AUTH_REJECTED')
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
-    const canonicalDocumentCandidate = hasDedicatedSecretAuth && isPlainObject(data) && (
-      !isPlainObject(data.message) || Object.hasOwn(data.message, 'documentMessage')
+    const canonicalMediaCandidate = hasDedicatedSecretAuth && isPlainObject(data) && (
+      !isPlainObject(data.message) || Object.hasOwn(data.message, 'documentMessage') || Object.hasOwn(data.message, 'imageMessage')
     )
-    if (canonicalDocumentCandidate) {
-      if (!isPlainObject(data) || !isPlainObject(data.key) || !isPlainObject(data.message)
-        || !isPlainObject(data.message.documentMessage) || data.key.fromMe !== false
+    if (canonicalMediaCandidate) {
+      const message = isPlainObject(data.message) ? data.message : null
+      const media = message && (message.documentMessage ?? message.imageMessage)
+      if (!isPlainObject(data.key) || !message || !isPlainObject(media) || data.key.fromMe !== false
         || !isCanonicalDeliveryId(data.key.id)) {
         return rejectCanonicalEnvelope()
       }
@@ -154,11 +155,13 @@ export async function POST(request: Request) {
     const inboundPhoneLocalPart = resolveEvolutionInboundPhoneLocalPart(data.key)
     const inboundSender = normalizeCuritibaPhone(inboundPhoneLocalPart)
 
-    // Canonical PDF retries intentionally run before the legacy mensagens dedupe.
+    // Canonical media retries intentionally run before the legacy mensagens dedupe.
     // A closed compatibility gate performs no download and falls through unchanged.
     const documentMessage = data.message?.documentMessage
+    const imageMessage = data.message?.imageMessage
+    const canonicalMedia = documentMessage || imageMessage
     let evolutionInstanceName: string | null = null
-    if (documentMessage && hasDedicatedSecretAuth) {
+    if (canonicalMedia && hasDedicatedSecretAuth) {
       const [primaryProvider, fallbackProvider, operationalAttestation, configuredInstanceName] = await Promise.all([
         obterConfiguracaoSistema('PROVEDOR_WHATSAPP_ATIVO'),
         obterConfiguracaoSistema('WHATSAPP_PROVIDER'),
@@ -179,10 +182,10 @@ export async function POST(request: Request) {
 
       if (compatibility.open) {
         const supabaseAdmin = createAdminClient()
-        const normalizedDocumentMimeType = typeof documentMessage.mimetype === 'string'
-          ? documentMessage.mimetype.trim().toLowerCase()
+        const normalizedDocumentMimeType = typeof canonicalMedia.mimetype === 'string'
+          ? canonicalMedia.mimetype.trim().toLowerCase()
           : null
-        if (normalizedDocumentMimeType !== 'application/pdf') {
+        if (!['application/pdf', 'image/jpeg', 'image/png'].includes(normalizedDocumentMimeType || '')) {
           console.warn('[Evolution Webhook] CANONICAL_DOCUMENT_MIME_REJECTED')
           return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
         }
@@ -213,7 +216,7 @@ export async function POST(request: Request) {
           return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
         }
         {
-            const declaredSize = decodeEvolutionDocumentSize(documentMessage.fileLength)
+            const declaredSize = decodeEvolutionDocumentSize(canonicalMedia.fileLength)
             if (declaredSize === null) {
               console.warn('[Evolution Webhook] CANONICAL_DOCUMENT_SIZE_REJECTED')
               return NextResponse.json({ success: false, status: 'payment_proof_rejected' }, { status: 422 })
@@ -228,7 +231,7 @@ export async function POST(request: Request) {
               return NextResponse.json({ success: false, status: 'payment_proof_retryable' }, { status: 503 })
             }
 
-            const downloaded = await downloadEvolutionPdf({
+            const downloaded = await downloadEvolutionMedia({
               apiUrl: evolutionApiUrl,
               apiKey: evolutionApiKey,
               instanceName: evolutionInstanceName,
@@ -479,30 +482,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Fora do horário de atendimento', data: novaMensagem }, { status: 200 })
     }
 
-    // 11. Preserve chat acknowledgement for proof-like attachments without legacy proof persistence.
-    const isComprovante = mediaType === 'document' || 
-      (conteudo && (conteudo.toLowerCase().includes('comprovante') || conteudo.toLowerCase().includes('pix') || conteudo.toLowerCase().includes('pagamento')))
-
-    if (mediaType && isComprovante) {
-      console.log('[Evolution Webhook] LEGACY_ATTACHMENT_DETECTED')
-      const autoReplyComprovante = 'Recebemos seu comprovante de pagamento. Ele será analisado por um atendente humano em breve. Muito obrigado!'
-      try {
-        await sendEvolutionScheduleMessage(sanitizedPhone, autoReplyComprovante)
-        await supabaseAdmin.from('mensagens').insert({
-          conversa_id: conversaId,
-          remetente: 'ia',
-          conteudo: autoReplyComprovante,
-        })
-      } catch {
-        console.error('[Evolution Webhook] LEGACY_ATTACHMENT_REPLY_FAILED')
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: 'Comprovante recebido para análise',
-        data: novaMensagem,
-      }, { status: 200 })
-    }
+    // 11. Never infer financial receipt from an attachment or payment-like text.
+    // Only the canonical intake branch above may return payment_proof_received.
 
     // 12. Disparar o pipeline RAG se iaAtiva for verdadeira
     if (iaAtiva && conteudo) {
