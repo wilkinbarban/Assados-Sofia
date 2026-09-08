@@ -148,11 +148,11 @@ describe('ModalVisualizadorComprovante Component', () => {
     expect(screen.getByText(/Imagem do comprovante/i)).toBeInTheDocument()
 
     await waitFor(() => {
-      expect(screen.getByTitle(/Aumentar Zoom/i)).toBeInTheDocument()
-      expect(screen.getByTitle(/Diminuir Zoom/i)).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Aumentar zoom/i })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /Diminuir zoom/i })).toBeInTheDocument()
     })
 
-    const zoomInBtn = screen.getByTitle(/Aumentar Zoom/i)
+    const zoomInBtn = screen.getByRole('button', { name: /Aumentar zoom/i })
     fireEvent.click(zoomInBtn)
 
     expect(screen.getByText('125%')).toBeInTheDocument()

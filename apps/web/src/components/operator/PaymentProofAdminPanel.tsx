@@ -203,14 +203,18 @@ export default function PaymentProofAdminPanel({
     if (!privileged) return
     const supabase = createClient()
     const refresh = () => void refreshProofs()
-    window.addEventListener('asados:order-updated', refresh)
+    const refreshFromWindow = (event: Event) => {
+      if (event instanceof CustomEvent && event.detail?.source === 'payment-proof-admin') return
+      refresh()
+    }
+    window.addEventListener('asados:order-updated', refreshFromWindow)
     const channel = supabase
       .channel('operator-payment-proofs-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_proofs' }, refresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, refresh)
       .subscribe()
     return () => {
-      window.removeEventListener('asados:order-updated', refresh)
+      window.removeEventListener('asados:order-updated', refreshFromWindow)
       void supabase.removeChannel(channel)
     }
   }, [privileged, refreshProofs])
@@ -290,7 +294,7 @@ export default function PaymentProofAdminPanel({
           } : p))
         )
         window.dispatchEvent(new CustomEvent('asados:order-updated', {
-          detail: { proofId: pending.proofId },
+          detail: { proofId: pending.proofId, source: 'payment-proof-admin' },
         }))
         if (['reject', 'reconcile'].includes(pending.operation) && current) {
           release(current)
