@@ -13,6 +13,7 @@ import { executarToolSofia } from '@/lib/ai/tools'
 import { parseTelegramCatalogCallback, selectOfficialTelegramCombos } from '@/lib/telegram/catalog'
 import {
   enviarCatalogoTelegram,
+  enviarOrientacaoComprovanteTelegram,
   responderCallbackTelegram,
 } from '@/lib/telegram/send'
 
@@ -60,6 +61,12 @@ type TelegramMessage = {
     mime_type?: string
     file_size?: number
   }
+  photo?: Array<{
+    file_id?: string
+    width?: number
+    height?: number
+    file_size?: number
+  }>
 }
 
 type TelegramCallbackQuery = {
@@ -79,6 +86,33 @@ function isOwnTelegramContact(message: TelegramMessage): boolean {
       message.from?.id !== undefined &&
       message.contact.user_id === message.from.id
   )
+}
+
+type TelegramPaymentProofMedia = {
+  fileId: string
+  mimeType: 'application/pdf' | 'image/jpeg' | 'image/png'
+  fileSize: number
+}
+
+function selectTelegramPaymentProofMedia(message: TelegramMessage): TelegramPaymentProofMedia | null {
+  if (message.document) {
+    const mimeType = message.document.mime_type?.trim().toLowerCase()
+    if (mimeType === 'application/pdf' || mimeType === 'image/jpeg' || mimeType === 'image/png') {
+      return message.document.file_id && typeof message.document.file_size === 'number'
+        ? { fileId: message.document.file_id, mimeType, fileSize: message.document.file_size }
+        : null
+    }
+    return null
+  }
+
+  const largestPhoto = message.photo?.reduce((largest, photo) => {
+    const area = (photo.width || 0) * (photo.height || 0)
+    const largestArea = (largest?.width || 0) * (largest?.height || 0)
+    return area > largestArea ? photo : largest
+  })
+  return largestPhoto?.file_id && typeof largestPhoto.file_size === 'number'
+    ? { fileId: largestPhoto.file_id, mimeType: 'image/jpeg', fileSize: largestPhoto.file_size }
+    : null
 }
 
 function getSafeTelegramMessageContent(message: TelegramMessage, senderName: string): string | null {
@@ -227,9 +261,9 @@ export async function POST(request: Request) {
 
     const supabaseAdmin = createAdminClient()
 
-    // Text/contact delivery deduplication remains in the chat ledger. PDF proof
+    // Text/contact delivery deduplication remains in the chat ledger. Payment-proof
     // idempotency is owned by the canonical intake ledger instead.
-    if (!message.document) {
+    if (!message.document && !message.photo) {
       const { data: existingMessage, error: findError } = await supabaseAdmin
         .from('mensagens')
         .select('id')
@@ -284,12 +318,13 @@ export async function POST(request: Request) {
     // Canonical payment proofs are an intake concern, independent from Sofia's
     // automation and business-hours gates. When disabled, preserve the legacy
     // document path without validation, token lookup, or download side effects.
+    const paymentProofMedia = selectTelegramPaymentProofMedia(message)
     const canonicalPaymentProofEnabled = Boolean(
-      message.document &&
+      (message.document || message.photo) &&
       paymentProofOperationalGates.canonicalIngest.effective &&
       paymentProofOperationalGates.telegramIngest.effective
     )
-    if (message.document && canonicalPaymentProofEnabled) {
+    if ((message.document || message.photo) && canonicalPaymentProofEnabled) {
       let canonicalConversationId: string
       try {
         canonicalConversationId = (await resolveTelegramConversation(supabaseAdmin, clienteId)).conversationId
@@ -311,19 +346,16 @@ export async function POST(request: Request) {
         return Response.json({ ok: true, status: 'payment_proof_duplicate' })
       }
 
-      const maxPdfBytes = 5 * 1024 * 1024
-      const declaredMime = message.document.mime_type?.trim().toLowerCase()
-      const declaredSize = message.document.file_size
+      const maxProofBytes = 5 * 1024 * 1024
       if (
-        declaredMime !== 'application/pdf' ||
-        typeof declaredSize !== 'number' ||
-        !Number.isFinite(declaredSize) ||
-        declaredSize <= 0 ||
-        declaredSize > maxPdfBytes ||
-        !message.document.file_id
+        !paymentProofMedia ||
+        !Number.isFinite(paymentProofMedia.fileSize) ||
+        paymentProofMedia.fileSize <= 0 ||
+        paymentProofMedia.fileSize > maxProofBytes
       ) {
+        await enviarOrientacaoComprovanteTelegram(telegramChatId)
         return Response.json(
-          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { ok: false, status: 'payment_proof_rejected', message: 'Arquivo não suportado.' },
           { status: 422 }
         )
       }
@@ -338,9 +370,10 @@ export async function POST(request: Request) {
 
       const downloaded = await downloadTelegramDocument({
         token,
-        fileId: message.document.file_id,
-        maxBytes: maxPdfBytes,
+        fileId: paymentProofMedia.fileId,
+        maxBytes: maxProofBytes,
         timeoutMs: 10_000,
+        mimeType: paymentProofMedia.mimeType,
       })
       if (!downloaded.ok) {
         if (downloaded.retryable) {
@@ -350,7 +383,7 @@ export async function POST(request: Request) {
           )
         }
         return Response.json(
-          { ok: false, status: 'payment_proof_rejected', message: 'Documento PDF inválido.' },
+          { ok: false, status: 'payment_proof_rejected', message: 'Arquivo não suportado.' },
           { status: 422 }
         )
       }
