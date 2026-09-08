@@ -29,6 +29,11 @@ services:
       - PAYMENT_PROOF_CLEANUP_ENABLED=${PAYMENT_PROOF_CLEANUP_ENABLED:-false}
       # Web action boundary only; database RPC authorization remains independently admin-only.
       - PAYMENT_PROOF_RESTORE_ENABLED=${PAYMENT_PROOF_RESTORE_ENABLED:-false}
+      # Notification delivery is at-least-once; gates stay closed until explicitly enabled.
+      - NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+      - WEB_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${WEB_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+      - WHATSAPP_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${WHATSAPP_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+      - TELEGRAM_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${TELEGRAM_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -105,6 +110,41 @@ services:
       start_period: 70s
     networks: [app-private]
 
+
+  notification-outbox-maintenance:
+    image: alpine:3.20
+    container_name: asados-notification-outbox-maintenance
+    restart: always
+    environment:
+      - NOTIFICATION_OUTBOX_MAINTENANCE_SECRET=${NOTIFICATION_OUTBOX_MAINTENANCE_SECRET:?set NOTIFICATION_OUTBOX_MAINTENANCE_SECRET}
+      - NOTIFICATION_OUTBOX_MAINTENANCE_URL=http://web:3000/api/internal/notifications/maintenance
+      - NOTIFICATION_OUTBOX_MAINTENANCE_INTERVAL_SECONDS=${NOTIFICATION_OUTBOX_MAINTENANCE_INTERVAL_SECONDS:-60}
+      # Dispatch is at-least-once; leave all provider gates closed until explicitly enabled.
+      - NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+      - WEB_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${WEB_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+      - WHATSAPP_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${WHATSAPP_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+      - TELEGRAM_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${TELEGRAM_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+    command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec /scheduler/notification-outbox-maintenance-scheduler.sh"]
+    depends_on:
+      web: { condition: service_healthy }
+    volumes:
+      - ./ops/notification-outbox-maintenance-scheduler.sh:/scheduler/notification-outbox-maintenance-scheduler.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          interval=$${NOTIFICATION_OUTBOX_MAINTENANCE_INTERVAL_SECONDS:-60};
+          case "$$interval" in ''|*[!0-9]*) interval=60;; *)
+          if [ "$$interval" -lt 1 ] || [ "$$interval" -gt 715827882 ]; then interval=60; fi;; esac;
+          tolerance=$$((interval * 3)); if [ "$$tolerance" -lt 180 ]; then tolerance=180; fi;
+          now=$$(date +%s) || exit 1; marker=$$(cat /tmp/notification-outbox-maintenance-last-success) || exit 1;
+          case "$$marker" in ''|*[!0-9]*) exit 1;; esac;
+          test "$$marker" -le $$((now + 5)) && test $$((now - marker)) -le "$$tolerance"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 70s
+    networks: [app-private]
 
   evolution-api:
     # Production remains on the latest verified stable release by default.
