@@ -3,6 +3,8 @@ import { decodeEvolutionDocumentSize } from './evolution-document-size'
 export const MAX_EVOLUTION_PDF_BYTES = 5 * 1024 * 1024
 export const MAX_EVOLUTION_MEDIA_JSON_BYTES = Math.ceil(MAX_EVOLUTION_PDF_BYTES / 3) * 4 + 1024
 
+type SupportedEvolutionMediaMime = 'application/pdf' | 'image/jpeg' | 'image/png'
+
 type DownloadInput = {
   apiUrl: string
   apiKey: string
@@ -39,8 +41,14 @@ function classifyHttpFailure(status: number) {
   return failure('EVOLUTION_MEDIA_HTTP_UNEXPECTED', false)
 }
 
+function normalizedMime(value: unknown): SupportedEvolutionMediaMime | null {
+  if (typeof value !== 'string') return null
+  const mime = value.trim().toLowerCase()
+  return mime === 'application/pdf' || mime === 'image/jpeg' || mime === 'image/png' ? mime : null
+}
+
 function exactPdfMime(value: unknown): boolean {
-  return typeof value === 'string' && value.trim().toLowerCase() === 'application/pdf'
+  return normalizedMime(value) === 'application/pdf'
 }
 
 function validSize(value: unknown): value is number {
@@ -91,8 +99,9 @@ function decodeStrictBase64(value: unknown): Uint8Array | null {
   return new Uint8Array(bytes)
 }
 
-export async function downloadEvolutionPdf(input: DownloadInput) {
-  if (input.declaredMimeType !== undefined && !exactPdfMime(input.declaredMimeType)) {
+export async function downloadEvolutionMedia(input: DownloadInput) {
+  const declaredMimeType = input.declaredMimeType === undefined ? null : normalizedMime(input.declaredMimeType)
+  if (input.declaredMimeType !== undefined && !declaredMimeType) {
     return failure('EVOLUTION_MEDIA_MIME_INVALID', false)
   }
   if (input.declaredSize !== undefined) {
@@ -136,21 +145,22 @@ export async function downloadEvolutionPdf(input: DownloadInput) {
     } catch {
       return failure('EVOLUTION_MEDIA_DOWNLOAD_FAILED', true)
     }
-    if (!exactPdfMime(payload?.mimetype)) return failure('EVOLUTION_MEDIA_MIME_INVALID', false)
+    const responseMimeType = normalizedMime(payload?.mimetype)
+    if (!responseMimeType || (declaredMimeType && responseMimeType !== declaredMimeType)) return failure('EVOLUTION_MEDIA_MIME_INVALID', false)
     const responseSize = decodeEvolutionDocumentSize(payload?.size?.fileLength)
     if (responseSize === null) return failure('EVOLUTION_MEDIA_SIZE_INVALID', false)
     if (responseSize > MAX_EVOLUTION_PDF_BYTES) return failure('EVOLUTION_MEDIA_TOO_LARGE', false)
 
     const bytes = decodeStrictBase64(payload.base64)
     if (!bytes) return failure('EVOLUTION_MEDIA_BASE64_INVALID', false)
-    if (bytes[0] !== 0x25 || bytes[1] !== 0x50 || bytes[2] !== 0x44 || bytes[3] !== 0x46 || bytes[4] !== 0x2d) {
+    if (responseMimeType === 'application/pdf' && (bytes[0] !== 0x25 || bytes[1] !== 0x50 || bytes[2] !== 0x44 || bytes[3] !== 0x46 || bytes[4] !== 0x2d)) {
       return failure('EVOLUTION_MEDIA_PDF_SIGNATURE_INVALID', false)
     }
     if (bytes.byteLength > MAX_EVOLUTION_PDF_BYTES) return failure('EVOLUTION_MEDIA_TOO_LARGE', false)
     if (bytes.byteLength !== responseSize || (input.declaredSize !== undefined && bytes.byteLength !== input.declaredSize)) {
       return failure('EVOLUTION_MEDIA_SIZE_MISMATCH', false)
     }
-    return { ok: true as const, bytes, mimeType: 'application/pdf' as const }
+    return { ok: true as const, bytes, mimeType: responseMimeType }
   } catch (error) {
     if (controller.signal.aborted || (error && typeof error === 'object' && 'name' in error && error.name === 'AbortError')) {
       return failure('EVOLUTION_MEDIA_DOWNLOAD_TIMEOUT', true)
@@ -159,4 +169,14 @@ export async function downloadEvolutionPdf(input: DownloadInput) {
   } finally {
     clearTimeout(timeout)
   }
+}
+
+/** @deprecated Use downloadEvolutionMedia for PDF, JPEG, and PNG inbound media. */
+export async function downloadEvolutionPdf(input: DownloadInput) {
+  if (input.declaredMimeType !== undefined && !exactPdfMime(input.declaredMimeType)) {
+    return failure('EVOLUTION_MEDIA_MIME_INVALID', false)
+  }
+  const downloaded = await downloadEvolutionMedia(input)
+  if (downloaded.ok && downloaded.mimeType !== 'application/pdf') return failure('EVOLUTION_MEDIA_MIME_INVALID', false)
+  return downloaded
 }
