@@ -21,7 +21,7 @@ export interface ResultadoNotificacaoOmnichannel {
   erros?: string[]
 }
 
-function formatarMensagemNotificacao(params: NotificacaoPedidoParams, nomeCliente?: string): string {
+export function formatarMensagemNotificacao(params: NotificacaoPedidoParams, nomeCliente?: string): string {
   const saudacao = nomeCliente ? `Olá, *${nomeCliente}*!` : 'Olá!'
 
   if (params.tipo === 'status_pedido') {
@@ -29,7 +29,7 @@ function formatarMensagemNotificacao(params: NotificacaoPedidoParams, nomeClient
       case 'confirmado':
         return `${saudacao}\n\n🥩 *Pedido Confirmado!*\nSeu pedido foi aceito pela nossa equipe e já está sendo preparado com todo o carinho e sabor da Casa de Assados Brasa & Sabor.\n\n⏰ Avisaremos assim que estiver pronto para retirada ou sair para entrega!`
       case 'entregue':
-        return `${saudacao}\n\n✨ *Pedido Concluído!*\nSeu pedido foi finalizado com sucesso. Que Deus abençoe a mesa da sua família e tenham uma excelente refeição!\n\nSeu comprovante de venda digital (2ª Via) está disponível no seu painel.`
+        return `${saudacao}\n\n✨ *Pedido Concluído!*\nSeu pedido foi finalizado com sucesso. Que Deus abençoe a mesa da sua família e tenham uma excelente refeição!\n\nSeu comprovante de venda digital está disponível no seu painel.`
       case 'cancelado':
         const motivoTxt = params.motivo ? `\n*Motivo:* ${params.motivo}` : ''
         return `${saudacao}\n\n⚠️ *Atualização do Pedido: Cancelado*\nInformamos que seu pedido foi cancelado pelo atendimento.${motivoTxt}\n\nCaso tenha alguma dúvida, fale conosco aqui no chat.`
@@ -41,7 +41,7 @@ function formatarMensagemNotificacao(params: NotificacaoPedidoParams, nomeClient
   if (params.tipo === 'status_pagamento') {
     switch (params.statusPagamento) {
       case 'aprovado':
-        return `${saudacao}\n\n💳 *Pagamento Confirmado!*\nRecebemos a confirmação do seu pagamento com sucesso. Seu comprovante digital (2ª Via) já foi emitido.`
+        return `${saudacao}\n\n💳 *Pagamento Confirmado!*\nRecebemos a confirmação do seu pagamento com sucesso. Seu comprovante digital estará disponível no painel do pedido.`
       case 'rejeitado':
         return `${saudacao}\n\n❌ *Aviso de Pagamento*\nNão conseguimos confirmar o pagamento do seu pedido. Por favor, verifique com nosso atendente para regularizar.`
       case 'reembolsado':
