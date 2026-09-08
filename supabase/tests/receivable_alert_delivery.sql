@@ -1,0 +1,23 @@
+select to_regprocedure('public.claim_receivable_alert_delivery(integer)') is null as apply_receivable_alert_delivery \gset
+\if :apply_receivable_alert_delivery
+\ir ../migrations/20260908230000_receivable_alert_delivery.sql
+\endif
+begin;select plan(14);set local role postgres;delete from public.accounts_receivable_alert_deliveries;
+insert into auth.users(id,instance_id,aud,role,email,encrypted_password,email_confirmed_at,raw_app_meta_data,raw_user_meta_data,created_at,updated_at) values('f5555555-5555-4555-8555-555555555501','00000000-0000-0000-0000-000000000000','authenticated','authenticated','alert-supervisor@example.test','',now(),'{}','{}',now(),now()),('f5555555-5555-4555-8555-555555555502','00000000-0000-0000-0000-000000000000','authenticated','authenticated','alert-customer@example.test','',now(),'{}','{}',now(),now()) on conflict(id) do nothing;
+insert into public.perfis(id,nome,funcao,ativo) values('f5555555-5555-4555-8555-555555555501','Alert supervisor','supervisor',true),('f5555555-5555-4555-8555-555555555502','Alert customer','cliente',true) on conflict(id) do update set funcao=excluded.funcao,ativo=excluded.ativo;
+insert into public.clientes(id,usuario_id,nome,telefone) values('f5555555-5555-4555-8555-555555555503','f5555555-5555-4555-8555-555555555502','Alert customer','5541966666666');
+insert into public.pedidos(id,cliente_id,status,tipo_entrega,total_produtos_centavos,total_pedido_centavos,meio_pagamento,status_pagamento,estoque_estado) values('f5555555-5555-4555-8555-555555555504','f5555555-5555-4555-8555-555555555503','entregue','retirada',1000,1000,'pix','pendente','aplicado');
+insert into public.accounts_receivable(id,pedido_id,amount_total_centavos,status,reason,created_by) values('f5555555-5555-4555-8555-555555555505','f5555555-5555-4555-8555-555555555504',1000,'open','test fixture','f5555555-5555-4555-8555-555555555501');
+insert into public.accounts_receivable_alerts(id,receivable_id,event_type,event_id,payload) values('f5555555-5555-4555-8555-555555555510','f5555555-5555-4555-8555-555555555505','receivable_opened','f5555555-5555-4555-8555-555555555511','{"message_key":"receivable_opened"}');
+select has_table('public','accounts_receivable_alert_deliveries','staff alert delivery queue exists');select table_privs_are('public','accounts_receivable_alert_deliveries','authenticated',array['SELECT'],'staff only has select');select function_privs_are('public','claim_receivable_alert_delivery',array['integer'],'authenticated',array[]::text[],'authenticated cannot claim');
+select ok((select count(*) from public.accounts_receivable_alert_deliveries where alert_id='f5555555-5555-4555-8555-555555555510')>=1,'alert fans out to every active manager');
+set local role service_role;select set_config('request.jwt.claims','{"role":"service_role"}',true);select * from public.claim_receivable_alert_delivery(60) \gset
+select ok(:id::bigint>0,'service claims a delivery');select is(:'event_type'::text,'receivable_opened'::text,'claim exposes symbolic event');select is(:'payload'::jsonb,'{"message_key":"receivable_opened"}'::jsonb,'claim exposes symbolic payload only');
+select ok(public.complete_receivable_alert_delivery(:id,'retryable','private@example.test',:'lease_token',:attempt),'retry completion is fenced');reset role;
+select is((select status||':'||last_error from public.accounts_receivable_alert_deliveries where id=:id),'pending:delivery_failed','unknown errors are normalized');
+set local role postgres;update public.accounts_receivable_alert_deliveries set next_attempt_at=now() where id=:id;reset role;
+set local role service_role;select set_config('request.jwt.claims','{"role":"service_role"}',true);select * from public.claim_receivable_alert_delivery(60) \gset next_
+select ok(not public.complete_receivable_alert_delivery(:id,'success',null,:'lease_token',:attempt),'stale lease cannot complete');select ok(public.complete_receivable_alert_delivery(:next_id,'success',null,:'next_lease_token',:next_attempt),'current lease completes');reset role;
+select is((select status from public.accounts_receivable_alert_deliveries where id=:id),'delivered','delivery reaches terminal success');select is((select attempts from public.accounts_receivable_alert_deliveries where id=:id),2,'attempt counter is durable');
+set local role authenticated;select set_config('request.jwt.claim.sub','f5555555-5555-4555-8555-555555555501',true);select is((select count(*)::integer from public.accounts_receivable_alert_deliveries where recipient_id=auth.uid()),1,'recipient can read own delivery state');reset role;
+select * from finish();rollback;
