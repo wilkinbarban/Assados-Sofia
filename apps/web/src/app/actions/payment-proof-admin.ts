@@ -224,7 +224,7 @@ export async function mutatePaymentProofAdmin(input: MutationInput): Promise<Mut
 
 export async function getPaymentProofForPreviewModal(proofId: string) {
   if (!uuid.test(proofId)) return { success: false as const, error: 'INVALID_REQUEST' }
-  const actor = await privilegedStaff()
+  const actor = await staff()
   if (!actor) return { success: false as const, error: 'FORBIDDEN' }
 
   const { data: proof, error: proofError } = await actor.session
