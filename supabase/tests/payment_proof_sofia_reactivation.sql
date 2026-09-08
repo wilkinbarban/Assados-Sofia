@@ -1,8 +1,3 @@
-select to_regprocedure('public.reactivate_sofia_after_terminal_payment_proof(uuid)') is null as needs_sofia_reactivation \gset
-\if :needs_sofia_reactivation
-\ir ../migrations/20260908180000_payment_proof_sofia_reactivation.sql
-\endif
-
 begin;
 select plan(5);
 

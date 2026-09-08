@@ -158,9 +158,13 @@ export async function classifyPaymentProof(input: Input): Promise<AdvisoryResult
         const result = review(input.model, 'invalid_provider_output', input.extractedText)
         await persist({ ...result, proofId: input.proofId }); return result
       }
-      // Provider output is advisory only: downstream persistence always retains manual review.
+      // Visual OCR remains manual-only; established PDF text classification may
+      // preserve its advisory disposition. Neither path grants approval authority.
+      const disposition: Disposition = input.imageDataUrl ? 'manual_review'
+        : parsed.confidence < 0.8 ? 'manual_review'
+          : parsed.likely_payment_proof ? 'accepted' : 'rejected'
       const result: AdvisoryResult = {
-        disposition: 'manual_review', likelyPaymentProof: parsed.likely_payment_proof, confidence: parsed.confidence,
+        disposition, likelyPaymentProof: parsed.likely_payment_proof, confidence: parsed.confidence,
         suggestedAmountCents: parsed.suggested_amount_cents, reasonCode: parsed.reason_code,
         approved: false, model: input.model,
       }

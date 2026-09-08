@@ -605,7 +605,7 @@ export default function ModalPagamentoCliente({
                   <UploadCloud className="h-5 w-5" />
                 </div>
                 <p className="text-xs font-bold text-zinc-200">
-                  Clique para selecionar ou arraste seu comprovante
+                  Clique para selecionar ou arraste o comprovante
                 </p>
                 <p className="text-[10px] text-zinc-400 mt-1">
                   PDF, JPG/JPEG ou PNG de até 5MB • o pagamento será analisado antes da confirmação

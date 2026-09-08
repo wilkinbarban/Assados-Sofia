@@ -7,7 +7,7 @@ const preview = readFileSync('apps/web/src/app/api/payment-proofs/[id]/preview/r
 const admin = readFileSync('apps/web/src/app/actions/payment-proof-admin.ts', 'utf8')
 
 describe('canonical web payment-proof integration', () => {
-  it('routes the web upload through the canonical PDF-only processor', () => {
+  it('routes the web upload through the canonical safe-media processor', () => {
     expect(pedidos).toContain('processCanonicalPaymentProof')
     expect(pedidos).not.toContain("status: 'review'")
     expect(pedidos).not.toContain("mime_type: isPdf ? 'application/pdf' : 'image/png'")
@@ -15,9 +15,9 @@ describe('canonical web payment-proof integration', () => {
     expect(pedidos).toContain('conversationId: conversaId')
   })
 
-  it('uses the atomic queued intake RPC, hashes the original PDF bytes, and sends its authoritative conversation', () => {
+  it('uses the atomic queued intake RPC, hashes normalized bytes, and sends its authoritative conversation', () => {
     expect(intake).toContain("rpc('admit_and_enqueue_payment_proof'")
-    expect(intake).toContain("createHash('sha256').update(input.bytes)")
+    expect(intake).toContain("createHash('sha256').update(valid.bytes)")
     expect(intake).toContain('conversationId?: string | null')
     expect(intake).toContain('p_conversation_id: input.conversationId ?? null')
   })
