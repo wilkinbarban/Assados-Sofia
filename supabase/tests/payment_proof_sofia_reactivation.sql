@@ -47,8 +47,8 @@ insert into public.payment_proof_reconciliations(proof_id,actor_id,idempotency_k
 values ('f6000000-0000-4000-8000-000000000021','f6000000-0000-4000-8000-000000000030','f6000000-0000-4000-8000-000000000031',100,'supervisor','terminal-reconciliation');
 select ok(
   (select not sofia_dormindo and motivo is null from public.whatsapp_sofia_states where cliente_id='f6000000-0000-4000-8000-000000000001')
-  and (select ia_ativa from public.conversas where id='f6000000-0000-4000-8000-000000000011'),
-  'canonical reconciliation atomically reactivates Sofia and open conversations'
+  and not (select ia_ativa from public.conversas where id='f6000000-0000-4000-8000-000000000011'),
+  'canonical reconciliation reactivates WhatsApp state without overriding conversation handoff'
 );
 
 insert into public.payment_proof_events(proof_id,event_type,source,previous_status,result_status,reason)

@@ -63,7 +63,7 @@ function imageDimensions(bytes: Uint8Array): { width:number;height:number } | nu
     if (bytes[i++] !== 0xff) continue
     const marker=bytes[i++]; const length=(bytes[i]<<8)|bytes[i+1]
     if (length < 2 || i + length > bytes.length) return null
-    if (marker >= 0xc0 && marker <= 0xc3) return { height:(bytes[i+3]<<8)|bytes[i+4], width:(bytes[i+5]<<8)|bytes[i+6] }
+    if ((marker >= 0xc0 && marker <= 0xc3) || (marker >= 0xc5 && marker <= 0xc7) || (marker >= 0xc9 && marker <= 0xcb) || (marker >= 0xcd && marker <= 0xcf)) return { height:(bytes[i+3]<<8)|bytes[i+4], width:(bytes[i+5]<<8)|bytes[i+6] }
     i += length
   }
   return null
@@ -73,7 +73,7 @@ function canonicalImage(bytes: Uint8Array, mimeType: unknown) {
   if ((mimeType !== 'image/jpeg' && mimeType !== 'image/png') || bytes.length === 0 || bytes.length > 5 * 1024 * 1024) return null
   const dimensions=imageDimensions(bytes)
   if (!dimensions || !Number.isSafeInteger(dimensions.width) || !Number.isSafeInteger(dimensions.height) || dimensions.width < 1 || dimensions.height < 1) return null
-  return { png:bytes, sha256:createHash('sha256').update(bytes).digest('hex'), ...dimensions, version:'canonical-image', dataUrl:`data:${mimeType};base64,${Buffer.from(bytes).toString('base64')}` }
+  return { png:bytes, sha256:createHash('sha256').update(bytes).digest('hex'), ...dimensions, version:'canonical-image', dataUrl:`data:${mimeType};base64,${Buffer.from(bytes).toString('base64')}`, contentType:mimeType }
 }
 
 export async function processPaymentProofJob(input:{proofId:string;db:any;apiKey?:string|null;model?:string|null;render?:Render;classify?:Classify}) {
@@ -94,8 +94,10 @@ export async function processPaymentProofJob(input:{proofId:string;db:any;apiKey
     let rendered:PaymentProofRender
     try { rendered=image ?? await (input.render??renderPaymentProofWithWorker)(bytes) } catch { return {ok:false as const,stage:'render' as const} }
     try {
-      const previewKey=`proofs/private/${createHash('sha256').update(`${proof.channel}:${input.proofId}`).digest('hex')}.png`
-      if((await bucket.upload(previewKey,Buffer.from(rendered.png),{contentType:'image/png',upsert:true})).error)return {ok:false as const,stage:'preview' as const}
+      const previewType=image?.contentType??'image/png'
+      const previewExtension=previewType==='image/jpeg'?'jpg':'png'
+      const previewKey=`proofs/private/${createHash('sha256').update(`${proof.channel}:${input.proofId}`).digest('hex')}.${previewExtension}`
+      if((await bucket.upload(previewKey,Buffer.from(rendered.png),{contentType:previewType,upsert:true})).error)return {ok:false as const,stage:'preview' as const}
       const recorded=await input.db.rpc('record_payment_proof_render',{p_proof_id:input.proofId,p_render_key:'page-1',p_storage_key:previewKey,p_sha256:rendered.sha256,p_width:rendered.width,p_height:rendered.height,p_version:rendered.version})
       if(recorded.error)return {ok:false as const,stage:'preview' as const}
     } catch { return {ok:false as const,stage:'preview' as const} }

@@ -6,7 +6,10 @@ const answer = { likely_payment_proof:true, confidence:0.99, suggested_amount_ce
 
 describe('payment-proof visual advisory extraction', () => {
   it('sends a bounded canonical image to OpenRouter and remains manual-review only', async () => {
-    const fetcher = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ choices:[{ message:{ content:JSON.stringify(answer) } }] }), { status:200 }))
+    const fetcher = vi.fn(async (...request: Parameters<typeof fetch>) => {
+      void request[0]
+      return new Response(JSON.stringify({ choices:[{ message:{ content:JSON.stringify(answer) } }] }), { status:200 })
+    })
     const persist = vi.fn(async () => undefined)
     const result = await classifyPaymentProof({ proofId:'proof-1', extractedText:'', imageDataUrl:image, apiKey:'key', model:'model', fetcher, persist })
     expect(result).toMatchObject({ disposition:'manual_review', approved:false, suggestedAmountCents:1234 })

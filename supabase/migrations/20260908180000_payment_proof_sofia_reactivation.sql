@@ -32,13 +32,10 @@ begin
     and (silenciada_ate is null or silenciada_ate <= now())
   returning true into v_reactivated;
 
-  if coalesce(v_reactivated, false) then
-    update public.conversas
-    set ia_ativa = true,
-        data_atualizacao = now()
-    where cliente_id = v_customer_id
-      and status = 'aberta';
-  end if;
+  -- Conversation-level handoffs are independent authority. Reactivating the
+  -- WhatsApp state must not fan out into Web/Telegram or another open thread.
+  -- The channel router may resume only when both its own conversation flag and
+  -- this WhatsApp state permit automation.
 end
 $$;
 
