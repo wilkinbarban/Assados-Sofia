@@ -1,0 +1,12 @@
+select to_regprocedure('public.get_financial_operational_reporting(timestamptz,timestamptz)') is null as apply_financial_reporting \gset
+\if :apply_financial_reporting
+\ir ../migrations/20260908240000_financial_operational_reporting.sql
+\endif
+begin;select plan(14);
+select function_privs_are('public','get_financial_operational_reporting',array['timestamp with time zone','timestamp with time zone'],'service_role',array['EXECUTE'],'service may report');select function_privs_are('public','get_financial_operational_reporting',array['timestamp with time zone','timestamp with time zone'],'authenticated',array[]::text[],'authenticated cannot report');
+set local role authenticated;select set_config('request.jwt.claims','{"role":"authenticated","sub":"f6666666-6666-4666-8666-666666666601"}',true);select throws_ok($$select public.get_financial_operational_reporting(now()-interval '1 day',now())$$,'42501','permission denied for function get_financial_operational_reporting','end user is denied before body execution');reset role;
+set local role service_role;select set_config('request.jwt.claims','{"role":"service_role"}',true);select throws_ok($$select public.get_financial_operational_reporting(now(),now())$$,'22023','FINANCIAL_REPORTING_PERIOD_INVALID','empty period rejected');select throws_ok($$select public.get_financial_operational_reporting(now()-interval '367 days',now())$$,'22023','FINANCIAL_REPORTING_PERIOD_INVALID','oversized period rejected');
+select public.get_financial_operational_reporting(now()-interval '1 day',now()+interval '1 day') as report \gset
+select ok((:'report'::jsonb#>>'{scope,operational_only}')::boolean,'scope declares operational reporting');select ok(not(:'report'::jsonb#>>'{scope,fiscal_accounting}')::boolean,'scope rejects fiscal accounting claim');select ok(not(:'report'::jsonb#>>'{scope,double_entry}')::boolean,'scope rejects double-entry claim');select ok(not(:'report'::jsonb#>>'{scope,partial_or_combined_payments}')::boolean,'scope declares partial and combined payments disabled');
+select ok(:'report'::jsonb ? 'receivables','report includes CxC aggregates');select ok(:'report'::jsonb ? 'cash','report includes cash aggregates');select ok(:'report'::jsonb ? 'provider_settlements','report includes fee and bank aggregates');select ok(:'report'::jsonb ? 'refunds','report includes canonical refunds');
+select ok((:'report'::text !~* '(customer|email|phone|external_ref|account_token|pedido_id|uuid)'),'report exposes no PII or identifiers');reset role;select * from finish();rollback;
