@@ -1739,8 +1739,8 @@ export async function enviarComprovantePagamentoCliente(
       .eq('id', pedidoId)
       .single()
 
-    if (!payload.urlComprovante || !payload.nomeArquivo?.toLowerCase().endsWith('.pdf')) {
-      return { success: false, error: 'COMPROVANTE_PDF_OBRIGATORIO' }
+    if (!payload.urlComprovante) {
+      return { success: false, error: 'COMPROVANTE_ARQUIVO_OBRIGATORIO' }
     }
 
     const clienteDono = pedido?.clientes as any
@@ -1778,7 +1778,7 @@ export async function enviarComprovantePagamentoCliente(
       conversationId: conversaId,
       sender: user.id,
       bytes: new Uint8Array(await fileBlob.arrayBuffer()),
-      mimeType: fileBlob.type || 'application/pdf',
+      mimeType: fileBlob.type,
       db: supabaseAdmin,
       storage: supabaseAdmin.storage.from('payment-proofs'),
       apiKey,
