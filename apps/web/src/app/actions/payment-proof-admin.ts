@@ -216,18 +216,7 @@ export async function mutatePaymentProofAdmin(input: MutationInput): Promise<Mut
   const { data: proof, error: proofError } = await actor.session.from('payment_proofs').select('status,purge_after').eq('id', input.proofId).single()
   if (proofError || !proof) return { success: false, error: 'PAYMENT_PROOF_OPERATION_UNAVAILABLE' }
 
-  if (input.operation === 'reconcile' && input.orderIds) {
-    for (const orderId of input.orderIds) {
-      try {
-        await notificarClienteAtualizacaoPedido({
-          pedidoId: orderId,
-          tipo: 'status_pagamento',
-          statusPagamento: 'aprovado',
-          supabaseClient: actor.session,
-        })
-      } catch {}
-    }
-  }
+  // reconcile_payment_proof records canonical payment events; the outbox delivers them.
 
   revalidatePath('/atendimento/admin'); revalidatePath('/atendimento')
   return { success: true, proof }
@@ -383,17 +372,7 @@ export async function approvePaymentProofDirectly(proofId: string, orderId: stri
     // 5. Release lease
     await actor.session.rpc('release_payment_proof_lease', { p_proof_id: proofId, p_lease_token: token })
 
-    // 6. Notificar cliente nos canais cadastrados (Web, WhatsApp, Telegram)
-    try {
-      await notificarClienteAtualizacaoPedido({
-        pedidoId: orderId,
-        tipo: 'status_pagamento',
-        statusPagamento: 'aprovado',
-        supabaseClient: actor.session,
-      })
-    } catch (notifErr) {
-      console.warn('Falha ao notificar aprovação de comprovante:', notifErr)
-    }
+    // reconcile_payment_proof records the canonical payment event; the outbox delivers it.
 
     revalidatePath('/atendimento')
     revalidatePath('/atendimento/pedidos')

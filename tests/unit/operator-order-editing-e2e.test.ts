@@ -156,7 +156,7 @@ describe('Operator Order Item Editing & Real-Time Recalculation Flow', () => {
     expect(res.data[0].nome).toBe('Costela Premium 1kg')
   })
 
-  it('allows operator to edit items, recalculating totals in real-time and notifying customer', async () => {
+  it('keeps the legacy notification for non-canonical item edits while recalculating totals', async () => {
     // 1 Costela (89,90) + 2 Pães de Alho (2x 15,00 = 30,00) = Total 119,90 (11990 centavos)
     const novosItens = [
       {
@@ -184,14 +184,13 @@ describe('Operator Order Item Editing & Real-Time Recalculation Flow', () => {
     // Verify deletion and replacement of items
     expect(mockAdminClient.from).toHaveBeenCalledWith('itens_pedido')
 
-    // Verify insertion of updated items
-    expect(mockAdminClient.from).toHaveBeenCalledWith('mensagens')
-
-    // Verify omnichannel notification was dispatched
+    // A single legacy dispatcher carries the detailed non-canonical update.
+    expect(notificarClienteAtualizacaoPedido).toHaveBeenCalledTimes(1)
     expect(notificarClienteAtualizacaoPedido).toHaveBeenCalledWith(
       expect.objectContaining({
         pedidoId: mockPedidoExistente.id,
         tipo: 'status_pedido',
+        mensagem: expect.stringContaining('Itens Atualizados'),
       })
     )
   })

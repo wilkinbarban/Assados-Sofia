@@ -363,20 +363,6 @@ export async function actionEditarItensPedidoOperador(input: {
 
     const mensagemAtualizacao = `📝 *Pedido #${pedidoId.substring(0, 8).toUpperCase()} Atualizado no Balcão!*\n\n*Itens Atualizados:*\n${itensTexto}\n\n💰 *Novo Total:* ${formatarMoeda(novoTotalPedidoCentavos)}\n\nOlá! Seu pedido foi ajustado conforme combinado com o atendimento. Você já pode conferir no seu painel!`
 
-    // Registrar no chat se houver conversa vinculada
-    if (pedido.conversa_id) {
-      await admin.from('mensagens').insert({
-        conversa_id: pedido.conversa_id,
-        remetente: 'operador',
-        conteudo: mensagemAtualizacao,
-        url_anexo: null,
-      })
-
-      await admin.from('conversas').update({
-        data_atualizacao: new Date().toISOString(),
-      }).eq('id', pedido.conversa_id)
-    }
-
     safeRevalidatePath('/atendimento')
     safeRevalidatePath('/atendimento/pedidos')
     safeRevalidatePath('/cliente/chat')
@@ -389,8 +375,9 @@ export async function actionEditarItensPedidoOperador(input: {
         tipo: 'status_pedido',
         novoStatus: pedido.status,
         statusPagamento: pedido.status_pagamento,
-      }).catch((err) => {
-        console.warn('[actionEditarItensPedidoOperador] Erro não-bloqueante na notificação:', err)
+        mensagem: mensagemAtualizacao,
+      }).catch(() => {
+        console.warn('[actionEditarItensPedidoOperador] Falha não-bloqueante na notificação')
       })
     }
 
@@ -787,15 +774,7 @@ export async function confirmarPedidoOperador(pedidoId: string, correlationId = 
 
     safeRevalidatePath('/atendimento')
 
-    // Disparar notificação omnichannel (Web Chat, WhatsApp, Telegram) de forma não-bloqueante
-    notificarClienteAtualizacaoPedido({
-      pedidoId,
-      tipo: 'status_pedido',
-      novoStatus: 'confirmado',
-      supabaseClient: supabase,
-    }).catch((err) => {
-      console.warn('[confirmarPedidoOperador] Falha não-bloqueante na notificação omnichannel:', err)
-    })
+    // transicionar_pedido registra o evento canônico; o outbox entrega a notificação.
 
     // Buscar o pedido atualizado para retornar
     const { data: pedidoAtualizado } = await supabase
@@ -1196,16 +1175,7 @@ export async function actionAtualizarStatusPedido(params: {
     safeRevalidatePath('/atendimento')
     safeRevalidatePath('/atendimento/pedidos')
 
-    // Disparar notificação omnichannel (Web Chat, WhatsApp, Telegram) de forma não-bloqueante
-    notificarClienteAtualizacaoPedido({
-      pedidoId,
-      tipo: 'status_pedido',
-      novoStatus,
-      motivo: reason,
-      supabaseClient: supabase,
-    }).catch((err) => {
-      console.warn('[actionAtualizarStatusPedido] Falha não-bloqueante na notificação omnichannel:', err)
-    })
+    // transicionar_pedido registra o evento canônico; o outbox entrega a notificação.
 
     return { success: true, data }
   } catch (error: any) {
@@ -1265,16 +1235,7 @@ export async function actionAtualizarStatusPagamento(params: {
     safeRevalidatePath('/atendimento')
     safeRevalidatePath('/atendimento/pedidos')
 
-    // Disparar notificação omnichannel (Web Chat, WhatsApp, Telegram) de forma não-bloqueante
-    notificarClienteAtualizacaoPedido({
-      pedidoId,
-      tipo: 'status_pagamento',
-      statusPagamento,
-      motivo: normalizedReason,
-      supabaseClient: supabase,
-    }).catch((err) => {
-      console.warn('[actionAtualizarStatusPagamento] Falha não-bloqueante na notificação omnichannel:', err)
-    })
+    // registrar_status_pagamento registra o evento canônico; o outbox entrega a notificação.
 
     return { success: true, data }
   } catch (error: any) {
