@@ -94,6 +94,7 @@ const queues = [
 ] as const
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const proofsPerPage = 10
 
 export function quarantineCountdown(deadline: string | null, now = new Date()) {
   if (!deadline) return '—'
@@ -164,6 +165,7 @@ export default function PaymentProofAdminPanel({
   const privileged = role === 'admin' || role === 'supervisor'
   const [proofs, setProofs] = useState(initialProofs ?? [])
   const [queue, setQueue] = useState(initialProofs?.[0]?.status ?? 'identity_pending')
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(initialProofs === undefined)
   const [orders, setOrders] = useState(initialOrders ?? [])
   const [selected, setSelected] = useState<string[]>([])
@@ -184,6 +186,10 @@ export default function PaymentProofAdminPanel({
   const [busy, startTransition] = useTransition()
   const previewDialogRef = useModalFocus(Boolean(preview?.preview_url), () => setPreview(null))
   const visible = proofs.filter((p) => p.status === queue)
+  const pageCount = Math.max(1, Math.ceil(visible.length / proofsPerPage))
+  const currentPage = Math.min(page, pageCount)
+  const pageStart = (currentPage - 1) * proofsPerPage
+  const paginatedProofs = visible.slice(pageStart, pageStart + proofsPerPage)
   const replayTargetValid = replaySource === 'processing_queue' ? uuid.test(replayTarget) : /^[1-9]\d*$/.test(replayTarget)
 
   const refreshProofs = useCallback(async () => {
@@ -243,6 +249,10 @@ export default function PaymentProofAdminPanel({
       else setError(message(r.error || ''))
     })
   }, [gateDiagnostics, privileged])
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount))
+  }, [pageCount])
 
   const release = useCallback(
     (current: { proofId: string; token: string }) =>
@@ -468,7 +478,10 @@ export default function PaymentProofAdminPanel({
               key={id}
               type="button"
               aria-pressed={isCurrent}
-              onClick={() => setQueue(id)}
+              onClick={() => {
+                setQueue(id)
+                setPage(1)
+              }}
               className={`inline-flex items-center gap-2 rounded-2xl px-4 py-2.5 text-xs font-bold transition-all cursor-pointer select-none border ${
                 isCurrent
                   ? 'bg-amber-500 text-zinc-950 border-amber-500 shadow-md shadow-amber-500/20'
@@ -495,8 +508,27 @@ export default function PaymentProofAdminPanel({
         </div>
       )}
 
-      {/* Grid de Cards de Comprovantes */}
-      <div className="grid gap-4 overflow-auto xl:grid-cols-2">
+      {/* Proof workspace */}
+      {!loading && visible.length > 0 && (
+        <nav aria-label="Paginação de comprovantes" className="flex items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-900/70 px-4 py-2 text-xs">
+          <span aria-live="polite" className="font-medium text-zinc-400">
+            Mostrando {pageStart + 1}–{Math.min(pageStart + proofsPerPage, visible.length)} de {visible.length} comprovantes
+          </span>
+          {pageCount > 1 && (
+            <div className="flex items-center gap-2">
+              <button type="button" aria-label="Página anterior" disabled={currentPage === 1} onClick={() => setPage((current) => Math.max(1, current - 1))} className="rounded-xl border border-zinc-700 px-3 py-1.5 font-semibold text-zinc-300 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40">
+                Anterior
+              </button>
+              <span className="font-mono text-zinc-500">{currentPage}/{pageCount}</span>
+              <button type="button" aria-label="Próxima página" disabled={currentPage === pageCount} onClick={() => setPage((current) => Math.min(pageCount, current + 1))} className="rounded-xl border border-zinc-700 px-3 py-1.5 font-semibold text-zinc-300 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40">
+                Próxima
+              </button>
+            </div>
+          )}
+        </nav>
+      )}
+
+      <div aria-label="Resultados de comprovantes" className="grid min-h-0 flex-1 gap-4 overflow-y-auto pr-1 xl:grid-cols-2">
         {loading ? (
           <div role="status" className="col-span-2 p-12 text-center text-sm font-medium text-zinc-500">
             Carregando comprovantes…
@@ -506,7 +538,7 @@ export default function PaymentProofAdminPanel({
             Nenhum comprovante nesta fila.
           </div>
         ) : (
-          visible.map((p) => {
+          paginatedProofs.map((p) => {
             const isReserved = lease?.proofId === p.id
             const confidencePercent = p.extraction_confidence != null ? Math.round(p.extraction_confidence * 100) : null
             const formattedSuggested = p.suggested_cents != null ? `R$ ${(p.suggested_cents / 100).toFixed(2).replace('.', ',')}` : '—'
