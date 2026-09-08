@@ -48,6 +48,18 @@ function getSupabase(override?: any) {
   }
 }
 
+function mensagemStatusComprovante(status?: { proof_status?: string; payment_status?: string } | null): string {
+  if (!status || status.proof_status === 'indisponivel' || status.payment_status === 'indisponivel') {
+    return 'Não consegui consultar o status do comprovante com segurança agora. Se precisar, nossa equipe pode ajudar.'
+  }
+
+  if (status.payment_status === 'atualizado') {
+    return 'O status do pagamento do seu pedido foi atualizado. Para qualquer confirmação, nossa equipe segue à disposição.'
+  }
+
+  return 'Seu comprovante está em análise. Esta consulta não confirma recebimento de dinheiro nem toma decisões financeiras.'
+}
+
 /**
  * Executa uma Tool da Sofia para operações de negócio no CRM.
  */
@@ -202,6 +214,36 @@ export async function executarToolSofia(
         success: true,
         mensagem: `Nossos horários de retirada para domingo são: ${horariosTexto}. As retiradas são feitas no nosso balcão aqui no Umbará!`,
         data: HORARIOS_RETIRADA_DOMINGO,
+      }
+    }
+
+    case 'explicar_formatos_comprovante': {
+      return {
+        success: true,
+        mensagem: 'Você pode enviar o comprovante em PDF, JPEG ou PNG, com até 5 MB. O envio não confirma recebimento de dinheiro nem toma decisões financeiras.',
+      }
+    }
+
+    case 'consultar_status_comprovante_pagamento': {
+      try {
+        if (!supabase) throw new Error('SUPABASE_INDISPONIVEL')
+        const { data, error } = await supabase.rpc('get_customer_payment_proof_public_status', {
+          p_customer_id: context.clienteId,
+          p_pedido_id: args.pedidoId || null,
+        })
+        if (error) throw error
+        const status = Array.isArray(data) ? data[0] : data
+        return {
+          success: true,
+          mensagem: mensagemStatusComprovante(status),
+          data: status || { proof_status: 'indisponivel', payment_status: 'indisponivel' },
+        }
+      } catch {
+        return {
+          success: false,
+          mensagem: 'Não consegui consultar o status do comprovante com segurança agora. Se precisar, nossa equipe pode ajudar.',
+          error: 'STATUS_COMPROVANTE_INDISPONIVEL',
+        }
       }
     }
 
