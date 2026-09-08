@@ -63,7 +63,7 @@ describe('payment proof scheduler hardening', () => {
     expect(healthcheck({ maintenance: `${now - 181}`, alert: `${now}` }).status).not.toBe(0)
     expect(healthcheck({ maintenance: `${now + 60}`, alert: `${now}` }).status).not.toBe(0)
     expect(healthcheck({ maintenance: `${now - 200}`, alert: `${now - 200}` }, '100').status).toBe(0)
-    const service = compose.slice(compose.indexOf('  payment-proof-maintenance:'), compose.indexOf('  evolution-api:'))
+    const service = compose.slice(compose.indexOf('  payment-proof-maintenance:'), compose.indexOf('  notification-outbox-maintenance:'))
     const healthcheckSource = service.slice(service.indexOf('    healthcheck:'))
     expect(healthcheckSource).not.toMatch(/curl|web:3000\/api\/internal\/payment-proofs/)
   })
