@@ -482,30 +482,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Fora do horário de atendimento', data: novaMensagem }, { status: 200 })
     }
 
-    // 11. Preserve chat acknowledgement for proof-like attachments without legacy proof persistence.
-    const isComprovante = mediaType === 'document' || 
-      (conteudo && (conteudo.toLowerCase().includes('comprovante') || conteudo.toLowerCase().includes('pix') || conteudo.toLowerCase().includes('pagamento')))
-
-    if (mediaType && isComprovante) {
-      console.log('[Evolution Webhook] LEGACY_ATTACHMENT_DETECTED')
-      const autoReplyComprovante = 'Recebemos seu comprovante de pagamento. Ele será analisado por um atendente humano em breve. Muito obrigado!'
-      try {
-        await sendEvolutionScheduleMessage(sanitizedPhone, autoReplyComprovante)
-        await supabaseAdmin.from('mensagens').insert({
-          conversa_id: conversaId,
-          remetente: 'ia',
-          conteudo: autoReplyComprovante,
-        })
-      } catch {
-        console.error('[Evolution Webhook] LEGACY_ATTACHMENT_REPLY_FAILED')
-      }
-
-      return NextResponse.json({
-        success: true,
-        message: 'Comprovante recebido para análise',
-        data: novaMensagem,
-      }, { status: 200 })
-    }
+    // 11. Never infer financial receipt from an attachment or payment-like text.
+    // Only the canonical intake branch above may return payment_proof_received.
 
     // 12. Disparar o pipeline RAG se iaAtiva for verdadeira
     if (iaAtiva && conteudo) {
