@@ -59,6 +59,7 @@ function buildConversa(overrides: {
         conversa_id: 'conv-1',
         remetente: 'cliente' as const,
         conteudo: 'comprovante pix',
+        url_anexo: null,
         payment_proof_id: 'proof-1',
         data_criacao: '2026-08-25T01:00:00Z',
       },
