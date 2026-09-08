@@ -129,6 +129,23 @@ export async function listPaymentProofsForAdmin() {
     }
   }
 
+  // A reconciliation query failure is not evidence that a proof is pending.
+  // Keep this projection tri-valued: true (row), false (no row), null (unverifiable).
+  const proofIds = (data || []).map((p) => p.id)
+  let reconciledSet: Set<string> | null = new Set()
+  if (proofIds.length > 0) {
+    try {
+      const { data: recs, error: reconciliationError } = await actor.session
+        .from('payment_proof_reconciliations')
+        .select('proof_id')
+        .in('proof_id', proofIds)
+      if (reconciliationError || !recs) reconciledSet = null
+      else reconciledSet = new Set(recs.map((r) => r.proof_id))
+    } catch {
+      reconciledSet = null
+    }
+  }
+
   return { success: true as const, role: actor.role, data: (data || []).map((proof) => {
     const cust = proof.customer_id ? customerMap.get(proof.customer_id) : null
     return {
@@ -137,6 +154,7 @@ export async function listPaymentProofsForAdmin() {
       customer_phone: cust?.telefone || null,
       suggested_cents: proof.suggested_cents ?? proof.confirmed_cents ?? null,
       extraction_confidence: proof.extraction_confidence ?? null,
+      is_reconciled: reconciledSet === null ? null : reconciledSet.has(proof.id),
       preview_url: `/api/payment-proofs/${proof.id}/preview`,
       original_url: `/api/payment-proofs/${proof.id}/original`,
     }
@@ -263,6 +281,20 @@ export async function getPaymentProofForPreviewModal(proofId: string) {
     if (order) orderData = order
   }
 
+  // Preserve unknown when reconciliation evidence cannot be read; callers must fail closed.
+  let isReconciled: boolean | null = null
+  try {
+    const { data: rec, error: reconciliationError } = await actor.session
+      .from('payment_proof_reconciliations')
+      .select('proof_id')
+      .eq('proof_id', proofId)
+      .limit(1)
+      .maybeSingle()
+    if (!reconciliationError) isReconciled = !!rec
+  } catch {
+    // Keep reconciliation unverifiable.
+  }
+
   return {
     success: true as const,
     data: {
@@ -273,6 +305,7 @@ export async function getPaymentProofForPreviewModal(proofId: string) {
         suggested_cents: proof.suggested_cents,
         confirmed_cents: proof.confirmed_cents,
         extraction_confidence: proof.extraction_confidence,
+        is_reconciled: isReconciled,
         preview_url: `/api/payment-proofs/${proof.id}/preview`,
         original_url: `/api/payment-proofs/${proof.id}/original`,
       },

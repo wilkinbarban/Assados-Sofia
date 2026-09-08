@@ -109,6 +109,7 @@ type ProofModalDetails = {
     suggested_cents: number | null
     confirmed_cents: number | null
     extraction_confidence: number | null
+    is_reconciled: boolean | null
     preview_url: string
     original_url: string
   }
@@ -162,27 +163,32 @@ export default function ModalVisualizadorComprovante({
 
   // Carregar detalhes do comprovante e do pedido correspondente
   useEffect(() => {
+    let active = true
+
     if (!isOpen || !effectiveProofId) {
       setProofDetails(null)
       setAcaoFeedback(null)
-      return
+      return () => { active = false }
     }
 
     setDetalhesCarregando(true)
     setAcaoFeedback(null)
+    setProofDetails(null)
 
     getPaymentProofForPreviewModal(effectiveProofId)
       .then((res) => {
-        if (res.success && res.data) {
+        if (active && res.success && res.data && res.data.proof.id === effectiveProofId) {
           setProofDetails(res.data)
         }
       })
       .catch((err) => {
-        console.warn('Não foi possível carregar detalhes do comprovante:', err)
+        if (active) console.warn('Não foi possível carregar detalhes do comprovante:', err)
       })
       .finally(() => {
-        setDetalhesCarregando(false)
+        if (active) setDetalhesCarregando(false)
       })
+
+    return () => { active = false }
   }, [isOpen, effectiveProofId])
 
   const carregarPaginaComoPng = useCallback(
@@ -421,14 +427,18 @@ export default function ModalVisualizadorComprovante({
 
   // Ações de Aprovação e Rejeição
   const handleAprovar = async () => {
-    if (!proofDetails?.proof?.id || !proofDetails?.order?.id) return
+    if (
+      !effectiveProofId ||
+      proofDetails?.proof?.id !== effectiveProofId ||
+      !proofDetails?.order?.id
+    ) return
     setAcaoCarregando(true)
     setAcaoFeedback(null)
 
     try {
       const valorCentavos =
-        proofDetails.proof.suggested_cents ||
         proofDetails.proof.confirmed_cents ||
+        proofDetails.proof.suggested_cents ||
         proofDetails.order.total_pedido_centavos
 
       const res = await approvePaymentProofDirectly(
@@ -449,7 +459,7 @@ export default function ModalVisualizadorComprovante({
         )
         setAcaoFeedback({
           tipo: 'sucesso',
-          msg: '✓ Comprovante aprovado com sucesso! Pedido conciliado.',
+          msg: '✓ Comprovante aprovado e conciliação comprovante–pedido concluída.',
         })
         window.dispatchEvent(
           new CustomEvent('asados:order-updated', {
@@ -533,9 +543,9 @@ export default function ModalVisualizadorComprovante({
     data_criacao: new Date().toISOString(),
   } : null)
 
-  const isAlreadyApproved =
-    targetOrder?.status_pagamento === 'aprovado' ||
-    proofDetails?.proof?.status === 'admitted'
+  const reconciliation = proofDetails?.proof?.is_reconciled
+  const isReconciled = reconciliation === true
+  const reconciliationUnverifiable = reconciliation !== true && reconciliation !== false
   const isQuarantined = proofDetails?.proof?.status === 'quarantined'
 
   return (
@@ -697,7 +707,17 @@ export default function ModalVisualizadorComprovante({
                     <ShieldX className="h-3.5 w-3.5 text-rose-400" />
                     <span>Passar para Quarentena</span>
                   </button>
-                  {!isAlreadyApproved && (
+                  {isReconciled ? (
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 text-xs font-bold shadow-sm">
+                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                      <span>Conciliado</span>
+                    </div>
+                  ) : reconciliationUnverifiable ? (
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-zinc-800 border border-zinc-700 text-zinc-300 text-xs font-bold shadow-sm">
+                      <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
+                      <span>Conciliação não verificável</span>
+                    </div>
+                  ) : (
                     <button
                       type="button"
                       disabled={acaoCarregando}
@@ -705,19 +725,9 @@ export default function ModalVisualizadorComprovante({
                       className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider bg-emerald-500 hover:bg-emerald-400 text-zinc-950 shadow-md shadow-emerald-500/20 transition-all cursor-pointer active:scale-95 disabled:opacity-50"
                       title="Aprovar comprovante e conciliar o pedido"
                     >
-                      {acaoCarregando ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-950" />
-                      ) : (
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      )}
+                      {acaoCarregando ? <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-950" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                       <span>Aprovar Comprovante</span>
                     </button>
-                  )}
-                  {isAlreadyApproved && (
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 text-xs font-bold shadow-sm">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-                      <span>Aprovado</span>
-                    </div>
                   )}
                 </>
               )}

@@ -1739,7 +1739,7 @@ export default function ChatContainer({
 
                           {pedido.status_pagamento === 'aprovado' && (
                             <div className="w-full flex items-center justify-between">
-                              <span className="text-[10px] text-zinc-500">Documento Fiscal & Recibo</span>
+                              <span className="text-[10px] text-zinc-500">Comprovante de Venda</span>
                               <button
                                 type="button"
                                 onClick={() =>
@@ -1754,7 +1754,7 @@ export default function ChatContainer({
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 rounded-lg text-xs font-bold transition-all border border-amber-500/30 cursor-pointer"
                               >
                                 <ReceiptText className="h-3.5 w-3.5" />
-                                <span>2ª Via do Comprovante (PDF)</span>
+                                <span>Ver Comprovante de Venda (PDF)</span>
                                 <Eye className="h-3 w-3 ml-0.5 text-zinc-400" />
                               </button>
                             </div>
@@ -2034,7 +2034,7 @@ export default function ChatContainer({
                                 className="w-full text-center py-2 bg-zinc-800 hover:bg-zinc-700 text-amber-300 text-xs font-bold rounded-xl border border-amber-500/30 inline-flex items-center justify-center gap-1.5 cursor-pointer"
                               >
                                 <ReceiptText className="h-3.5 w-3.5" />
-                                <span>2ª Via do Comprovante (PDF)</span>
+                                <span>Ver Comprovante de Venda (PDF)</span>
                                 <Eye className="h-3 w-3 ml-0.5 text-zinc-400" />
                               </button>
                             )}

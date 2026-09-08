@@ -419,7 +419,7 @@ export default function ModalPagamentoCliente({
                   )}
                   <div className="flex items-center gap-1.5 text-[11px] font-bold text-zinc-700 mt-1">
                     <Clock className="h-3 w-3 text-amber-600" />
-                    <span>Aprovação imediata em até 15 segundos</span>
+                    <span>PIX processado via Mercado Pago — a confirmação depende do seu banco</span>
                   </div>
                 </div>
 

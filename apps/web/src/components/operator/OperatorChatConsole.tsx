@@ -260,13 +260,13 @@ export default function OperatorChatConsole({
     urlArquivo: null,
   })
   const [proofStatus, setProofStatus] = useState<'review' | 'admitted' | 'quarantined' | 'canceled' | null>(null)
+  const [proofReconciled, setProofReconciled] = useState<boolean | null>(null)
 
   useEffect(() => {
     const proofMsg = conversa?.mensagens?.slice().reverse().find((m) => m.payment_proof_id)
-    if (!proofMsg?.payment_proof_id) {
-      setProofStatus(null)
-      return
-    }
+    setProofStatus(null)
+    setProofReconciled(null)
+    if (!proofMsg?.payment_proof_id) return
 
     let ativo = true
     getPaymentProofForPreviewModal(proofMsg.payment_proof_id)
@@ -277,6 +277,7 @@ export default function OperatorChatConsole({
           } else {
             setProofStatus(res.data.proof.status as any)
           }
+          setProofReconciled(res.data.proof.is_reconciled)
         }
       })
       .catch(() => {})
@@ -569,7 +570,7 @@ export default function OperatorChatConsole({
 
         // Caso específico de Comprovante: status dinâmico em tempo real
         if (tipoDetectado === 'comprovante') {
-          if (proofStatus === 'admitted' || resolvido) {
+          if (proofStatus === 'admitted' && proofReconciled) {
             return (
               <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-emerald-950/90 via-zinc-900 to-emerald-950/40 border border-emerald-500/60 p-3.5 text-xs text-emerald-200 shadow-xl shadow-emerald-950/40 shrink-0 animate-in fade-in">
                 <div className="p-2 rounded-xl bg-emerald-500/20 text-emerald-400 shrink-0">
@@ -578,15 +579,50 @@ export default function OperatorChatConsole({
                 <div className="flex-1 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <strong className="text-emerald-300 font-black tracking-wide uppercase text-[11px]">
-                      ✅ COMPROVANTE APROVADO & PAGAMENTO CONFIRMADO
+                      COMPROVANTE CONCILIADO
                     </strong>
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                      Comprovante Validado & Pago
+                      Conciliação Confirmada
                     </span>
                   </div>
                   <p className="text-zinc-300 text-xs leading-relaxed">
-                    O comprovante PIX enviado pelo cliente foi revisado e o pagamento do pedido foi aprovado com sucesso.
+                    O comprovante enviado pelo cliente foi conferido e a conciliação comprovante–pedido foi confirmada pelo atendimento.
                   </p>
+                </div>
+              </div>
+            )
+          }
+
+          if (proofStatus === 'admitted' && proofReconciled === false) {
+            return (
+              <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-amber-950/90 via-zinc-900 to-amber-950/40 border border-amber-500/60 p-3.5 text-xs text-amber-200 shadow-xl shadow-amber-950/40 shrink-0 animate-in fade-in">
+                <div className="p-2 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <strong className="text-amber-300 font-black tracking-wide uppercase text-[11px]">
+                      COMPROVANTE ADMITIDO — CONCILIAÇÃO PENDENTE
+                    </strong>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                      Aguardando Conciliação
+                    </span>
+                  </div>
+                  <p className="text-zinc-300 text-xs leading-relaxed">
+                    O comprovante foi admitido no sistema, mas a conciliação comprovante–pedido ainda não foi concluída. Confira o valor e aprove no painel de comprovantes.
+                  </p>
+                </div>
+              </div>
+            )
+          }
+
+          if (proofStatus === 'admitted' && proofReconciled === null) {
+            return (
+              <div className="mx-6 mt-3 flex items-start gap-3 rounded-2xl bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-700 p-3.5 text-xs text-zinc-300 shadow-xl shrink-0 animate-in fade-in">
+                <div className="p-2 rounded-xl bg-zinc-800 text-amber-400 shrink-0"><AlertTriangle className="h-5 w-5" /></div>
+                <div className="flex-1 space-y-1.5">
+                  <strong className="text-zinc-200 font-black tracking-wide uppercase text-[11px]">CONCILIAÇÃO NÃO VERIFICÁVEL</strong>
+                  <p className="text-zinc-400 text-xs leading-relaxed">Não foi possível verificar a conciliação deste comprovante. Consulte o painel de comprovantes antes de tomar qualquer ação.</p>
                 </div>
               </div>
             )
@@ -873,6 +909,7 @@ export default function OperatorChatConsole({
         pedidoId={comprovanteModal.pedidoId}
         onAprovarSuccess={() => {
           setProofStatus('admitted')
+          setProofReconciled(true)
           if (onConversaUpdated) {
             onConversaUpdated(conversa.id, conversa.ia_ativa, 'aberta')
           }

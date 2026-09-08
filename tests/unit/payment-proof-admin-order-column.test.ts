@@ -26,6 +26,7 @@ function query(result: unknown) {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     neq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
     order: orderMock.mockReturnThis(),
     limit: vi.fn().mockResolvedValue(result),
     single: vi.fn().mockResolvedValue(result),
@@ -219,6 +220,23 @@ describe('eligible payment-proof orders', () => {
       await expect(mutatePaymentProofAdmin({ operation: 'reconcile', proofId: '11111111-1111-4111-8111-111111111111', orderIds, leaseToken: 'a'.repeat(64) })).resolves.toEqual({ success: false, error: 'INVALID_ORDERS' })
     }
     expect(rpc).not.toHaveBeenCalled()
+  })
+
+  it('projects reconciliation as true, false, or null when evidence is unavailable', async () => {
+    const proof = { id: '22222222-2222-4222-8222-222222222222', customer_id: null, channel: 'web', status: 'review' }
+    const makeClient = (reconciliation: unknown) => ({
+      auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'admin-1' } } }) },
+      from: vi.fn((table: string) => table === 'perfis'
+        ? query({ data: { funcao: 'admin', ativo: true } })
+        : table === 'payment_proofs' ? query({ data: [proof], error: null })
+        : { ...query(reconciliation), in: vi.fn().mockResolvedValue(reconciliation) }),
+    })
+    createClientMock.mockResolvedValueOnce(makeClient({ data: [{ proof_id: proof.id }], error: null }))
+    await expect(listPaymentProofsForAdmin()).resolves.toEqual(expect.objectContaining({ data: [expect.objectContaining({ is_reconciled: true })] }))
+    createClientMock.mockResolvedValueOnce(makeClient({ data: [], error: null }))
+    await expect(listPaymentProofsForAdmin()).resolves.toEqual(expect.objectContaining({ data: [expect.objectContaining({ is_reconciled: false })] }))
+    createClientMock.mockResolvedValueOnce(makeClient({ data: null, error: { message: 'unavailable' } }))
+    await expect(listPaymentProofsForAdmin()).resolves.toEqual(expect.objectContaining({ data: [expect.objectContaining({ is_reconciled: null })] }))
   })
 
   it('lists proofs with a non-identifying customer label', async () => {

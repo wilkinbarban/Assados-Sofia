@@ -40,6 +40,7 @@ type Proof = {
   suggested_cents: number | null
   confirmed_cents: number | null
   extraction_confidence: number | null
+  is_reconciled?: boolean
   purge_after: string | null
   created_at: string
 }
@@ -317,7 +318,7 @@ export default function PaymentProofAdminPanel({
               Comprovantes PIX
             </h2>
             <p className="mt-1 text-xs text-zinc-400">
-              Triagem em tempo real, auditoria documental e conciliação bancária supervisionada.
+              Triagem em tempo real, auditoria documental e conciliação comprovante–pedido supervisionada.
             </p>
           </div>
 
@@ -494,6 +495,12 @@ export default function PaymentProofAdminPanel({
                         <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-black uppercase text-amber-300 border border-amber-500/40">
                           <Lock className="h-2.5 w-2.5" />
                           Reservado nesta tela
+                        </span>
+                      )}
+                      {p.is_reconciled && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-black uppercase text-emerald-300 border border-emerald-500/40">
+                          <CheckCircle2 className="h-2.5 w-2.5" />
+                          Conciliado
                         </span>
                       )}
                     </div>
