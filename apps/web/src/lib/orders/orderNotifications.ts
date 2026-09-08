@@ -11,6 +11,8 @@ export interface NotificacaoPedidoParams {
   novoStatus?: string
   statusPagamento?: string
   motivo?: string
+  /** Audited copy for a non-canonical event, such as an item edit. */
+  mensagem?: string
   supabaseClient?: SupabaseClient
 }
 
@@ -55,8 +57,9 @@ export function formatarMensagemNotificacao(params: NotificacaoPedidoParams, nom
 }
 
 /**
- * Despacha notificações em tempo real para todos os canais habilitados do cliente
- * (Web Chat, WhatsApp e Telegram). Não interrompe o fluxo caso um canal externo falhe (fail-safe).
+ * Legacy best-effort dispatcher for non-canonical events only (for example, item edits
+ * and payment-proof rejection notices). Lifecycle and payment RPCs enqueue their own
+ * canonical outbox delivery and must not call this function.
  */
 export async function notificarClienteAtualizacaoPedido(
   params: NotificacaoPedidoParams
@@ -88,7 +91,7 @@ export async function notificarClienteAtualizacaoPedido(
       .single()
 
     if (pedidoError || !pedido) {
-      console.warn(`[Order Notifications] Pedido ${params.pedidoId} não encontrado para notificação:`, pedidoError)
+      console.warn('[Order Notifications] Pedido não encontrado para notificação')
       resultado.erros?.push('PEDIDO_NAO_ENCONTRADO')
       return resultado
     }
@@ -111,7 +114,7 @@ export async function notificarClienteAtualizacaoPedido(
       }
     }
 
-    const mensagemTexto = formatarMensagemNotificacao(params, cliente?.nome)
+    const mensagemTexto = params.mensagem ?? formatarMensagemNotificacao(params, cliente?.nome)
 
     // 2. Canal WhatsApp (se houver telefone cadastrado)
     if (conversaId && cliente?.telefone) {
@@ -125,10 +128,10 @@ export async function notificarClienteAtualizacaoPedido(
           resultado.whatsapp = true
           resultado.web = true
         } else if (resWhatsapp.motivo) {
-          resultado.erros?.push(`WHATSAPP_SKIPPED: ${resWhatsapp.motivo}`)
+          resultado.erros?.push('WHATSAPP_SKIPPED')
         }
-      } catch (err: any) {
-        resultado.erros?.push(`WHATSAPP_EXCEPTION: ${err.message}`)
+      } catch {
+        resultado.erros?.push('WHATSAPP_EXCEPTION')
       }
     }
 
@@ -144,8 +147,8 @@ export async function notificarClienteAtualizacaoPedido(
           resultado.telegram = true
           if (!resultado.web) resultado.web = true
         }
-      } catch (err: any) {
-        resultado.erros?.push(`TELEGRAM_EXCEPTION: ${err.message}`)
+      } catch {
+        resultado.erros?.push('TELEGRAM_EXCEPTION')
       }
     }
 
@@ -162,17 +165,17 @@ export async function notificarClienteAtualizacaoPedido(
         if (!msgError) {
           resultado.web = true
         } else {
-          resultado.erros?.push(`WEB_ERROR: ${msgError.message}`)
+          resultado.erros?.push('WEB_ERROR')
         }
-      } catch (err: any) {
-        resultado.erros?.push(`WEB_EXCEPTION: ${err.message}`)
+      } catch {
+        resultado.erros?.push('WEB_EXCEPTION')
       }
     }
 
     return resultado
-  } catch (error: any) {
-    console.error('[Order Notifications] Falha geral ao notificar cliente:', error)
-    resultado.erros?.push(`GLOBAL_ERROR: ${error.message}`)
+  } catch {
+    console.error('[Order Notifications] Falha geral ao notificar cliente')
+    resultado.erros?.push('GLOBAL_ERROR')
     return resultado
   }
 }
