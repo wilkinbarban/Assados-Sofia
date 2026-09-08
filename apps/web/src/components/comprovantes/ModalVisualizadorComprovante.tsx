@@ -163,12 +163,10 @@ export default function ModalVisualizadorComprovante({
 
   // Carregar detalhes do comprovante e do pedido correspondente
   useEffect(() => {
-    let active = true
-
     if (!isOpen || !effectiveProofId) {
       setProofDetails(null)
       setAcaoFeedback(null)
-      return () => { active = false }
+      return
     }
 
     setDetalhesCarregando(true)
@@ -177,18 +175,16 @@ export default function ModalVisualizadorComprovante({
 
     getPaymentProofForPreviewModal(effectiveProofId)
       .then((res) => {
-        if (active && res.success && res.data && res.data.proof.id === effectiveProofId) {
+        if (res.success && res.data) {
           setProofDetails(res.data)
         }
       })
       .catch((err) => {
-        if (active) console.warn('Não foi possível carregar detalhes do comprovante:', err)
+        console.warn('Não foi possível carregar detalhes do comprovante:', err)
       })
       .finally(() => {
-        if (active) setDetalhesCarregando(false)
+        setDetalhesCarregando(false)
       })
-
-    return () => { active = false }
   }, [isOpen, effectiveProofId])
 
   const carregarPaginaComoPng = useCallback(
@@ -427,18 +423,14 @@ export default function ModalVisualizadorComprovante({
 
   // Ações de Aprovação e Rejeição
   const handleAprovar = async () => {
-    if (
-      !effectiveProofId ||
-      proofDetails?.proof?.id !== effectiveProofId ||
-      !proofDetails?.order?.id
-    ) return
+    if (!proofDetails?.proof?.id || !proofDetails?.order?.id) return
     setAcaoCarregando(true)
     setAcaoFeedback(null)
 
     try {
       const valorCentavos =
-        proofDetails.proof.confirmed_cents ||
         proofDetails.proof.suggested_cents ||
+        proofDetails.proof.confirmed_cents ||
         proofDetails.order.total_pedido_centavos
 
       const res = await approvePaymentProofDirectly(
