@@ -19,6 +19,12 @@ describe('validated security boundary regressions', () => {
     expect(provisioner).toContain('"x-webhook-secret": process.env.EVOLUTION_WEBHOOK_SECRET')
   })
 
+  it('verifies Evolution with a header secret instead of a URL secret', () => {
+    const verifier = read('ops/verify-integrations.sh')
+    expect(verifier).toContain('-H "x-webhook-secret: $webhook_secret"')
+    expect(verifier).not.toContain('?webhook_secret=')
+  })
+
   it('bounds WhatsApp media downloads', () => {
     const source = read('apps/web/src/app/api/webhooks/whatsapp/route.ts')
     expect(source).toContain('MAX_WHATSAPP_MEDIA_BYTES')

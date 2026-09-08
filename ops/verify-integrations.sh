@@ -35,7 +35,8 @@ webhook_secret=$(sed -n 's/^EVOLUTION_WEBHOOK_SECRET=//p' .env)
 [ -n "$webhook_secret" ]
 curl -fsS -o /dev/null \
   -H 'content-type: application/json' \
+  -H "x-webhook-secret: $webhook_secret" \
   --data '{"event":"connection.update"}' \
-  "http://127.0.0.1:3020/api/webhooks/evolution?webhook_secret=$webhook_secret"
+  'http://127.0.0.1:3020/api/webhooks/evolution'
 
 echo 'Application, Supabase, Evolution API, PostgreSQL, Redis, and webhook integration are healthy'
