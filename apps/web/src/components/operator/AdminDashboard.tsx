@@ -39,6 +39,7 @@ import {
   criarUsuarioAdmin,
   editarUsuarioAdmin,
   obterEstatisticasMensagens,
+  obterMetricasFinanceirasOperacionais,
   obterLogsAuditoria,
   deletarUsuarioAdmin,
   purgarUsuarioAdminTotal,
@@ -68,6 +69,7 @@ import TelegramBotCard from './integrations/TelegramBotCard'
 import GoogleCalendarCard from './integrations/GoogleCalendarCard'
 import MercadoPagoCard from './integrations/MercadoPagoCard'
 import { CalendarConfig } from './integrations/types'
+import type { FinancialOperationalMetrics } from '@/lib/admin/financial-metrics'
 
 interface Usuario {
   id: string
@@ -240,6 +242,9 @@ export default function AdminDashboard({
 
   // States para Métricas
   const [estatisticas, setEstatisticas] = useState<Estatisticas>(estatisticasIniciais)
+  const [financialMetrics, setFinancialMetrics] = useState<FinancialOperationalMetrics | null>(null)
+  const [financialMetricsError, setFinancialMetricsError] = useState<string | null>(null)
+  const [financialMetricsFetchedAt, setFinancialMetricsFetchedAt] = useState<string | null>(null)
   const [refreshingMetrics, setRefreshingMetrics] = useState(false)
 
   // States para Auditoria
@@ -665,16 +670,33 @@ export default function AdminDashboard({
 
   // --- Ações de Métricas ---
 
+  const carregarMetricasFinanceiras = React.useCallback(async () => {
+    const endAt = new Date()
+    const startAt = new Date(endAt.getTime() - 30 * 24 * 60 * 60 * 1000)
+    try {
+      const res = await obterMetricasFinanceirasOperacionais({ startAt: startAt.toISOString(), endAt: endAt.toISOString() })
+      if (res.success) {
+        setFinancialMetrics(res.data)
+        setFinancialMetricsFetchedAt(res.fetchedAt)
+        setFinancialMetricsError(null)
+      } else setFinancialMetricsError('Métricas financeiras indisponíveis. Atualize para tentar novamente.')
+    } catch {
+      setFinancialMetricsError('Métricas financeiras indisponíveis. Atualize para tentar novamente.')
+    }
+  }, [])
+
+  React.useEffect(() => {
+    if (activeTab === 'metricas') carregarMetricasFinanceiras()
+  }, [activeTab, carregarMetricasFinanceiras])
+
   const handleRefreshMetrics = async () => {
     setRefreshingMetrics(true)
     try {
-      const res = await obterEstatisticasMensagens()
-      if (res.success && res.data) {
-        setEstatisticas(res.data)
+      const [chat] = await Promise.all([obterEstatisticasMensagens(), carregarMetricasFinanceiras()])
+      if (chat.success && chat.data) {
+        setEstatisticas(chat.data)
         showToast('success', 'Métricas de atendimento atualizadas.')
-      } else {
-        showToast('error', 'Falha ao buscar novas métricas.')
-      }
+      } else showToast('error', 'Falha ao buscar novas métricas.')
     } catch {
       showToast('error', 'Erro ao processar métricas.')
     } finally {
@@ -1773,6 +1795,27 @@ DIRETRIZES RÍGIDAS DE COMPORTAMENTO:
                 Atualizar Indicadores
               </button>
             </div>
+
+            <section aria-label="Auditoria operacional financeira" className="rounded-2xl border border-zinc-800 bg-zinc-900/30 p-5 space-y-4">
+              <div>
+                <h3 className="font-bold text-lg text-zinc-200">Controle operacional financeiro</h3>
+                <p className="text-xs text-zinc-400 mt-1">Auditoria agregada do período de 30 dias. Isto é controle operacional, não é contabilidade fiscal nem escrituração de partidas dobradas.</p>
+                <p className="text-xs text-zinc-500 mt-1">Pagamentos parciais e combinados permanecem desabilitados. Margem operacional: Não disponível — não há dados autoritativos de produto/COGS; taxas de provedor não representam todos os custos.</p>
+                {financialMetricsFetchedAt && <p className="text-[10px] text-zinc-500 mt-2">Proveniência: RPCs operacionais agregadas · Atualizado em {new Date(financialMetricsFetchedAt).toLocaleString('pt-BR')} · [{financialMetrics?.period.startAt} — {financialMetrics?.period.endAt})</p>}
+              </div>
+              {financialMetricsError ? <p role="alert" className="text-sm text-rose-400">{financialMetricsError}</p> : financialMetrics && <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                {[
+                  ['Pedidos criados / vendas aprovadas', `${financialMetrics.ordersCreated} pedidos · ${financialMetrics.approvedSalesCount} vendas aprovadas`],
+                  ['Receita bruta aprovada', `R$ ${(financialMetrics.grossApprovedCents / 100).toFixed(2)}`],
+                  ['Reembolsos / Receita operacional líquida', `R$ ${(financialMetrics.refundsCents / 100).toFixed(2)} / R$ ${(financialMetrics.netOperationalRevenueCents / 100).toFixed(2)}`],
+                  ['Ticket médio aprovado', financialMetrics.averageApprovedTicketCents === null ? 'Não disponível: sem vendas aprovadas válidas' : `R$ ${(financialMetrics.averageApprovedTicketCents / 100).toFixed(2)}`],
+                  ['Provedor: bruto / taxas / líquido', `R$ ${(financialMetrics.providerGrossCents / 100).toFixed(2)} / R$ ${(financialMetrics.providerFeesCents / 100).toFixed(2)} / R$ ${(financialMetrics.providerNetCents / 100).toFixed(2)}`],
+                  ['Contas a receber em aberto', `${financialMetrics.openReceivablesCount} · R$ ${(financialMetrics.openReceivablesCents / 100).toFixed(2)}`],
+                  ['Caixa: sessões / diferença', `${financialMetrics.cashSessionsOpened} abertas · ${financialMetrics.cashSessionsClosed} fechadas · R$ ${(financialMetrics.cashDifferenceCents / 100).toFixed(2)}`],
+                  ['Conciliação bancária', `${financialMetrics.bankReconciledCount} conciliadas (R$ ${(financialMetrics.bankReconciledCents / 100).toFixed(2)}) · ${financialMetrics.bankUnreconciledCount} pendentes (R$ ${(financialMetrics.bankUnreconciledCents / 100).toFixed(2)})`],
+                ].map(([label, value]) => <div key={label} className="rounded-xl border border-zinc-800 p-3"><p className="text-zinc-500">{label}</p><p className="text-zinc-200 font-semibold mt-1">{value}</p></div>)}
+              </div>}
+            </section>
 
             {/* Grid de Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

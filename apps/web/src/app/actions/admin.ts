@@ -14,6 +14,7 @@ import { revalidatePath } from 'next/cache'
 import { consolidateAdminUsers } from '@/lib/admin/user-list'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { resolveOmniRouteAdminTarget } from '@/lib/ai/omniroute-admin-target'
+import { parseFinancialOperationalMetrics, validateReportingPeriod } from '@/lib/admin/financial-metrics'
 
 /**
  * Helper para validar se o usuário atual está autenticado, ativo
@@ -500,6 +501,26 @@ export async function obterEstatisticasMensagens() {
   } catch (error: any) {
     console.error('Erro na action obterEstatisticasMensagens:', error)
     return { success: false, error: error.message || 'ERRO_INTERNO' }
+  }
+}
+
+/** Aggregate-only operational financial control; never returns identifiers or fiscal accounting data. */
+export async function obterMetricasFinanceirasOperacionais(input: unknown) {
+  const period = validateReportingPeriod(input)
+  if (!period) return { success: false as const, error: 'PERIODO_INVALIDO' }
+  try {
+    const check = await verificarPermissaoOperador()
+    if (!check.authorized) return { success: false as const, error: check.error }
+    const admin = createAdminClient()
+    const [operational, financial] = await Promise.all([
+      admin.rpc('get_operational_reporting', { p_start: period.startAt, p_end: period.endAt }),
+      admin.rpc('get_financial_operational_reporting', { p_start: period.startAt, p_end: period.endAt }),
+    ])
+    if (operational.error || financial.error) return { success: false as const, error: 'METRICAS_FINANCEIRAS_INDISPONIVEIS' }
+    return { success: true as const, data: parseFinancialOperationalMetrics(operational.data, financial.data, period.startAt, period.endAt), fetchedAt: new Date().toISOString() }
+  } catch (error: any) {
+    console.error('Erro na action obterMetricasFinanceirasOperacionais:', error)
+    return { success: false as const, error: 'METRICAS_FINANCEIRAS_INDISPONIVEIS' }
   }
 }
 
