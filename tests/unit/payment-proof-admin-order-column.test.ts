@@ -102,9 +102,12 @@ describe('eligible payment-proof orders', () => {
     expect(rpc).not.toHaveBeenCalled()
   })
 
-  it('denies vendedores before direct preview, approval, or rejection work', async () => {
+  it('allows active vendedores to read preview metadata but denies direct approval and rejection', async () => {
     const rpc = vi.fn()
-    const proofQuery = query({ data: { status: 'review' }, error: null })
+    const proofId = '11111111-1111-4111-8111-111111111111'
+    const orderId = '33333333-3333-4333-8333-333333333341'
+    const proofQuery = query({ data: { id: proofId, status: 'review' }, error: null })
+    proofQuery.limit.mockReturnValue(proofQuery)
     const from = vi.fn((table: string) => table === 'perfis'
       ? query({ data: { funcao: 'vendedor', ativo: true } })
       : proofQuery)
@@ -113,15 +116,21 @@ describe('eligible payment-proof orders', () => {
       from,
       rpc,
     })
-    const proofId = '11111111-1111-4111-8111-111111111111'
-    const orderId = '33333333-3333-4333-8333-333333333341'
 
-    await expect(getPaymentProofForPreviewModal(proofId)).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
+    await expect(getPaymentProofForPreviewModal(proofId)).resolves.toEqual(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({
+        proof: expect.objectContaining({
+          id: proofId,
+          preview_url: `/api/payment-proofs/${proofId}/preview`,
+          original_url: `/api/payment-proofs/${proofId}/original`,
+        }),
+      }),
+    }))
     await expect(approvePaymentProofDirectly(proofId, orderId)).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
     await expect(rejectPaymentProofDirectly(proofId)).resolves.toEqual({ success: false, error: 'FORBIDDEN' })
     expect(rpc).not.toHaveBeenCalled()
-    expect(from).toHaveBeenCalledTimes(3)
-    expect(proofQuery.select).not.toHaveBeenCalled()
+    expect(proofQuery.select).toHaveBeenCalled()
   })
 
   it('does not treat an admitted proof as reconciled without a durable order link and approved order', async () => {
