@@ -739,7 +739,7 @@ export default function ChatContainer({
       if (data) {
         setMensagens((prev) => [...prev, data]);
 
-        if (conversa.ia_ativa && messageData.conteudo) {
+        if (conversa.ia_ativa && messageData.conteudo && !messageData.url_anexo) {
           setIsIaTyping(true);
           processarIaChat(conversa.id, messageData.conteudo)
             .then(async () => {
