@@ -276,7 +276,6 @@ export default function ChatContainer({
   const [attachmentPath, setAttachmentPath] = useState<string | null>(null);
   const [attachmentName, setAttachmentName] = useState<string | null>(null);
   const [attachmentType, setAttachmentType] = useState<string | null>(null);
-  const [attachmentSize, setAttachmentSize] = useState<number | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
   const [modalVisualizador, setModalVisualizador] = useState<{
@@ -679,7 +678,6 @@ export default function ChatContainer({
           setAttachmentPath(filePath);
           setAttachmentName(file.name);
           setAttachmentType(file.type || 'application/pdf');
-          setAttachmentSize(file.size);
         } catch (err: any) {
           console.error('Erro no upload:', err);
           setValidationError('Falha ao enviar arquivo. Tente novamente.');
@@ -702,7 +700,6 @@ export default function ChatContainer({
     setAttachmentPath(null);
     setAttachmentName(null);
     setAttachmentType(null);
-    setAttachmentSize(null);
   };
 
   // Submit manual chat message
@@ -726,20 +723,6 @@ export default function ChatContainer({
     setIsSending(true);
 
     try {
-      const isPdf = attachmentType === 'application/pdf' || (attachmentName && attachmentName.toLowerCase().endsWith('.pdf'));
-
-      if (isPdf && attachmentPath && attachmentSize) {
-        await supabase.from('comprovantes').insert({
-          cliente_id: conversa.cliente_id,
-          url_arquivo: attachmentPath,
-          nome_arquivo: attachmentName,
-          tamanho_bytes: attachmentSize,
-        });
-
-        await supabase.from('conversas').update({ ia_ativa: false, status: 'aberta' }).eq('id', conversa.id);
-        setConversa((prev) => ({ ...prev, ia_ativa: false, status: 'aberta' }));
-      }
-
       const { data, error } = await supabase
         .from('mensagens')
         .insert({
@@ -756,22 +739,7 @@ export default function ChatContainer({
       if (data) {
         setMensagens((prev) => [...prev, data]);
 
-        if (isPdf) {
-          const { data: iaMsg } = await supabase
-            .from('mensagens')
-            .insert({
-              conversa_id: conversa.id,
-              remetente: 'ia',
-              conteudo: 'Recebemos seu comprovante de pagamento. Ele será analisado por um atendente humano em breve.',
-              url_anexo: null,
-            })
-            .select()
-            .single();
-
-          if (iaMsg) {
-            setMensagens((prev) => [...prev, iaMsg]);
-          }
-        } else if (conversa.ia_ativa && messageData.conteudo) {
+        if (conversa.ia_ativa && messageData.conteudo) {
           setIsIaTyping(true);
           processarIaChat(conversa.id, messageData.conteudo)
             .then(async () => {
@@ -2070,6 +2038,9 @@ export default function ChatContainer({
           statusPagamento={modalPagamento.statusPagamento}
           abaInicial={modalPagamento.abaInicial}
           onPagamentoConfirmado={() => {
+            carregarPedidosCliente();
+          }}
+          onComprovanteEnviado={() => {
             carregarPedidosCliente();
           }}
         />
