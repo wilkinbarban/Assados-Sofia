@@ -19,6 +19,8 @@ import {
   Globe,
 } from 'lucide-react'
 import { ConfirmActionDialog } from './ui/ConfirmActionDialog'
+import { createClient } from '@/lib/supabase/client'
+import { useModalFocus } from '@/hooks/use-modal-focus'
 import {
   getPaymentProofOperationalGatesDiagnostics,
   getPaymentProofUnresolvedDiagnostics,
@@ -180,18 +182,38 @@ export default function PaymentProofAdminPanel({
   const leaseRef = useRef(lease)
   const replayKey = useRef<string | null>(null)
   const [busy, startTransition] = useTransition()
+  const previewDialogRef = useModalFocus(Boolean(preview?.preview_url), () => setPreview(null))
   const visible = proofs.filter((p) => p.status === queue)
   const replayTargetValid = replaySource === 'processing_queue' ? uuid.test(replayTarget) : /^[1-9]\d*$/.test(replayTarget)
 
+  const refreshProofs = useCallback(async () => {
+    if (!privileged) return
+    const result = await listPaymentProofsForAdmin()
+    if (result.success) setProofs(result.data as Proof[])
+    else setError(message(result.error))
+    setLoading(false)
+  }, [privileged])
+
   useEffect(() => {
-    if (!privileged || initialProofs !== undefined) return
-    listPaymentProofsForAdmin()
-      .then((r) => {
-        if (r.success) setProofs(r.data as Proof[])
-        else setError(message(r.error))
-      })
-      .finally(() => setLoading(false))
-  }, [initialProofs, privileged])
+    if (initialProofs !== undefined) return
+    void refreshProofs()
+  }, [initialProofs, refreshProofs])
+
+  useEffect(() => {
+    if (!privileged) return
+    const supabase = createClient()
+    const refresh = () => void refreshProofs()
+    window.addEventListener('asados:order-updated', refresh)
+    const channel = supabase
+      .channel('operator-payment-proofs-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_proofs' }, refresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pedidos' }, refresh)
+      .subscribe()
+    return () => {
+      window.removeEventListener('asados:order-updated', refresh)
+      void supabase.removeChannel(channel)
+    }
+  }, [privileged, refreshProofs])
 
   useEffect(() => {
     const customer = proofs.find((p) => p.status === 'admitted' && p.customer_id)?.customer_id
@@ -260,8 +282,16 @@ export default function PaymentProofAdminPanel({
       if (!r.success) setError(message(r.error || ''))
       else {
         setProofs((ps) =>
-          ps.map((p) => (p.id === pending.proofId ? { ...p, ...r.proof, status: r.proof?.status ?? p.status } : p))
+          ps.map((p) => (p.id === pending.proofId ? {
+            ...p,
+            ...r.proof,
+            status: r.proof?.status ?? p.status,
+            ...(pending.operation === 'confirm_amount' ? { confirmed_cents: Number(pending.value) } : {}),
+          } : p))
         )
+        window.dispatchEvent(new CustomEvent('asados:order-updated', {
+          detail: { proofId: pending.proofId },
+        }))
         if (['reject', 'reconcile'].includes(pending.operation) && current) {
           release(current)
           setLease(null)
@@ -726,8 +756,10 @@ export default function PaymentProofAdminPanel({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Comprovante PIX ampliado"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in"
+          aria-labelledby="payment-proof-preview-title"
+          ref={previewDialogRef}
+          tabIndex={-1}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4 animate-in fade-in focus:outline-none"
           onClick={(e) => {
             if (e.target === e.currentTarget) setPreview(null)
           }}
@@ -736,7 +768,7 @@ export default function PaymentProofAdminPanel({
             <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
               <div className="flex items-center gap-2 text-amber-400">
                 <Eye className="h-4 w-4" />
-                <h3 className="text-sm font-bold text-zinc-100">Prévia do Comprovante</h3>
+                <h3 id="payment-proof-preview-title" className="text-sm font-bold text-zinc-100">Prévia do comprovante</h3>
               </div>
               <button
                 type="button"

@@ -21,6 +21,7 @@ import {
   Copy,
   Check,
 } from 'lucide-react'
+import { useModalFocus } from '@/hooks/use-modal-focus'
 import {
   getPaymentProofForPreviewModal,
   approvePaymentProofDirectly,
@@ -148,6 +149,7 @@ export default function ModalVisualizadorComprovante({
   const [acaoCarregando, setAcaoCarregando] = useState(false)
   const [acaoFeedback, setAcaoFeedback] = useState<{ tipo: 'sucesso' | 'erro'; msg: string } | null>(null)
   const [copiado, setCopiado] = useState(false)
+  const dialogRef = useModalFocus(isOpen, onClose)
 
   // PDF pagination state
   const [numPages, setNumPages] = useState<number>(1)
@@ -551,9 +553,12 @@ export default function ModalVisualizadorComprovante({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
       <div
-        className="relative w-full max-w-4xl max-h-[94vh] rounded-3xl border border-amber-500/30 bg-zinc-950 p-6 shadow-2xl shadow-black/90 flex flex-col text-zinc-100 overflow-hidden"
+        ref={dialogRef}
+        className="relative w-full max-w-4xl max-h-[94vh] rounded-3xl border border-amber-500/30 bg-zinc-950 p-6 shadow-2xl shadow-black/90 flex flex-col text-zinc-100 overflow-hidden focus:outline-none"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="proof-viewer-title"
+        tabIndex={-1}
       >
         {/* Efeitos de fundo sutis */}
         <div className="absolute -top-32 -right-32 h-64 w-64 rounded-full bg-amber-500/10 blur-3xl pointer-events-none" />
@@ -575,7 +580,7 @@ export default function ModalVisualizadorComprovante({
                     ? 'Prévia gerada do PDF'
                     : 'Imagem do comprovante'}
                 </span>
-                <h3 className="text-sm font-bold text-zinc-50 truncate max-w-md">
+                <h3 id="proof-viewer-title" className="text-sm font-bold text-zinc-50 truncate max-w-md">
                   {nomeArquivo}
                 </h3>
               </div>
@@ -605,7 +610,7 @@ export default function ModalVisualizadorComprovante({
             type="button"
             onClick={onClose}
             className="rounded-full p-2 text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200 transition-colors cursor-pointer shrink-0 ml-2"
-            title="Fechar Visualizador"
+            aria-label="Fechar visualizador"
           >
             <X className="h-5 w-5" />
           </button>
@@ -613,7 +618,7 @@ export default function ModalVisualizadorComprovante({
 
         {/* Card de Comparação Visual com o Pedido e Ações de Aprovação */}
         {detalhesCarregando && (
-          <div className="mt-2 mb-1 px-4 py-2 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400 flex items-center gap-2">
+          <div role="status" className="mt-2 mb-1 px-4 py-2 rounded-xl bg-zinc-900/60 border border-zinc-800 text-xs text-zinc-400 flex items-center gap-2">
             <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />
             <span>Verificando pedido vinculado...</span>
           </div>
@@ -622,10 +627,11 @@ export default function ModalVisualizadorComprovante({
           <div className="mt-3 mb-1 rounded-2xl bg-zinc-900/95 border border-amber-500/40 p-4 shadow-xl flex flex-wrap items-center justify-between gap-4 shrink-0">
             <div className="flex flex-wrap items-center gap-4">
               {/* Badge Destacado do Pedido para Comparação Imediata */}
-              <div
+              <button
+                type="button"
                 onClick={() => handleCopiarIdPedido(targetOrder.id)}
-                className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/50 shadow-md cursor-pointer hover:bg-amber-500/30 transition-colors"
-                title="Clique para copiar o ID do Pedido"
+                className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-amber-500/20 border border-amber-500/50 shadow-md cursor-pointer hover:bg-amber-500/30 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400"
+                aria-label="Copiar ID do pedido"
               >
                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-400">PEDIDO</span>
                 <span className="font-mono text-base font-black tracking-tight text-amber-300 select-all">
@@ -636,7 +642,7 @@ export default function ModalVisualizadorComprovante({
                 ) : (
                   <Copy className="h-3.5 w-3.5 text-amber-400/70" />
                 )}
-              </div>
+              </button>
 
               {/* Valores e comparação */}
               <div className="flex items-center gap-4 text-xs">
@@ -677,6 +683,7 @@ export default function ModalVisualizadorComprovante({
             <div className="flex items-center gap-2 ml-auto">
               {acaoFeedback ? (
                 <div
+                  role={acaoFeedback.tipo === 'erro' ? 'alert' : 'status'}
                   className={`text-xs font-bold px-3 py-1.5 rounded-xl border flex items-center gap-1.5 ${
                     acaoFeedback.tipo === 'sucesso'
                       ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
@@ -771,7 +778,7 @@ export default function ModalVisualizadorComprovante({
                       disabled={currentPage <= 1}
                       onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                       className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-300 disabled:opacity-30 cursor-pointer"
-                      title="Página Anterior"
+                      aria-label="Página anterior"
                     >
                       <ChevronLeft className="h-4 w-4" />
                     </button>
@@ -783,7 +790,7 @@ export default function ModalVisualizadorComprovante({
                       disabled={currentPage >= numPages}
                       onClick={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
                       className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-300 disabled:opacity-30 cursor-pointer"
-                      title="Próxima Página"
+                      aria-label="Próxima página"
                     >
                       <ChevronRight className="h-4 w-4" />
                     </button>
@@ -794,7 +801,7 @@ export default function ModalVisualizadorComprovante({
                   type="button"
                   onClick={() => setZoom((prev) => Math.max(50, prev - 25))}
                   className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-300 transition-colors cursor-pointer"
-                  title="Diminuir Zoom"
+                  aria-label="Diminuir zoom"
                 >
                   <ZoomOut className="h-4 w-4" />
                 </button>
@@ -805,7 +812,7 @@ export default function ModalVisualizadorComprovante({
                   type="button"
                   onClick={() => setZoom((prev) => Math.min(250, prev + 25))}
                   className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-300 transition-colors cursor-pointer"
-                  title="Aumentar Zoom"
+                  aria-label="Aumentar zoom"
                 >
                   <ZoomIn className="h-4 w-4" />
                 </button>
@@ -813,7 +820,7 @@ export default function ModalVisualizadorComprovante({
                   type="button"
                   onClick={() => setZoom(100)}
                   className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
-                  title="Redefinir Zoom"
+                  aria-label="Redefinir zoom"
                 >
                   <RotateCcw className="h-3.5 w-3.5" />
                 </button>
