@@ -1,6 +1,6 @@
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { allowsIntegrationMock } from '@/lib/runtime/environment'
-import { ProvedorWhatsApp, EnviarMensagemPayload, ResultadoEnvio, obterProvedorAtivo, validarJanelaEnvio, inferirTipoMidia } from './provider'
+import { ProvedorWhatsApp, EnviarMensagemPayload, ResultadoEnvio, obterProvedorAtivo, validarJanelaEnvio, inferirTipoMidia, shouldPersistOutbound } from './provider'
 import { validarEnvioWhatsAppSafety } from './safety'
 
 export type { EnviarMensagemPayload }
@@ -158,24 +158,17 @@ export async function enviarMensagemMeta(
     }
   }
 
-  // 5. Salvar a mensagem enviada no banco de dados
-  const remetente = payload.remetente || 'ia'
-  const { data: novaMensagem, error: insertError } = await supabase
-    .from('mensagens')
-    .insert({
-      conversa_id: conversaId,
-      remetente,
-      conteudo: payload.templateName 
-        ? `[Template: ${payload.templateName}]${payload.texto ? ` - ${payload.texto}` : ''}`
-        : payload.texto || null,
-      url_anexo: payload.anexoPath || null,
-      whatsapp_mensagem_id: whatsappMensagemId
-    })
-    .select()
-    .single()
-
-  if (insertError) {
-    throw new Error(`Erro ao salvar mensagem no banco de dados: ${insertError.message}`)
+  // 5. Salvar a mensagem enviada no banco de dados, exceto para intenção já persistida.
+  let novaMensagem = null
+  if (shouldPersistOutbound(payload)) {
+    const remetente = payload.remetente || 'ia'
+    const { data, error: insertError } = await supabase.from('mensagens').insert({
+      conversa_id: conversaId, remetente,
+      conteudo: payload.templateName ? `[Template: ${payload.templateName}]${payload.texto ? ` - ${payload.texto}` : ''}` : payload.texto || null,
+      url_anexo: payload.anexoPath || null, whatsapp_mensagem_id: whatsappMensagemId
+    }).select().single()
+    if (insertError) throw new Error(`Erro ao salvar mensagem no banco de dados: ${insertError.message}`)
+    novaMensagem = data
   }
 
   return {

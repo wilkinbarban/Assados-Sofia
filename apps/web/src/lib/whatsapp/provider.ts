@@ -11,6 +11,12 @@ export interface EnviarMensagemPayload {
   templateParams?: any[];
   remetente?: 'operador' | 'ia';
   categoria?: TipoCategoriaMensagem;
+  /** Defaults true; durable outbox callers disable duplicate message persistence. */
+  salvarNoBanco?: boolean;
+}
+
+export function shouldPersistOutbound(payload: EnviarMensagemPayload): boolean {
+  return payload.salvarNoBanco !== false
 }
 
 export interface ResultadoEnvio {

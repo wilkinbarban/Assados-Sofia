@@ -146,7 +146,8 @@ function obterRespostaMock(mensagemCliente: string): string {
 export async function processarRagPipeline(
   conversaId: string,
   mensagemCliente: string,
-  canalOrigem?: 'whatsapp' | 'telegram' | 'web'
+  canalOrigem?: 'whatsapp' | 'telegram' | 'web',
+  generationOnly = false
 ) {
   const supabase = createAdminClient()
 
@@ -467,6 +468,8 @@ ${regraIdiomaRodape}`
     respostaIa = obterRespostaMock(mensagemCliente)
   }
 
+  if (generationOnly) return { sucesso: true, canal: canalOrigem, respostaIa }
+
   // 6.3 Handoff Humano Proativo para Alteração ou Cancelamento de Pedido
   const msgLower = mensagemCliente.toLowerCase()
   const isSolicitacaoCancelamentoOuMod =
@@ -573,4 +576,11 @@ ${regraIdiomaRodape}`
   }
 
   return { sucesso: true, canal: 'db', respostaIa, mensagem: novaMensagem }
+}
+
+/** Uses Sofia's existing retrieval and generation path without persistence or delivery. */
+export async function processarRagBatchPipeline(conversaId: string, contexto: string, canal: 'telegram'|'whatsapp'): Promise<string> {
+  const result = await processarRagPipeline(conversaId, contexto, canal, true)
+  if (!result.sucesso || !('respostaIa' in result) || !result.respostaIa) throw new Error('SOFIA_BATCH_GENERATION_FAILED')
+  return result.respostaIa
 }

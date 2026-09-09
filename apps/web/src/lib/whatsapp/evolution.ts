@@ -1,4 +1,4 @@
-import { ProvedorWhatsApp, EnviarMensagemPayload, ResultadoEnvio, validarJanelaEnvio, inferirTipoMidia } from './provider'
+import { ProvedorWhatsApp, EnviarMensagemPayload, ResultadoEnvio, validarJanelaEnvio, inferirTipoMidia, shouldPersistOutbound } from './provider'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { allowsIntegrationMock } from '@/lib/runtime/environment'
@@ -6,6 +6,10 @@ import { validarEnvioWhatsAppSafety } from './safety'
 import { withSafeRetry } from './retry'
 import { calcularDelayDigitacao } from './delays'
 import { whatsappCircuitBreaker } from './circuit-breaker'
+
+export function evolutionMaxRetries(payload: EnviarMensagemPayload): number {
+  return payload.salvarNoBanco === false ? 0 : 2
+}
 
 function isEvolutionMockMode(apiUrl: string | null, apiKey: string | null, instanceName: string | null): boolean {
   if (!apiUrl || !apiKey || !instanceName) return true
@@ -162,7 +166,7 @@ export async function enviarMensagemEvolution(
         }
 
         return res
-      }, { maxRetries: 2, baseDelayMs: 1000 })
+      }, { maxRetries: evolutionMaxRetries(payload), baseDelayMs: 1000 })
     })
 
     const responseData = await response.json()
@@ -173,22 +177,16 @@ export async function enviarMensagemEvolution(
     }
   }
 
-  // 4. Salvar no banco de dados mensagens
-  const remetente = payload.remetente || 'ia'
-  const { data: novaMensagem, error: insertError } = await supabase
-    .from('mensagens')
-    .insert({
-      conversa_id: conversaId,
-      remetente,
-      conteudo: conteudoFinal,
-      url_anexo: payload.anexoPath || null,
-      whatsapp_mensagem_id: whatsappMensagemId
-    })
-    .select()
-    .single()
-
-  if (insertError) {
-    throw new Error(`Erro ao salvar mensagem no banco de dados: ${insertError.message}`)
+  // 4. Salvar no banco, exceto quando uma intenção durável já possui a mensagem.
+  let novaMensagem = null
+  if (shouldPersistOutbound(payload)) {
+    const remetente = payload.remetente || 'ia'
+    const { data, error: insertError } = await supabase.from('mensagens').insert({
+      conversa_id: conversaId, remetente, conteudo: conteudoFinal,
+      url_anexo: payload.anexoPath || null, whatsapp_mensagem_id: whatsappMensagemId
+    }).select().single()
+    if (insertError) throw new Error(`Erro ao salvar mensagem no banco de dados: ${insertError.message}`)
+    novaMensagem = data
   }
 
   // 5. Atualizar timestamp de envio na governança de contatos
