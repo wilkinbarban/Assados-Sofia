@@ -14,6 +14,8 @@ import { evaluateEvolutionPaymentProofCompatibility } from '@/lib/whatsapp/evolu
 import { resolveEvolutionInboundPhoneLocalPart } from '@/lib/whatsapp/evolution-inbound-sender'
 import { decodeEvolutionDocumentSize } from '@/lib/whatsapp/evolution-document-size'
 import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
+import { evolutionInboundBatchEnqueueEnabled } from '@/lib/sofia/inbound-batch-gates'
+import { attachPersistedSofiaInboundMessage } from '@/lib/sofia/inbound-batch-producer'
 
 async function resolveWhatsAppPersistenceConversation(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
@@ -485,8 +487,17 @@ export async function POST(request: Request) {
     // 11. Never infer financial receipt from an attachment or payment-like text.
     // Only the canonical intake branch above may return payment_proof_received.
 
-    // 12. Disparar o pipeline RAG se iaAtiva for verdadeira
-    if (iaAtiva && conteudo) {
+    // 12. Disparar RAG ou anexar a mensagem canônica já persistida.
+    if (iaAtiva && conteudo && evolutionInboundBatchEnqueueEnabled()) {
+      const attached = await attachPersistedSofiaInboundMessage({
+        supabase: supabaseAdmin,
+        messageId: novaMensagem.id,
+        conversationId: conversaId,
+        customerId: clienteId,
+        channel: 'whatsapp',
+      })
+      if (!attached) console.error('[Evolution Webhook] SOFIA_BATCH_ATTACH_FAILED')
+    } else if (iaAtiva && conteudo) {
       console.log('[Evolution Webhook] RAG_DISPATCHED')
       processarRagPipeline(conversaId, conteudo, 'whatsapp').catch(() => {
         console.error('[Evolution Webhook] RAG_BACKGROUND_FAILED')

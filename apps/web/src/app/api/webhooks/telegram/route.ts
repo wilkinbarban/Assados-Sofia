@@ -11,6 +11,8 @@ import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
 import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { executarToolSofia } from '@/lib/ai/tools'
 import { parseTelegramCatalogCallback, selectOfficialTelegramCombos } from '@/lib/telegram/catalog'
+import { telegramInboundBatchEnqueueEnabled } from '@/lib/sofia/inbound-batch-gates'
+import { attachPersistedSofiaInboundMessage } from '@/lib/sofia/inbound-batch-producer'
 import {
   enviarCatalogoTelegram,
   enviarOrientacaoComprovanteTelegram,
@@ -644,7 +646,7 @@ Como posso te ajudar com o churrasco hoje? 🥩`
     }
 
     // Salvar mensagem do cliente
-    const { error: insertMessageError } = await supabaseAdmin
+    const { data: persistedMessage, error: insertMessageError } = await supabaseAdmin
       .from('mensagens')
       .insert({
         conversa_id: conversationId,
@@ -652,8 +654,10 @@ Como posso te ajudar com o churrasco hoje? 🥩`
         conteudo: messageText,
         telegram_mensagem_id: telegramMessageKey
       })
+      .select('id')
+      .single()
 
-    if (insertMessageError) {
+    if (insertMessageError || !persistedMessage?.id) {
       console.error('[Telegram Webhook] Erro ao inserir mensagem:', insertMessageError)
       return Response.json({ ok: false, error: 'Erro ao salvar mensagem' }, { status: 500 })
     }
@@ -691,8 +695,17 @@ Como posso te ajudar com o churrasco hoje? 🥩`
       }
     }
 
-    // Disparar pipeline RAG
-    if (iaAtiva) {
+    // Disparar pipeline RAG ou anexar a mensagem canônica já persistida.
+    if (iaAtiva && telegramInboundBatchEnqueueEnabled()) {
+      const attached = await attachPersistedSofiaInboundMessage({
+        supabase: supabaseAdmin,
+        messageId: persistedMessage.id,
+        conversationId,
+        customerId: clienteId,
+        channel: 'telegram',
+      })
+      if (!attached) console.error('[Telegram Webhook] SOFIA_BATCH_ATTACH_FAILED')
+    } else if (iaAtiva) {
       processarRagPipeline(conversationId, messageText, 'telegram').catch((err) => {
         console.error('[Telegram Webhook] Erro no processarRagPipeline:', err)
       })
