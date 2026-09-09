@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import PaymentProofAdminPanel from '@/components/operator/PaymentProofAdminPanel'
@@ -24,6 +25,15 @@ const proofs = (count: number, status = 'review') =>
 afterEach(cleanup)
 
 describe('PaymentProofAdminPanel pagination', () => {
+  it('uses the remaining flex height instead of full parent height', () => {
+    const source = readFileSync('apps/web/src/components/operator/PaymentProofAdminPanel.tsx', 'utf8')
+    const rootPanel = source.match(/return \(\s*<div className="([^"]+)"/)?.[1]
+
+    expect(rootPanel).toBeDefined()
+    expect(rootPanel?.split(/\s+/)).not.toContain('h-full')
+    expect(rootPanel?.split(/\s+/)).toEqual(expect.arrayContaining(['min-h-0', 'flex-1']))
+  })
+
   it('keeps the selected queue reachable in accessible pages of exactly ten proofs', () => {
     render(<PaymentProofAdminPanel initialProofs={proofs(21)} diagnostics={safeDiagnostics} gateDiagnostics={safeGateDiagnostics} mutate={vi.fn()} />)
 
