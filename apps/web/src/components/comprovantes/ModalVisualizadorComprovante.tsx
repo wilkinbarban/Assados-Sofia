@@ -42,6 +42,9 @@ export interface ModalVisualizadorComprovanteProps {
   onRejeitarSuccess?: () => void
 }
 
+export const RECEIPT_PREVIEW_ERROR_MESSAGE =
+  'Não foi possível carregar a visualização do comprovante. Tente novamente ou abra o comprovante na conversa.'
+
 let cachedPdfJsPromise: Promise<any> | null = null
 
 async function getPdfJs(): Promise<any> {
@@ -202,7 +205,7 @@ export default function ModalVisualizadorComprovante({
         setPngDataUrl(pngUrl)
       } catch (err: any) {
         console.error('Erro ao converter página PDF em PNG:', err)
-        setErro('Erro ao gerar a imagem PNG do comprovante.')
+        setErro(RECEIPT_PREVIEW_ERROR_MESSAGE)
       } finally {
         setCarregando(false)
       }
@@ -350,7 +353,7 @@ export default function ModalVisualizadorComprovante({
       } catch (err: any) {
         console.error('Erro ao processar arquivo no visualizador:', err)
         if (ativo) {
-          setErro(err.message || 'Erro desconhecido ao carregar comprovante.')
+          setErro(RECEIPT_PREVIEW_ERROR_MESSAGE)
         }
       } finally {
         if (ativo) {
@@ -766,6 +769,7 @@ export default function ModalVisualizadorComprovante({
                   src={pngDataUrl}
                   alt={`Prévia do comprovante - ${nomeArquivo}`}
                   className="max-h-[52vh] max-w-full object-contain select-none"
+                  onError={() => setErro(RECEIPT_PREVIEW_ERROR_MESSAGE)}
                 />
               </div>
 

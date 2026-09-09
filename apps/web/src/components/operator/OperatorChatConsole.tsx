@@ -26,6 +26,33 @@ import { PaymentProofChatCard } from '@/components/chat/PaymentProofChatCard'
 const maxPreviewPdfBytes = 10 * 1024 * 1024
 let pdfJsPromise: Promise<any> | null = null
 
+type ReceiptPreviewSource = {
+  payment_proof_id?: string | null
+  url_anexo?: string | null
+}
+
+export type ReceiptPreviewTarget =
+  | { kind: 'payment-proof'; url: string; filename: 'comprovante.png'; proofId: string }
+  | { kind: 'attachment'; url: string; filename: string }
+  | null
+
+export function resolveReceiptPreviewTarget(source: ReceiptPreviewSource): ReceiptPreviewTarget {
+  if (source.payment_proof_id) {
+    return {
+      kind: 'payment-proof',
+      url: `/api/payment-proofs/${source.payment_proof_id}/preview`,
+      filename: 'comprovante.png',
+      proofId: source.payment_proof_id,
+    }
+  }
+  if (!source.url_anexo) return null
+  return {
+    kind: 'attachment',
+    url: source.url_anexo,
+    filename: source.url_anexo.split('/').pop() || 'comprovante.pdf',
+  }
+}
+
 function loadPdfJs() {
   if ((window as any).pdfjsLib) {
     const lib = (window as any).pdfjsLib
@@ -731,23 +758,17 @@ export default function OperatorChatConsole({
               {tipoDetectado === 'comprovante' && (() => {
                 const mensagemRecente = mensagens.slice().reverse().find((m) => m.url_anexo || m.payment_proof_id)
                 if (!mensagemRecente) return null
+                const previewTarget = resolveReceiptPreviewTarget(mensagemRecente)
                 return (
                   <div className="pt-2 flex flex-wrap items-center gap-2">
-                    {(mensagemRecente.url_anexo || mensagemRecente.payment_proof_id) && (
+                    {previewTarget && (
                       <button
                         type="button"
-                        onClick={() => {
-                          window.dispatchEvent(new CustomEvent('asados:open-attachment-preview', {
-                            detail: { messageId: mensagemRecente.id },
-                          }))
-                          if (mensagemRecente.payment_proof_id) {
-                            handleAbrirVisualizador(
-                              `/api/payment-proofs/${mensagemRecente.payment_proof_id}/preview`,
-                              'comprovante.png',
-                              mensagemRecente.payment_proof_id,
-                            )
-                          }
-                        }}
+                        onClick={() => handleAbrirVisualizador(
+                          previewTarget.url,
+                          previewTarget.filename,
+                          previewTarget.kind === 'payment-proof' ? previewTarget.proofId : null,
+                        )}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer"
                       >
                         <Eye className="h-3.5 w-3.5" />
