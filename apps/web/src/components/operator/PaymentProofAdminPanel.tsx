@@ -348,7 +348,7 @@ export default function PaymentProofAdminPanel({
   if (!privileged) return null
 
   return (
-    <div className="flex h-full flex-col gap-5 text-zinc-100 animate-in fade-in duration-200">
+    <div className="flex min-h-0 flex-1 flex-col gap-5 text-zinc-100 animate-in fade-in duration-200">
       {/* Header do Painel */}
       <header className="rounded-3xl border border-zinc-800/80 bg-zinc-900/90 p-6 shadow-xl shadow-black/40 backdrop-blur-sm">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
