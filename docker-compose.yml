@@ -34,6 +34,10 @@ services:
       - WEB_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${WEB_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
       - WHATSAPP_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${WHATSAPP_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
       - TELEGRAM_NOTIFICATION_OUTBOX_DISPATCH_ENABLED=${TELEGRAM_NOTIFICATION_OUTBOX_DISPATCH_ENABLED:-false}
+      # Sofia inbound batching gates are process-startup-only and closed by default.
+      - SOFIA_INBOUND_BATCH_PROCESSING_ENABLED=${SOFIA_INBOUND_BATCH_PROCESSING_ENABLED:-false}
+      - SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED=${SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED:-false}
+      - SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED=${SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED:-false}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -138,6 +142,36 @@ services:
           if [ "$$interval" -lt 1 ] || [ "$$interval" -gt 715827882 ]; then interval=60; fi;; esac;
           tolerance=$$((interval * 3)); if [ "$$tolerance" -lt 180 ]; then tolerance=180; fi;
           now=$$(date +%s) || exit 1; marker=$$(cat /tmp/notification-outbox-maintenance-last-success) || exit 1;
+          case "$$marker" in ''|*[!0-9]*) exit 1;; esac;
+          test "$$marker" -le $$((now + 5)) && test $$((now - marker)) -le "$$tolerance"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 70s
+    networks: [app-private]
+
+  sofia-inbound-batch-maintenance:
+    image: alpine:3.20
+    container_name: asados-sofia-inbound-batch-maintenance
+    restart: always
+    environment:
+      - SOFIA_BATCH_MAINTENANCE_SECRET=${SOFIA_BATCH_MAINTENANCE_SECRET:?set SOFIA_BATCH_MAINTENANCE_SECRET}
+      - SOFIA_BATCH_MAINTENANCE_URL=http://web:3000/api/internal/sofia/inbound-batches/maintenance
+      - SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS=${SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS:-60}
+    command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec /scheduler/sofia-inbound-batch-maintenance-scheduler.sh"]
+    depends_on:
+      web: { condition: service_healthy }
+    volumes:
+      - ./ops/sofia-inbound-batch-maintenance-scheduler.sh:/scheduler/sofia-inbound-batch-maintenance-scheduler.sh:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          interval=$${SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS:-60};
+          case "$$interval" in ''|*[!0-9]*) interval=60;; *)
+          if [ "$$interval" -lt 1 ] || [ "$$interval" -gt 715827882 ]; then interval=60; fi;; esac;
+          tolerance=$$((interval * 3)); if [ "$$tolerance" -lt 180 ]; then tolerance=180; fi;
+          now=$$(date +%s) || exit 1; marker=$$(cat /tmp/sofia-inbound-batch-maintenance-last-success) || exit 1;
           case "$$marker" in ''|*[!0-9]*) exit 1;; esac;
           test "$$marker" -le $$((now + 5)) && test $$((now - marker)) -le "$$tolerance"
       interval: 30s
