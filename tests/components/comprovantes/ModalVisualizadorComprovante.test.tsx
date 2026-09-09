@@ -1,7 +1,10 @@
 import React from 'react'
+import { readFileSync } from 'node:fs'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante'
+import ModalVisualizadorComprovante, {
+  RECEIPT_PREVIEW_ERROR_MESSAGE,
+} from '@/components/comprovantes/ModalVisualizadorComprovante'
 
 const mocks = vi.hoisted(() => ({
   createSignedUrl: vi.fn(),
@@ -206,6 +209,20 @@ describe('ModalVisualizadorComprovante Component', () => {
       />,
     )
     await waitFor(() => expect(destroy).toHaveBeenCalledTimes(1))
+  })
+
+  it('uses actionable Portuguese copy for every preview loading failure', () => {
+    expect(RECEIPT_PREVIEW_ERROR_MESSAGE).toBe(
+      'Não foi possível carregar a visualização do comprovante. Tente novamente ou abra o comprovante na conversa.',
+    )
+
+    const source = readFileSync(
+      'apps/web/src/components/comprovantes/ModalVisualizadorComprovante.tsx',
+      'utf8',
+    )
+    expect(source.match(/setErro\(RECEIPT_PREVIEW_ERROR_MESSAGE\)/g)).toHaveLength(3)
+    expect(source).toContain('onError={() => setErro(RECEIPT_PREVIEW_ERROR_MESSAGE)}')
+    expect(source).toContain('{erro}</p>')
   })
 
   it('does not offer an empty original download when only a preview loaded', async () => {
