@@ -26,7 +26,7 @@ describe('Sofia inbound batch worker', () => {
     ['outside_business_hours',{}, { businessHours:vi.fn().mockResolvedValue(false) }],
     ['global_disabled',{}, { globalEnabled:vi.fn().mockResolvedValue(false) }],
     ['sleep_or_cooldown',{ channel:'whatsapp' }, { whatsappEligible:vi.fn().mockResolvedValue(false) }],
-  ])('cancels ineligible work as %s without generation', async (reason, patch, extra = {}) => {
+  ])('cancels ineligible work as %s without generation', async (reason, patch, extra: Partial<BatchWorkerDeps> = {}) => {
     const d=deps({ claimBatch:vi.fn().mockResolvedValueOnce({...claim,...patch}).mockResolvedValue(null), ...extra })
     const result=await runSofiaBatchMaintenance(d,1)
     expect(result.cancelled).toBe(1); expect(d.cancel).toHaveBeenCalledWith('b','l',reason); expect(d.generate).not.toHaveBeenCalled()
