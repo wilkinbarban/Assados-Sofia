@@ -79,6 +79,7 @@ describe('Sofia inbound batch maintenance scheduler', () => {
 
   it('installs scheduler only for normal promotion and stops it for both closed recovery paths', () => {
     expect(compose).toContain('SOFIA_BATCH_MAINTENANCE_URL=http://web:3000/api/internal/sofia/inbound-batches/maintenance')
+    expect(compose).toContain('exec /bin/sh /scheduler/sofia-inbound-batch-maintenance-scheduler.sh')
     expect(compose).toContain('marker=$$(cat /tmp/sofia-inbound-batch-maintenance-last-success) || exit 1')
     expect(deploy).toContain('wait_sofia_scheduler_healthy')
     expect(deploy).toContain('wait_healthy\n  if [[ "$close_operational_gates" == true ]]; then\n    stop_sofia_scheduler\n  else\n    recreate_sofia_scheduler')

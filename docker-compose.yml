@@ -158,7 +158,7 @@ services:
       - SOFIA_BATCH_MAINTENANCE_SECRET=${SOFIA_BATCH_MAINTENANCE_SECRET:?set SOFIA_BATCH_MAINTENANCE_SECRET}
       - SOFIA_BATCH_MAINTENANCE_URL=http://web:3000/api/internal/sofia/inbound-batches/maintenance
       - SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS=${SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS:-60}
-    command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec /scheduler/sofia-inbound-batch-maintenance-scheduler.sh"]
+    command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec /bin/sh /scheduler/sofia-inbound-batch-maintenance-scheduler.sh"]
     depends_on:
       web: { condition: service_healthy }
     volumes:
