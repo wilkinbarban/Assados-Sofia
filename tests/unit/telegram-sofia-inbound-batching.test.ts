@@ -1,13 +1,175 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-const m=vi.hoisted(()=>({admin:vi.fn(),rag:vi.fn(),attach:vi.fn(),config:vi.fn(),global:vi.fn(),hours:vi.fn(),contact:vi.fn()}))
-vi.mock('@/lib/supabase/admin',()=>({createAdminClient:m.admin}));vi.mock('@/lib/ai/openrouter',()=>({processarRagPipeline:m.rag}));vi.mock('@/lib/sofia/inbound-batch-producer',()=>({attachPersistedSofiaInboundMessage:m.attach}));vi.mock('@/lib/config/sistema',()=>({obterConfiguracaoSistema:m.config,obterSofiaGlobalChannelConfig:m.global}));vi.mock('@/lib/horarios/verificar',()=>({verificarHorarioAtendimento:m.hours}));vi.mock('@/lib/whatsapp/contact-status',()=>({processarStatusContatoInbound:m.contact}))
+
+const m = vi.hoisted(() => ({
+  admin: vi.fn(),
+  rag: vi.fn(),
+  attach: vi.fn(),
+  config: vi.fn(),
+  global: vi.fn(),
+  hours: vi.fn(),
+  contact: vi.fn(),
+  intent: vi.fn(),
+}))
+
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: m.admin }))
+vi.mock('@/lib/ai/openrouter', () => ({ processarRagPipeline: m.rag }))
+vi.mock('@/lib/sofia/inbound-batch-producer', () => ({ attachPersistedSofiaInboundMessage: m.attach }))
+vi.mock('@/lib/config/sistema', () => ({ obterConfiguracaoSistema: m.config, obterSofiaGlobalChannelConfig: m.global }))
+vi.mock('@/lib/horarios/verificar', () => ({ verificarHorarioAtendimento: m.hours }))
+vi.mock('@/lib/whatsapp/contact-status', () => ({
+  classificarIntencaoMensagem: m.intent,
+  processarStatusContatoInbound: m.contact,
+}))
+
 import { POST } from '@/app/api/webhooks/telegram/route'
-function db(existing=false){const calls:string[]=[];const client:any={from:vi.fn((table:string)=>{const b:any={select:vi.fn(()=>b),eq:vi.fn(()=>b),neq:vi.fn(()=>b),order:vi.fn(()=>b),limit:vi.fn(()=>b),insert:vi.fn(()=>{calls.push(`persist:${table}`);return b}),maybeSingle:vi.fn(async()=>table==='mensagens'?{data:existing?{id:'message-1'}:null,error:null}:table==='clientes'?{data:{id:'client-1',telefone:'5541999990003'},error:null}:{data:{id:'conversation-1',ia_ativa:true},error:null}),single:vi.fn(async()=>({data:{id:'message-1',ia_ativa:true},error:null}))};return b})};return{client,calls}}
-const req=()=>new Request('https://test/api/webhooks/telegram',{method:'POST',headers:{'x-telegram-bot-api-secret-token':'secret'},body:JSON.stringify({message:{message_id:1,chat:{id:1001,first_name:'Ana'},from:{id:1001},text:'hello'}})})
-beforeEach(()=>{vi.clearAllMocks();vi.unstubAllEnvs();m.config.mockResolvedValue('secret');m.global.mockResolvedValue({enabled:true});m.hours.mockResolvedValue({dentro:true});m.contact.mockResolvedValue({suprimirSofia:false});m.rag.mockResolvedValue(undefined);m.attach.mockResolvedValue(true)})
-describe('Telegram Sofia inbound batching producer',()=>{
- it.each([undefined,'false','TRUE',' true '])('defaults closed for %s',async value=>{const{client}=db();m.admin.mockReturnValue(client);if(value!==undefined)vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED',value);expect((await POST(req())).status).toBe(200);expect(m.attach).not.toHaveBeenCalled();expect(m.rag).toHaveBeenCalled()})
- it('attaches after persistence only for exact true',async()=>{const{client,calls}=db();m.admin.mockReturnValue(client);vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED','true');m.attach.mockImplementation(async()=>{calls.push('attach');return true});expect((await POST(req())).status).toBe(200);expect(calls).toEqual(['persist:mensagens','attach']);expect(m.attach).toHaveBeenCalledWith(expect.objectContaining({messageId:'message-1',conversationId:'conversation-1',customerId:'client-1',channel:'telegram'}));expect(m.rag).not.toHaveBeenCalled()})
- it('does not attach duplicates',async()=>{const{client}=db(true);m.admin.mockReturnValue(client);vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED','true');expect((await POST(req())).status).toBe(200);expect(m.attach).not.toHaveBeenCalled()})
- it('keeps intake and logs only a token on attach failure',async()=>{const{client}=db();m.admin.mockReturnValue(client);vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED','true');m.attach.mockResolvedValue(false);const error=vi.spyOn(console,'error').mockImplementation(()=>undefined);expect((await POST(req())).status).toBe(200);expect(error).toHaveBeenCalledWith('[Telegram Webhook] SOFIA_BATCH_ATTACH_FAILED');expect(m.rag).not.toHaveBeenCalled();error.mockRestore()})
+
+type DatabaseOptions = { existing?: boolean; phone?: string | null; iaAtiva?: boolean }
+
+function db({ existing = false, phone = '5541999990003', iaAtiva = true }: DatabaseOptions = {}) {
+  const calls: string[] = []
+  const client: any = {
+    from: vi.fn((table: string) => {
+      const builder: any = {
+        select: vi.fn(() => builder),
+        eq: vi.fn(() => builder),
+        neq: vi.fn(() => builder),
+        order: vi.fn(() => builder),
+        limit: vi.fn(() => builder),
+        update: vi.fn(() => builder),
+        insert: vi.fn(() => {
+          calls.push(`persist:${table}`)
+          return builder
+        }),
+        maybeSingle: vi.fn(async () => {
+          if (table === 'mensagens') return { data: existing ? { id: 'message-1' } : null, error: null }
+          if (table === 'clientes') return { data: { id: 'client-1', telefone: phone }, error: null }
+          return { data: { id: 'conversation-1', ia_ativa: iaAtiva }, error: null }
+        }),
+        single: vi.fn(async () => ({ data: { id: 'message-1', ia_ativa: iaAtiva }, error: null })),
+      }
+      return builder
+    }),
+  }
+  return { client, calls }
+}
+
+function req(message: Record<string, unknown> = { text: 'hello' }) {
+  return new Request('https://test/api/webhooks/telegram', {
+    method: 'POST',
+    headers: { 'x-telegram-bot-api-secret-token': 'secret' },
+    body: JSON.stringify({
+      message: {
+        message_id: 1,
+        chat: { id: 1001, first_name: 'Ana' },
+        from: { id: 1001 },
+        ...message,
+      },
+    }),
+  })
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  vi.unstubAllEnvs()
+  m.config.mockResolvedValue('secret')
+  m.global.mockResolvedValue({ enabled: true })
+  m.hours.mockResolvedValue({ dentro: true })
+  m.contact.mockResolvedValue({ suprimirSofia: false })
+  m.intent.mockReturnValue({ tipo: 'conversa_regular' })
+  m.rag.mockResolvedValue(undefined)
+  m.attach.mockResolvedValue(true)
+})
+
+describe('Telegram Sofia inbound batching producer', () => {
+  it.each([undefined, 'false', 'TRUE', ' true '])('defaults closed for %s', async (value) => {
+    const { client } = db()
+    m.admin.mockReturnValue(client)
+    if (value !== undefined) vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', value)
+
+    expect((await POST(req())).status).toBe(200)
+    expect(m.attach).not.toHaveBeenCalled()
+    expect(m.rag).toHaveBeenCalled()
+  })
+
+  it('attaches after persistence only for exact true', async () => {
+    const { client, calls } = db()
+    m.admin.mockReturnValue(client)
+    vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', 'true')
+    m.attach.mockImplementation(async () => {
+      calls.push('attach')
+      return true
+    })
+
+    expect((await POST(req())).status).toBe(200)
+    expect(calls).toEqual(['persist:mensagens', 'attach'])
+    expect(m.attach).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'message-1', conversationId: 'conversation-1', customerId: 'client-1', channel: 'telegram',
+    }))
+    expect(m.rag).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['an opt-out request', { text: 'Please stop' }, { tipo: 'opt_out' }, 1],
+    ['a human handoff request', { text: 'I need a person' }, { tipo: 'human_handoff' }, 1],
+    ['a catalog request', { text: 'Send the menu' }, { tipo: 'conversa_regular' }, 1],
+    ['non-proof media', { document: { file_id: 'document-1', mime_type: 'text/plain', file_size: 10 } }, { tipo: 'conversa_regular' }, 0],
+  ])('keeps %s on immediate out-of-hours handling when batching is enabled', async (_caseName, message, intent, directReplyCalls) => {
+    const { client } = db()
+    m.admin.mockReturnValue(client)
+    vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', 'true')
+    m.hours.mockResolvedValue({ dentro: false, mensagem: 'Closed' })
+    m.intent.mockReturnValue(intent)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await POST(req(message))
+
+    expect(await response.json()).toMatchObject({ ok: true, status: 'out_of_hours' })
+    expect(fetchMock).toHaveBeenCalledTimes(directReplyCalls)
+    expect(m.attach).not.toHaveBeenCalled()
+    expect(m.rag).not.toHaveBeenCalled()
+  })
+
+  it('attaches eligible out-of-hours normal text without a direct reply or legacy RAG', async () => {
+    const { client, calls } = db()
+    m.admin.mockReturnValue(client)
+    vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', 'true')
+    m.hours.mockResolvedValue({ dentro: false, mensagem: 'Closed' })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    m.attach.mockImplementation(async () => {
+      calls.push('attach')
+      return true
+    })
+
+    expect((await POST(req())).status).toBe(200)
+    expect(calls).toEqual(['persist:mensagens', 'attach'])
+    expect(m.attach).toHaveBeenCalledWith(expect.objectContaining({
+      messageId: 'message-1', conversationId: 'conversation-1', customerId: 'client-1', channel: 'telegram',
+    }))
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(m.rag).not.toHaveBeenCalled()
+  })
+
+  it('does not attach duplicates', async () => {
+    const { client } = db({ existing: true })
+    m.admin.mockReturnValue(client)
+    vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', 'true')
+
+    expect((await POST(req())).status).toBe(200)
+    expect(m.attach).not.toHaveBeenCalled()
+  })
+
+  it('keeps intake and logs only a token on attach failure', async () => {
+    const { client } = db()
+    m.admin.mockReturnValue(client)
+    vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', 'true')
+    m.attach.mockResolvedValue(false)
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    expect((await POST(req())).status).toBe(200)
+    expect(error).toHaveBeenCalledWith('[Telegram Webhook] SOFIA_BATCH_ATTACH_FAILED')
+    expect(m.rag).not.toHaveBeenCalled()
+    error.mockRestore()
+  })
 })
