@@ -8,7 +8,7 @@ import { downloadTelegramDocument } from '@/lib/telegram/document-download'
 import { queueCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 import { normalizeCuritibaPhone, maskPhone } from '@/lib/auth/phone'
-import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
+import { classificarIntencaoMensagem, processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { executarToolSofia } from '@/lib/ai/tools'
 import { parseTelegramCatalogCallback, selectOfficialTelegramCombos } from '@/lib/telegram/catalog'
 import { telegramInboundBatchEnqueueEnabled } from '@/lib/sofia/inbound-batch-gates'
@@ -454,9 +454,23 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, status: 'global_off' })
     }
 
+    const batchingEnabled = telegramInboundBatchEnqueueEnabled()
     const horario = await verificarHorarioAtendimento()
 
-    if (!horario.dentro) {
+    // Batching may defer only an eligible existing-phone text whose conversation
+    // has Sofia active. Contacts, onboarding, media, and globally disabled flows
+    // retain their immediate business-hours behavior.
+    const contactIntent = message.text ? classificarIntencaoMensagem(message.text) : null
+    const requiresImmediateOutOfHoursHandling = !batchingEnabled ||
+      Boolean(message.contact?.phone_number) ||
+      !message.text ||
+      isNewClient ||
+      !telefoneExistente ||
+      contactIntent?.tipo === 'opt_out' ||
+      contactIntent?.tipo === 'human_handoff' ||
+      isCatalogRequest(message.text)
+
+    if (!horario.dentro && requiresImmediateOutOfHoursHandling) {
       const safeContent = getSafeTelegramMessageContent(message, senderName)
       if (safeContent) {
         try {
@@ -645,6 +659,25 @@ Como posso te ajudar com o churrasco hoje? 🥩`
       return Response.json({ ok: false, error: conversationError.message || 'Erro ao resolver conversa' }, { status: 500 })
     }
 
+    if (!horario.dentro && !(batchingEnabled && iaAtiva)) {
+      const { error: insertOutOfHoursError } = await supabaseAdmin
+        .from('mensagens')
+        .insert({
+          conversa_id: conversationId,
+          remetente: 'cliente',
+          conteudo: messageText,
+          telegram_mensagem_id: telegramMessageKey
+        })
+
+      if (insertOutOfHoursError) {
+        console.error('[Telegram Webhook] Erro ao salvar mensagem fora de horário:', insertOutOfHoursError)
+        return Response.json({ ok: false, error: 'Erro ao salvar mensagem' }, { status: 500 })
+      }
+
+      await enviarMensagemDireta(telegramChatId, horario.mensagem!)
+      return Response.json({ ok: true, status: 'out_of_hours' })
+    }
+
     // Salvar mensagem do cliente
     const { data: persistedMessage, error: insertMessageError } = await supabaseAdmin
       .from('mensagens')
@@ -696,7 +729,7 @@ Como posso te ajudar com o churrasco hoje? 🥩`
     }
 
     // Disparar pipeline RAG ou anexar a mensagem canônica já persistida.
-    if (iaAtiva && telegramInboundBatchEnqueueEnabled()) {
+    if (iaAtiva && batchingEnabled) {
       const attached = await attachPersistedSofiaInboundMessage({
         supabase: supabaseAdmin,
         messageId: persistedMessage.id,
