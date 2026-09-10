@@ -8,6 +8,7 @@ state_root="${ASADOS_DEPLOY_STATE_ROOT:-/var/lib/asados/deploy}"
 smoke="$root/scripts/smoke-production-readonly.sh"
 preflight="$root/scripts/workspace-preflight.sh"
 health_timeout="${ASADOS_WEB_HEALTH_TIMEOUT_SECONDS:-180}"
+scheduler_health_timeout="${ASADOS_SOFIA_SCHEDULER_HEALTH_TIMEOUT_SECONDS:-180}"
 
 usage() {
   printf '%s\n' \
@@ -38,9 +39,29 @@ wait_healthy() {
   return 1
 }
 
+wait_sofia_scheduler_healthy() {
+  local deadline=$((SECONDS + scheduler_health_timeout))
+  while (( SECONDS < deadline )); do
+    [[ "$(docker inspect asados-sofia-inbound-batch-maintenance --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' 2>/dev/null || true)" == healthy ]] && return 0
+    sleep 2
+  done
+  printf 'Sofia scheduler did not become healthy within %s seconds\n' "$scheduler_health_timeout" >&2
+  return 1
+}
+
+recreate_sofia_scheduler() {
+  docker compose -f "$root/docker-compose.yml" --project-directory "$root" --project-name asados \
+    up -d --no-deps --force-recreate sofia-inbound-batch-maintenance
+  wait_sofia_scheduler_healthy
+}
+
+stop_sofia_scheduler() {
+  docker stop asados-sofia-inbound-batch-maintenance >/dev/null 2>&1 || true
+}
+
 recreate_and_verify() {
-  local ref=$1 expected_id=$2 close_payment_proof_gates=${3:-false}
-  if [[ "$close_payment_proof_gates" == true ]]; then
+  local ref=$1 expected_id=$2 close_operational_gates=${3:-false}
+  if [[ "$close_operational_gates" == true ]]; then
     PAYMENT_PROOF_CANONICAL_INGEST_ENABLED=false \
     WHATSAPP_PAYMENT_PROOF_INGEST_ENABLED=false \
     TELEGRAM_PAYMENT_PROOF_INGEST_ENABLED=false \
@@ -49,6 +70,9 @@ recreate_and_verify() {
     PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false \
     PAYMENT_PROOF_CLEANUP_ENABLED=false \
     PAYMENT_PROOF_RESTORE_ENABLED=false \
+    SOFIA_INBOUND_BATCH_PROCESSING_ENABLED=false \
+    SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED=false \
+    SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED=false \
     ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
       --project-directory "$root" --project-name asados up -d --no-deps --force-recreate web
   else
@@ -56,6 +80,11 @@ recreate_and_verify() {
       --project-directory "$root" --project-name asados up -d --no-deps --force-recreate web
   fi
   wait_healthy
+  if [[ "$close_operational_gates" == true ]]; then
+    stop_sofia_scheduler
+  else
+    recreate_sofia_scheduler
+  fi
   ASADOS_EXPECTED_IMAGE_ID="$expected_id" "$smoke"
 }
 
