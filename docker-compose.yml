@@ -157,7 +157,8 @@ services:
     environment:
       - SOFIA_BATCH_MAINTENANCE_SECRET=${SOFIA_BATCH_MAINTENANCE_SECRET:?set SOFIA_BATCH_MAINTENANCE_SECRET}
       - SOFIA_BATCH_MAINTENANCE_URL=http://web:3000/api/internal/sofia/inbound-batches/maintenance
-      - SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS=${SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS:-60}
+      - SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS=${SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS:-2}
+      - SOFIA_BATCH_MAINTENANCE_MARKER_PATH=${SOFIA_BATCH_MAINTENANCE_MARKER_PATH:-/tmp/sofia-inbound-batch-maintenance-last-success}
     command: ["/bin/sh", "-c", "apk add --no-cache curl >/dev/null && exec /bin/sh /scheduler/sofia-inbound-batch-maintenance-scheduler.sh"]
     depends_on:
       web: { condition: service_healthy }
@@ -167,11 +168,12 @@ services:
       test:
         - CMD-SHELL
         - >-
-          interval=$${SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS:-60};
-          case "$$interval" in ''|*[!0-9]*) interval=60;; *)
-          if [ "$$interval" -lt 1 ] || [ "$$interval" -gt 715827882 ]; then interval=60; fi;; esac;
+          interval=$${SOFIA_BATCH_MAINTENANCE_INTERVAL_SECONDS:-2};
+          case "$$interval" in ''|*[!0-9]*) interval=2;; *)
+          if [ "$$interval" -lt 1 ] || [ "$$interval" -gt 715827882 ]; then interval=2; fi;; esac;
           tolerance=$$((interval * 3)); if [ "$$tolerance" -lt 180 ]; then tolerance=180; fi;
-          now=$$(date +%s) || exit 1; marker=$$(cat /tmp/sofia-inbound-batch-maintenance-last-success) || exit 1;
+          marker_path=$${SOFIA_BATCH_MAINTENANCE_MARKER_PATH:-/tmp/sofia-inbound-batch-maintenance-last-success};
+          now=$$(date +%s) || exit 1; marker=$$(cat "$$marker_path") || exit 1;
           case "$$marker" in ''|*[!0-9]*) exit 1;; esac;
           test "$$marker" -le $$((now + 5)) && test $$((now - marker)) -le "$$tolerance"
       interval: 30s
