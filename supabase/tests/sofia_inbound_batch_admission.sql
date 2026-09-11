@@ -1,15 +1,22 @@
 create extension if not exists pgtap;
 create extension if not exists dblink;
-\ir ../migrations/20260909010000_sofia_inbound_batch_admission.sql
+\ir ../migrations/20260910010000_sofia_humanized_timing.sql
 begin;
-select plan(27);
+select plan(34);
 
 select has_table('public', 'sofia_inbound_batches', 'durable Sofia batches exist');
 select has_table('public', 'sofia_inbound_batch_messages', 'durable immutable membership exists');
 select table_privs_are('public', 'sofia_inbound_batches', 'service_role', array[]::text[], 'service role has no direct batch-table privileges');
 select table_privs_are('public', 'sofia_inbound_batch_messages', 'authenticated', array[]::text[], 'authenticated has no membership-table privileges');
-select function_privs_are('public', 'enqueue_sofia_inbound_message', array['uuid','uuid','text','text','text','text','timestamp with time zone'], 'service_role', array['EXECUTE'], 'service role alone may enqueue');
-select function_privs_are('public', 'enqueue_sofia_inbound_message', array['uuid','uuid','text','text','text','text','timestamp with time zone'], 'authenticated', array[]::text[], 'authenticated cannot enqueue');
+select ok(pg_catalog.to_regrole('service_role') is not null and pg_catalog.to_regrole('anon') is not null and pg_catalog.to_regrole('authenticated') is not null,'required function roles exist');
+select ok(exists (select 1 from pg_catalog.pg_proc p cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) privilege where p.oid = 'public.enqueue_sofia_inbound_message(uuid,uuid,text,text,text,text,timestamptz)'::regprocedure and privilege.grantee = pg_catalog.to_regrole('service_role')::oid and privilege.privilege_type = 'EXECUTE'),'service role has direct enqueue EXECUTE');
+select ok((select p.prosecdef and (select count(*) = 1 and bool_and(config in ('search_path=', 'search_path=""')) from pg_catalog.unnest(coalesce(p.proconfig, array[]::text[])) as config where config like 'search_path=%') from pg_catalog.pg_proc p where p.oid = 'public.enqueue_sofia_inbound_message(uuid,uuid,text,text,text,text,timestamptz)'::regprocedure),'enqueue remains security definer with a safe empty search path');
+select ok(not exists (select 1 from pg_catalog.pg_proc p cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) privilege where p.oid = 'public.enqueue_sofia_inbound_message(uuid,uuid,text,text,text,text,timestamptz)'::regprocedure and privilege.grantee in (pg_catalog.to_regrole('anon')::oid, pg_catalog.to_regrole('authenticated')::oid) and privilege.privilege_type = 'EXECUTE'),'anon and authenticated have no direct enqueue EXECUTE');
+select ok(not exists (select 1 from pg_catalog.pg_proc p cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) privilege where p.oid = 'public.enqueue_sofia_inbound_message(uuid,uuid,text,text,text,text,timestamptz)'::regprocedure and privilege.grantee = 0 and privilege.privilege_type = 'EXECUTE'),'PUBLIC cannot enqueue');
+select ok(position('interval ''5 seconds''' in pg_catalog.pg_get_functiondef('public.enqueue_sofia_inbound_message(uuid,uuid,text,text,text,text,timestamptz)'::regprocedure)) = 0,'enqueue has no stale five-second interval');
+select ok((length(pg_catalog.pg_get_functiondef('public.enqueue_sofia_inbound_message(uuid,uuid,text,text,text,text,timestamptz)'::regprocedure)) - length(pg_catalog.replace(pg_catalog.pg_get_functiondef('public.enqueue_sofia_inbound_message(uuid,uuid,text,text,text,text,timestamptz)'::regprocedure), 'interval ''10 seconds''', ''))) / length('interval ''10 seconds''') = 2,'enqueue has exactly two ten-second replacements');
+select ok(position('interval ''5 seconds''' in pg_catalog.pg_get_functiondef('public.attach_sofia_inbound_message(uuid,uuid,uuid,text)'::regprocedure)) = 0,'attach has no stale five-second interval');
+select ok((length(pg_catalog.pg_get_functiondef('public.attach_sofia_inbound_message(uuid,uuid,uuid,text)'::regprocedure)) - length(pg_catalog.replace(pg_catalog.pg_get_functiondef('public.attach_sofia_inbound_message(uuid,uuid,uuid,text)'::regprocedure), 'interval ''10 seconds''', ''))) / length('interval ''10 seconds''') = 2,'attach has exactly two ten-second replacements');
 
 insert into public.clientes(id,nome,telefone) values ('a1000000-0000-4000-8000-000000000001','Batch test','5541991111101');
 insert into public.conversas(id,cliente_id) values ('a2000000-0000-4000-8000-000000000001','a1000000-0000-4000-8000-000000000001');
@@ -22,29 +29,29 @@ insert into admission_results select 'duplicate',* from public.enqueue_sofia_inb
 insert into admission_results select 'second',* from public.enqueue_sofia_inbound_message('a2000000-0000-4000-8000-000000000001','a1000000-0000-4000-8000-000000000001','telegram','delivery-2','second',null,'2030-01-01 10:00:00+00');
 reset role;
 
-select is((select count(*)::integer from public.sofia_inbound_batches),1,'admissions share one pending batch');
+select is((select count(*)::integer from public.sofia_inbound_batches where conversa_id='a2000000-0000-4000-8000-000000000001'),1,'admissions share one pending batch');
 select is((select count(*)::integer from public.mensagens where conversa_id='a2000000-0000-4000-8000-000000000001'),2,'messages persist immediately and retry deduplicates');
 select ok((select duplicate from admission_results where label='duplicate'),'delivery retry reports duplicate');
 select is((select message_id from admission_results where label='duplicate'),(select message_id from admission_results where label='first'),'delivery retry returns original binding');
-select is((select array_agg(m.conteudo order by bm.message_created_at,bm.message_id) from public.sofia_inbound_batch_messages bm join public.mensagens m on m.id=bm.message_id),array['second','first']::text[],'provider chronology is stable despite out-of-order admission');
-select is((select bm.message_created_at from public.sofia_inbound_batch_messages bm join public.mensagens m on m.id=bm.message_id where m.conteudo='second'),(select m.data_criacao from public.mensagens m where m.conteudo='second'),'membership persists the message chronology key');
-select ok((select abs(extract(epoch from scheduled_process_at-latest_message_at)-5) < 0.1 from public.sofia_inbound_batches),'latest trusted admission resets the five-second silence window');
-select ok((select first_message_at < '2029-01-01'::timestamptz from public.sofia_inbound_batches),'provider timestamp does not control scheduling time');
+select is((select array_agg(m.conteudo order by bm.message_created_at,bm.message_id) from public.sofia_inbound_batch_messages bm join public.sofia_inbound_batches b on b.id=bm.batch_id join public.mensagens m on m.id=bm.message_id where b.conversa_id='a2000000-0000-4000-8000-000000000001'),array['second','first']::text[],'provider chronology is stable despite out-of-order admission');
+select is((select bm.message_created_at from public.sofia_inbound_batch_messages bm join public.sofia_inbound_batches b on b.id=bm.batch_id join public.mensagens m on m.id=bm.message_id where b.conversa_id='a2000000-0000-4000-8000-000000000001' and m.conteudo='second'),(select m.data_criacao from public.mensagens m where m.conversa_id='a2000000-0000-4000-8000-000000000001' and m.conteudo='second'),'membership persists the message chronology key');
+select ok((select abs(extract(epoch from scheduled_process_at-latest_message_at)-10) < 0.1 from public.sofia_inbound_batches where conversa_id='a2000000-0000-4000-8000-000000000001'),'latest trusted admission resets the ten-second silence window');
+select ok((select first_message_at < '2029-01-01'::timestamptz from public.sofia_inbound_batches where conversa_id='a2000000-0000-4000-8000-000000000001'),'provider timestamp does not control scheduling time');
 
-update public.sofia_inbound_batches set first_message_at=t,latest_message_at=t+interval '18 seconds',scheduled_process_at=t+interval '20 seconds' from (select clock_timestamp()-interval '19 seconds' t) trusted;
+update public.sofia_inbound_batches set first_message_at=t,latest_message_at=t+interval '18 seconds',scheduled_process_at=t+interval '20 seconds' from (select clock_timestamp()-interval '19 seconds' t) trusted where conversa_id='a2000000-0000-4000-8000-000000000001';
 set local role service_role;
 insert into admission_results select 'cap',* from public.enqueue_sofia_inbound_message('a2000000-0000-4000-8000-000000000001','a1000000-0000-4000-8000-000000000001','telegram','delivery-3','cap',null,'2030-01-01 10:00:19+00');
 reset role;
-select is((select scheduled_process_at-first_message_at from public.sofia_inbound_batches),interval '20 seconds','continuous arrivals respect the trusted twenty-second cap');
-select throws_ok($$update public.sofia_inbound_batch_messages set message_created_at=now()$$,'55000','SOFIA_BATCH_MEMBERSHIP_IMMUTABLE','membership chronology cannot be rewritten');
-select throws_ok($$update public.sofia_inbound_batches set lease_token=gen_random_uuid()$$,'23514',null,'half leases violate batch state constraints');
-select throws_ok($$update public.sofia_inbound_batches set status='completed',completed_at=now(),last_error='wrong state'$$,'23514',null,'terminal metadata cannot cross states');
+select is((select scheduled_process_at-first_message_at from public.sofia_inbound_batches where conversa_id='a2000000-0000-4000-8000-000000000001'),interval '20 seconds','continuous arrivals respect the trusted twenty-second cap');
+select throws_ok($$update public.sofia_inbound_batch_messages set message_created_at=now() where batch_id=(select batch_id from admission_results where label='first')$$,'55000','SOFIA_BATCH_MEMBERSHIP_IMMUTABLE','membership chronology cannot be rewritten');
+select throws_ok($$update public.sofia_inbound_batches set lease_token=gen_random_uuid() where conversa_id='a2000000-0000-4000-8000-000000000001'$$,'23514',null,'half leases violate batch state constraints');
+select throws_ok($$update public.sofia_inbound_batches set status='completed',completed_at=now(),last_error='wrong state' where conversa_id='a2000000-0000-4000-8000-000000000001'$$,'23514',null,'terminal metadata cannot cross states');
 
-update public.sofia_inbound_batches set status='processing',lease_token=gen_random_uuid(),claimed_until=now()+interval '1 minute';
+update public.sofia_inbound_batches set status='processing',lease_token=gen_random_uuid(),claimed_until=now()+interval '1 minute' where conversa_id='a2000000-0000-4000-8000-000000000001';
 set local role service_role;
 insert into admission_results select 'post-claim',* from public.enqueue_sofia_inbound_message('a2000000-0000-4000-8000-000000000001','a1000000-0000-4000-8000-000000000001','telegram','delivery-4','after claim',null,'2030-01-01 10:00:21+00');
 reset role;
-select is((select count(*)::integer from public.sofia_inbound_batches where status='pending'),1,'arrival after claim creates one new pending batch');
+select is((select count(*)::integer from public.sofia_inbound_batches where conversa_id='a2000000-0000-4000-8000-000000000001' and status='pending'),1,'arrival after claim creates one new pending batch');
 select is((select count(*)::integer from public.sofia_inbound_batch_messages where message_id=(select message_id from admission_results where label='post-claim')),1,'message membership is globally unique');
 
 insert into public.clientes(id,nome,telefone) values ('a1000000-0000-4000-8000-000000000003','Cascade','5541991111103');
