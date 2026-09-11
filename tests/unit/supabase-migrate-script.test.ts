@@ -193,11 +193,19 @@ describe('Supabase migration runner', () => {
         .map(filename => [filename, readFileSync(join(migrations, filename), 'utf8')]),
     )
     const run = runHarness({ files, timeout: 30_000 })
-    expect(run.result.status).toBe(0)
+    expect(run.result.status, `${run.result.stderr}${run.result.stdout}`).toBe(0)
     expect(run.invocations).toHaveLength(1)
   }, 30_000)
 
-  it('uses one psql session, a run-wide advisory lock, and ordered native includes', () => {
+      it('accepts the Sofia humanized timing migration under the conservative contract', () => {
+        const migration = '20260910010000_sofia_humanized_timing.sql'
+        const contents = readFileSync(join(process.cwd(), 'supabase', 'migrations', migration), 'utf8')
+        const run = runHarness({ files: { [migration]: contents }, timeout: 30_000 })
+        expect(run.result.status, `${run.result.stderr}${run.result.stdout}`).toBe(0)
+        expect(run.invocations).toHaveLength(1)
+      })
+
+      it('uses one psql session, a run-wide advisory lock, and ordered native includes', () => {
     const run = runHarness()
     expect(run.result.status).toBe(0)
     expect(run.invocations).toHaveLength(1)

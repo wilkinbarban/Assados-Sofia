@@ -1,5 +1,5 @@
 -- Forward-only timing revision. Existing Telegram/WhatsApp producer and processing gates remain unchanged.
-do $migration$
+do $$
 declare
   v_name text;
   v_signature regprocedure;
@@ -92,4 +92,4 @@ begin
     end if;
   end loop;
 end
-$migration$;
+$$;
