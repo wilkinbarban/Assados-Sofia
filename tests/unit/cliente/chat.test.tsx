@@ -3,7 +3,7 @@ import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/re
 import { describe, expect, it, vi, beforeEach, afterEach, beforeAll } from 'vitest'
 import ChatContainer from '@/components/chat/ChatContainer'
 import ClienteChatPage from '@/app/cliente/chat/page'
-import { processarIaChat } from '@/app/actions/chat'
+import { obterSofiaPresence, processarIaChat } from '@/app/actions/chat'
 
 // Mock next/navigation
 vi.mock('next/navigation', () => ({
@@ -61,6 +61,7 @@ vi.mock('@/lib/supabase/client', () => ({
 // Mock Chat Server Action
 vi.mock('@/app/actions/chat', () => ({
   processarIaChat: vi.fn(),
+  obterSofiaPresence: vi.fn(),
 }))
 
 // Mock Carrinho Server Actions
@@ -157,6 +158,44 @@ const mockProdutos = [
 describe('ChatContainer Core UI Tests (Phase 2)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(obterSofiaPresence).mockResolvedValue({ success: true, presence: null })
+  })
+
+  it('shows Sofia composing only from the authorized durable presence readback', async () => {
+    vi.mocked(obterSofiaPresence).mockResolvedValue({
+      success: true,
+      presence: { status: 'composing', expiresAt: new Date(Date.now() + 30_000).toISOString() },
+    })
+
+    render(
+      <ChatContainer
+        clienteNome="Ana Silva"
+        conversaInicial={baseConversa}
+        mensagensIniciais={[]}
+        produtos={[]}
+      />
+    )
+
+    expect(await screen.findByText('Digitando')).toBeInTheDocument()
+    expect(obterSofiaPresence).toHaveBeenCalledWith('conversa-123')
+  })
+
+  it('hides expired durable presence even when the readback was composing', async () => {
+    vi.mocked(obterSofiaPresence).mockResolvedValue({
+      success: true,
+      presence: { status: 'composing', expiresAt: new Date(Date.now() - 1_000).toISOString() },
+    })
+
+    render(
+      <ChatContainer
+        clienteNome="Ana Silva"
+        conversaInicial={baseConversa}
+        mensagensIniciais={[]}
+        produtos={[]}
+      />
+    )
+
+    await waitFor(() => expect(screen.queryByText('Digitando')).not.toBeInTheDocument())
   })
 
   it('Task 2.1: Aligns client messages to the right and IA/Operator messages to the left', () => {

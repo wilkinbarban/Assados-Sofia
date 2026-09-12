@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { novaMensagemSchema } from '@/lib/validation/chat';
-import { processarIaChat } from '@/app/actions/chat';
+import { obterSofiaPresence, processarIaChat } from '@/app/actions/chat';
 import { BrandLogo } from '@/components/ui/BrandLogo';
 import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante';
 import { PaymentProofChatCard } from '@/components/chat/PaymentProofChatCard';
@@ -271,7 +271,8 @@ export default function ChatContainer({
   // Input & Upload States
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
-  const [isIaTyping, setIsIaTyping] = useState(false);
+  const [sofiaPresenceExpiresAt, setSofiaPresenceExpiresAt] = useState<string | null>(null);
+  const isIaTyping = sofiaPresenceExpiresAt !== null && new Date(sofiaPresenceExpiresAt).getTime() > Date.now();
   const [uploading, setUploading] = useState(false);
   const [attachmentPath, setAttachmentPath] = useState<string | null>(null);
   const [attachmentName, setAttachmentName] = useState<string | null>(null);
@@ -390,6 +391,30 @@ export default function ChatContainer({
       supabase.removeChannel(pedidosChannel);
     };
   }, [conversa.cliente_id, supabase, carregarPedidosCliente]);
+
+  // The presence table is private. Read its authorization-filtered projection through
+  // the server action; polling also works when a Realtime subscription is unavailable.
+  const refreshSofiaPresence = useCallback(async () => {
+    const result = await obterSofiaPresence(conversa.id);
+    setSofiaPresenceExpiresAt(result.success ? result.presence?.expiresAt ?? null : null);
+  }, [conversa.id]);
+
+  useEffect(() => {
+    void refreshSofiaPresence();
+    const interval = window.setInterval(() => void refreshSofiaPresence(), 5_000);
+    return () => window.clearInterval(interval);
+  }, [refreshSofiaPresence]);
+
+  useEffect(() => {
+    if (!sofiaPresenceExpiresAt) return;
+    const delay = new Date(sofiaPresenceExpiresAt).getTime() - Date.now();
+    if (delay <= 0) {
+      setSofiaPresenceExpiresAt(null);
+      return;
+    }
+    const timeout = window.setTimeout(() => setSofiaPresenceExpiresAt(null), delay);
+    return () => window.clearTimeout(timeout);
+  }, [sofiaPresenceExpiresAt]);
 
   // Scroll to bottom helper
   const scrollToBottom = () => {
@@ -740,7 +765,6 @@ export default function ChatContainer({
         setMensagens((prev) => [...prev, data]);
 
         if (conversa.ia_ativa && messageData.conteudo && !messageData.url_anexo) {
-          setIsIaTyping(true);
           processarIaChat(conversa.id, messageData.conteudo, data.id)
             .then(async () => {
               // Fallback sync caso o websocket sofra micro-latência
@@ -766,7 +790,7 @@ export default function ChatContainer({
               console.error('Erro ao processar IA:', err);
             })
             .finally(() => {
-              setIsIaTyping(false);
+              void refreshSofiaPresence();
             });
         }
       }
