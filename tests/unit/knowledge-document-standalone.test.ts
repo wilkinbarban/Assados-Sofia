@@ -8,6 +8,13 @@ describe('knowledge document standalone dependencies', () => {
     expect(dockerfile).toContain('COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules')
   })
 
+  it('uses a static mammoth import so Turbopack can resolve document parsing', async () => {
+    const action = await readFile('apps/web/src/app/actions/conhecimento.ts', 'utf8')
+
+    expect(action).toContain("import mammoth from 'mammoth'")
+    expect(action).not.toContain("require('mammoth')")
+  })
+
   it('externalizes and traces the workspace-scoped mammoth package', async () => {
     const config = await readFile('apps/web/next.config.ts', 'utf8')
 

@@ -3,6 +3,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
+import mammoth from 'mammoth'
 
 // Schema para validação dos dados do artigo
 const artigoSchema = z.object({
@@ -308,7 +309,6 @@ export async function importarDocumentoConhecimento(
       const data = await pdf(buffer)
       rawText = data.text || ''
     } else {
-      const mammoth = require('mammoth')
       const result = await mammoth.extractRawText({ buffer })
       rawText = result.value || ''
     }
