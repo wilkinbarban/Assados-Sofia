@@ -1,4 +1,4 @@
-type Channel = "telegram" | "whatsapp";
+type Channel = "telegram" | "whatsapp" | "web";
 type AdminClient = {
   rpc: (
     name: string,

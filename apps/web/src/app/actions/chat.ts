@@ -4,6 +4,8 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { processarRagPipeline } from '@/lib/ai/openrouter'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
+import { webInboundBatchEnqueueEnabled } from '@/lib/sofia/inbound-batch-gates'
+import { attachPersistedSofiaInboundMessage } from '@/lib/sofia/inbound-batch-producer'
 
 /**
  * Server Action para acionar o pipeline de IA (RAG) de forma assíncrona.
@@ -13,7 +15,7 @@ import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
  * @param conversaId ID da conversa ativa
  * @param conteudo Conteúdo da mensagem enviada pelo cliente
  */
-export async function processarIaChat(conversaId: string, conteudo: string) {
+export async function processarIaChat(conversaId: string, conteudo: string, messageId?: string) {
   try {
     if (!conteudo) {
       return { success: false, error: 'CONTEUDO_VAZIO' }
@@ -71,6 +73,18 @@ export async function processarIaChat(conversaId: string, conteudo: string) {
 
     // 5. Executar o pipeline RAG se a IA estiver ativa (com canal web explícito)
     if (conversa.ia_ativa) {
+      if (webInboundBatchEnqueueEnabled()) {
+        if (!messageId) return { success: false, error: 'MENSAGEM_NAO_PERSISTIDA' }
+        const attached = await attachPersistedSofiaInboundMessage({
+          supabase: supabaseAdmin,
+          messageId,
+          conversationId: conversaId,
+          customerId: conversa.cliente_id,
+          channel: 'web',
+        })
+        if (!attached) return { success: false, error: 'SOFIA_BATCH_ATTACH_FAILED' }
+        return { success: true }
+      }
       console.log(`[Server Action] IA ativa para conversa ${conversaId}. Iniciando RAG para Web...`)
       await processarRagPipeline(conversaId, conteudo, 'web')
     }

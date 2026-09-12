@@ -741,7 +741,7 @@ export default function ChatContainer({
 
         if (conversa.ia_ativa && messageData.conteudo && !messageData.url_anexo) {
           setIsIaTyping(true);
-          processarIaChat(conversa.id, messageData.conteudo)
+          processarIaChat(conversa.id, messageData.conteudo, data.id)
             .then(async () => {
               // Fallback sync caso o websocket sofra micro-latência
               const { data: ultimasMensagens } = await supabase
