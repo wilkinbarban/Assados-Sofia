@@ -15,6 +15,36 @@ import { attachPersistedSofiaInboundMessage } from '@/lib/sofia/inbound-batch-pr
  * @param conversaId ID da conversa ativa
  * @param conteudo Conteúdo da mensagem enviada pelo cliente
  */
+type SofiaPresence = {
+  status: 'composing'
+  expiresAt: string
+}
+
+export async function obterSofiaPresence(conversaId: string): Promise<
+  | { success: true; presence: SofiaPresence | null }
+  | { success: false; error: string }
+> {
+  try {
+    const supabase = await createClient()
+    const { data: { user }, error: authError } = await supabase.auth.getUser()
+    if (authError || !user) return { success: false, error: 'ACESSO_NEGADO_NAO_AUTENTICADO' }
+
+    const { data, error } = await supabase
+      .rpc('get_sofia_conversation_presence', { p_conversa_id: conversaId })
+      .maybeSingle()
+    if (error) return { success: false, error: 'SOFIA_PRESENCE_INDISPONIVEL' }
+    const presence = data as { status?: unknown; expires_at?: unknown } | null
+    if (!presence || presence.status !== 'composing' || typeof presence.expires_at !== 'string') {
+      return { success: true, presence: null }
+    }
+
+    return { success: true, presence: { status: 'composing', expiresAt: presence.expires_at } }
+  } catch (error) {
+    console.error('Erro ao consultar presença da Sofia:', error)
+    return { success: false, error: 'SOFIA_PRESENCE_INDISPONIVEL' }
+  }
+}
+
 export async function processarIaChat(conversaId: string, conteudo: string, messageId?: string) {
   try {
     if (!conteudo) {
