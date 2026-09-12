@@ -72,6 +72,21 @@ describe('Sofia inbound batch worker', () => {
     expect(d.sendTelegram).not.toHaveBeenCalled()
     expect(d.clearActivity).toHaveBeenCalledWith('b','d')
   })
+  it('delegates the durable remainder to Evolution composing after the final delivery fence', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'whatsapp' as const,response_text:'r',lease_token:'dl'}
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:37}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+    })
+    await runSofiaBatchMaintenance(d,2)
+    expect(d.sleep).not.toHaveBeenCalled()
+    expect(d.beginDelivery).toHaveBeenCalledBefore(d.sendWhatsApp as ReturnType<typeof vi.fn>)
+    expect(d.sendWhatsApp).toHaveBeenCalledWith('c','r',37)
+  })
   it('clears G when paced completion loses its fence', async () => {
     vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
     const d=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),completePaced:vi.fn().mockResolvedValue(null),clearActivity:vi.fn().mockResolvedValue(true)})

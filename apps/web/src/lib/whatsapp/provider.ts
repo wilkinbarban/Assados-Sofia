@@ -11,6 +11,8 @@ export interface EnviarMensagemPayload {
   templateParams?: any[];
   remetente?: 'operador' | 'ia';
   categoria?: TipoCategoriaMensagem;
+  /** Overrides Evolution's provider-side composing delay when a durable worker already paced delivery. */
+  typingDelayMs?: number;
   /** Defaults true; durable outbox callers disable duplicate message persistence. */
   salvarNoBanco?: boolean;
 }

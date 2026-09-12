@@ -10,7 +10,6 @@ import { whatsappCircuitBreaker } from './circuit-breaker'
 export function evolutionMaxRetries(payload: EnviarMensagemPayload): number {
   return payload.salvarNoBanco === false ? 0 : 2
 }
-
 function isEvolutionMockMode(apiUrl: string | null, apiKey: string | null, instanceName: string | null): boolean {
   if (!apiUrl || !apiKey || !instanceName) return true
   
@@ -133,7 +132,7 @@ export async function enviarMensagemEvolution(
       }
     } else {
       // Mensagem de Texto (ou Template formatado como texto)
-      const typingDelayMs = calcularDelayDigitacao(conteudoFinal)
+      const typingDelayMs = payload.typingDelayMs ?? calcularDelayDigitacao(conteudoFinal)
       url = `${cleanUrl}/message/sendText/${instanceName}`
       bodyData = {
         number: telefone,
@@ -273,4 +272,3 @@ export async function sendOtpEvolution(
     return { sucesso: false, error: err.message || 'Erro inesperado na Evolution API' }
   }
 }
-
