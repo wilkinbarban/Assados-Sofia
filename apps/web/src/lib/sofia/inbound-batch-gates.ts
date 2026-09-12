@@ -21,3 +21,9 @@ export function evolutionInboundBatchEnqueueEnabled(
 ): boolean {
   return value === "true";
 }
+
+export function webInboundBatchEnqueueEnabled(
+  value = process.env.SOFIA_INBOUND_BATCH_WEB_ENQUEUE_ENABLED,
+): boolean {
+  return value === "true";
+}
