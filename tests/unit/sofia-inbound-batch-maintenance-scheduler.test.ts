@@ -124,8 +124,11 @@ describe('Sofia inbound batch maintenance scheduler', () => {
     expect(deploy).toContain('recreate_and_verify "$PREVIOUS_REF" "$PREVIOUS_ID" true')
     for (const gate of [
       'SOFIA_INBOUND_BATCH_PROCESSING_ENABLED=false',
+      'SOFIA_INBOUND_BATCH_RUNTIME_ENABLED=false',
       'SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED=false',
       'SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED=false',
     ]) expect(deploy).toContain(gate)
+    expect(compose).toContain('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED=${SOFIA_INBOUND_BATCH_RUNTIME_ENABLED:-false}')
+    expect(deploy).toContain('recreate_and_verify "$candidate_ref" "$candidate_id" "$close_operational_gates"')
   })
 })

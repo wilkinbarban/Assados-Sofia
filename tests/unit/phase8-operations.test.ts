@@ -56,6 +56,7 @@ describe('Phase 8 operational artifacts', () => {
 
     expect(compose).toContain('image: ${ASADOS_WEB_IMAGE:-asados-web:latest}')
     expect(deploy).toContain('deploy <local-immutable-image-ref>')
+    expect(deploy).toContain('deploy --closed-gates <local-immutable-image-ref>')
     expect(deploy).toContain('rollback')
     expect(deploy).toContain('--no-deps --force-recreate web')
     expect(deploy).toContain('--project-name asados')
@@ -70,7 +71,13 @@ describe('Phase 8 operational artifacts', () => {
       'PAYMENT_PROOF_SELLER_RECONCILIATION_ENABLED=false',
       'PAYMENT_PROOF_PRIVILEGED_REPLAY_ENABLED=false',
       'PAYMENT_PROOF_CLEANUP_ENABLED=false',
+      'SOFIA_INBOUND_BATCH_PROCESSING_ENABLED=false',
+      'SOFIA_INBOUND_BATCH_RUNTIME_ENABLED=false',
+      'SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED=false',
+      'SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED=false',
     ]) expect(deploy).toContain(gate)
+    expect(compose).toContain('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED=${SOFIA_INBOUND_BATCH_RUNTIME_ENABLED:-false}')
+    expect(deploy).toContain('recreate_and_verify "$candidate_ref" "$candidate_id" "$close_operational_gates"')
     expect(deploy).toContain('ASADOS_DEPLOY_STATE_ROOT')
     expect(deploy).not.toMatch(/docker compose[^\\n]*(?:db|auth|storage|evolution)/)
   })

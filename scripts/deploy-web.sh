@@ -13,6 +13,7 @@ scheduler_health_timeout="${ASADOS_SOFIA_SCHEDULER_HEALTH_TIMEOUT_SECONDS:-180}"
 usage() {
   printf '%s\n' \
     "Usage: $0 deploy <local-immutable-image-ref>" \
+    "       $0 deploy --closed-gates <local-immutable-image-ref>" \
     "       $0 rollback"
 }
 
@@ -71,6 +72,7 @@ recreate_and_verify() {
     PAYMENT_PROOF_CLEANUP_ENABLED=false \
     PAYMENT_PROOF_RESTORE_ENABLED=false \
     SOFIA_INBOUND_BATCH_PROCESSING_ENABLED=false \
+    SOFIA_INBOUND_BATCH_RUNTIME_ENABLED=false \
     SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED=false \
     SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED=false \
     ASADOS_WEB_IMAGE="$ref" docker compose -f "$root/docker-compose.yml" \
@@ -118,8 +120,18 @@ flock -n 9 || { printf '%s\n' 'Another Web deployment is active' >&2; exit 1; }
 action="${1:-}"
 case "$action" in
   deploy)
-    [[ $# -eq 2 ]] || { usage >&2; exit 2; }
-    candidate_ref=$2
+    close_operational_gates=false
+    case "${2:-}" in
+      --closed-gates)
+        [[ $# -eq 3 ]] || { usage >&2; exit 2; }
+        close_operational_gates=true
+        candidate_ref=$3
+        ;;
+      *)
+        [[ $# -eq 2 ]] || { usage >&2; exit 2; }
+        candidate_ref=$2
+        ;;
+    esac
     require_immutable_local_image "$candidate_ref"
     candidate_id="$(image_id "$candidate_ref")"
     current_id="$(docker inspect asados-web --format '{{.Image}}')"
@@ -127,7 +139,7 @@ case "$action" in
     docker image tag "$current_id" "$rollback_ref"
     previous_id="$(image_id "$rollback_ref")"
 
-    if ! recreate_and_verify "$candidate_ref" "$candidate_id"; then
+    if ! recreate_and_verify "$candidate_ref" "$candidate_id" "$close_operational_gates"; then
       printf '%s\n' 'Promotion failed; restoring the retained previous image' >&2
       recreate_and_verify "$rollback_ref" "$previous_id" true
       exit 1
