@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { formatBatchContext, runSofiaBatchMaintenance, type BatchWorkerDeps } from '@/lib/sofia/inbound-batch-worker'
-import { inboundBatchProcessingEnabled } from '@/lib/sofia/inbound-batch-gates'
+import { inboundBatchProcessingEnabled, inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
 
 const claim = { batch_id:'b', conversa_id:'c', cliente_id:'u', channel:'telegram' as const, lease_token:'l', eligibility:{ db_eligible:true }, members:[
   { content:'primeiro', has_attachment:false, has_payment_proof:false },
@@ -8,12 +8,56 @@ const claim = { batch_id:'b', conversa_id:'c', cliente_id:'u', channel:'telegram
   { content:'segue', has_attachment:true, has_payment_proof:true },
 ] }
 function deps(overrides: Partial<BatchWorkerDeps> = {}): BatchWorkerDeps {
-  return { claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null), cancel:vi.fn().mockResolvedValue(true), fail:vi.fn().mockResolvedValue(true), businessHours:vi.fn().mockResolvedValue(true), globalEnabled:vi.fn().mockResolvedValue(true), whatsappEligible:vi.fn().mockResolvedValue(true), generate:vi.fn().mockResolvedValue('resposta'), complete:vi.fn().mockResolvedValue(true), claimDelivery:vi.fn().mockResolvedValue(null), beginDelivery:vi.fn().mockResolvedValue(true), recordDeliveryFailure:vi.fn(), sendTelegram:vi.fn(), sendWhatsApp:vi.fn(), ...overrides }
+  return { claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null), cancel:vi.fn().mockResolvedValue(true), fail:vi.fn().mockResolvedValue(true), businessHours:vi.fn().mockResolvedValue(true), globalEnabled:vi.fn().mockResolvedValue(true), whatsappEligible:vi.fn().mockResolvedValue(true), generate:vi.fn().mockResolvedValue('resposta'), complete:vi.fn().mockResolvedValue(true), claimDelivery:vi.fn().mockResolvedValue(null), beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}), renewActivity:vi.fn().mockResolvedValue(true), clearActivity:vi.fn().mockResolvedValue(true), beginDelivery:vi.fn().mockResolvedValue(true), recordDeliveryFailure:vi.fn(), sendTelegram:vi.fn(), sendWhatsApp:vi.fn(), ...overrides }
 }
+afterEach(() => vi.unstubAllEnvs())
 describe('Sofia inbound batch worker', () => {
   it('parses processing strictly and defaults closed', () => {
     expect([undefined,'false','TRUE','1'].map(inboundBatchProcessingEnabled)).toEqual([false,false,false,false])
     expect(inboundBatchProcessingEnabled('true')).toBe(true)
+  })
+  it('parses the independent runtime gate strictly and defaults closed', () => {
+    expect([undefined,'false','TRUE','1'].map(inboundBatchRuntimeEnabled)).toEqual([false,false,false,false])
+    expect(inboundBatchRuntimeEnabled('true')).toBe(true)
+  })
+  it('preserves legacy generation while the runtime gate is off', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','false')
+    const d=deps()
+    await runSofiaBatchMaintenance(d,1)
+    expect(d.complete).toHaveBeenCalledWith('b','l','resposta')
+    expect(d.beginActivity).not.toHaveBeenCalled()
+  })
+  it('takes and conditionally clears G around generation when runtime is enabled', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const d=deps({setInterval:vi.fn(()=> 'timer'),clearInterval:vi.fn()})
+    await runSofiaBatchMaintenance(d,1)
+    expect(d.beginActivity).toHaveBeenCalledWith('b','l')
+    expect(d.beginActivity).toHaveBeenCalledBefore(d.generate as ReturnType<typeof vi.fn>)
+    expect(d.complete).toHaveBeenCalledWith('b','l','resposta')
+    expect(d.clearActivity).toHaveBeenCalledWith('b','g')
+    expect(d.clearInterval).toHaveBeenCalledWith('timer')
+  })
+  it('fails closed if it cannot take G', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const d=deps({beginActivity:vi.fn().mockResolvedValue(null)})
+    expect((await runSofiaBatchMaintenance(d,1)).failed).toBe(1)
+    expect(d.generate).not.toHaveBeenCalled()
+  })
+  it('serializes ten-second G heartbeats and discards output after a fence loss', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    let heartbeat:(()=>void)|undefined,releaseGeneration!:(text:string)=>void,releaseRenewal!:(value:boolean)=>void
+    const generation=new Promise<string>(resolve=>{releaseGeneration=resolve})
+    const renewal=new Promise<boolean>(resolve=>{releaseRenewal=resolve})
+    const d=deps({generate:vi.fn().mockReturnValue(generation),renewActivity:vi.fn().mockReturnValue(renewal),setInterval:vi.fn(callback=>{heartbeat=callback;return 'timer'}),clearInterval:vi.fn()})
+    const run=runSofiaBatchMaintenance(d,1)
+    await vi.waitFor(()=>expect(heartbeat).toBeTypeOf('function'))
+    heartbeat!();heartbeat!()
+    expect(d.renewActivity).toHaveBeenCalledTimes(1)
+    releaseRenewal(false);releaseGeneration('resposta')
+    await run
+    expect(d.setInterval).toHaveBeenCalledWith(expect.any(Function),10_000)
+    expect(d.complete).not.toHaveBeenCalled()
+    expect(d.clearActivity).toHaveBeenCalledWith('b','g')
   })
   it('formats ordered context with safe attachment descriptors only', () => {
     expect(formatBatchContext(claim.members)).toBe('MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):\n[1] Cliente: "primeiro"\n[2] Cliente: [anexo recebido; mensagem sem texto]\n[3] Cliente: "segue" [anexo: comprovante de pagamento recebido]')

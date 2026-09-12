@@ -2,12 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { processarRagBatchPipeline } from '@/lib/ai/openrouter'
 import { obterSofiaGlobalChannelConfig } from '@/lib/config/sistema'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
+import { inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
 import { enviarMensagemTelegram } from '@/lib/telegram/send'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
 import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
 
 type Channel='telegram'|'whatsapp'
 type Member={content:string|null;has_attachment:boolean;has_payment_proof:boolean}
+type Activity={attempt_id:string;expires_at:string}
 type Claim={batch_id:string;conversa_id:string;cliente_id:string;channel:Channel;lease_token:string;eligibility:{db_eligible:boolean;ia_ativa?:boolean;conversation_status?:string;automation_allowed?:boolean;global_enabled?:boolean;whatsapp_status?:string;whatsapp_sleeping?:boolean};members:Member[]}
 type Delivery={batch_id:string;conversa_id:string;canal:Channel;response_text:string;lease_token:string}
 export type BatchCounts={claimed:number;completed:number;cancelled:number;failed:number;delivery_attempted:number}
@@ -16,17 +18,30 @@ export interface BatchWorkerDeps {
  businessHours():Promise<boolean>; globalEnabled(channel:Channel):Promise<boolean>; whatsappEligible(claim:Claim):Promise<boolean>
  generate(conversationId:string,context:string,channel:Channel):Promise<string>; complete(id:string,lease:string,text:string):Promise<boolean>
  claimDelivery():Promise<Delivery|null>; beginDelivery(id:string,lease:string):Promise<boolean>; recordDeliveryFailure(id:string,reason:string):Promise<unknown>
+ beginActivity?(id:string,lease:string):Promise<Activity|null>;renewActivity?(id:string,lease:string,attempt:string):Promise<boolean>;clearActivity?(id:string,attempt:string):Promise<boolean>
+ setInterval?(callback:()=>void,ms:number):unknown;clearInterval?(timer:unknown):void
  sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string):Promise<unknown>
 }
 export function formatBatchContext(members:Member[]):string {
  return ['MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):',...members.map((m,i)=>{
   const text=m.content?.trim(); const attachment=m.has_payment_proof?' [anexo: comprovante de pagamento recebido]':m.has_attachment?' [anexo recebido]':''
-  return `[${i+1}] Cliente: ${text?`"${text}"${attachment}`:attachment.trim().replace(/\]$/, '; mensagem sem texto]')}`
+ return `[${i+1}] Cliente: ${text?`"${text}"${attachment}`:attachment.trim().replace(/\]$/, '; mensagem sem texto]')}`
  })].join('\n')
+}
+function startHeartbeat(deps:BatchWorkerDeps,batchId:string,lease:string,attempt:string){
+ let lost=false,renewing=false,renewal:Promise<void>|undefined
+ const renew=()=>{
+  if(lost||renewing||!deps.renewActivity)return renewal
+  renewing=true
+  renewal=(async()=>{try{if(!await deps.renewActivity!(batchId,lease,attempt))lost=true}catch{lost=true}finally{renewing=false}})()
+  return renewal
+ }
+ const timer=deps.setInterval?.(()=>{void renew()},10_000)
+ return {lost:()=>lost,settle:async()=>{await renewal},stop:()=>timer!==undefined&&deps.clearInterval?.(timer)}
 }
 export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promise<BatchCounts>{
  const out:BatchCounts={claimed:0,completed:0,cancelled:0,failed:0,delivery_attempted:0}
- const processingLimit=Math.ceil(limit/2)
+ const processingLimit=Math.ceil(limit/2),runtimeEnabled=inboundBatchRuntimeEnabled()
  for(let i=0;i<processingLimit;i++){
   const c=await d.claimBatch();if(!c)break;out.claimed++
   try{
@@ -34,6 +49,21 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
    let reason:string|null=e.ia_ativa===false?'ia_inactive':e.automation_allowed===false||e.whatsapp_status==='opted_out'?'opt_out':e.global_enabled===false?'global_disabled':e.conversation_status&&e.conversation_status!=='ia_atendendo'?'handoff_or_pause':e.whatsapp_sleeping?'sleep_or_cooldown':!e.db_eligible?'handoff_or_pause':!(await d.globalEnabled(c.channel))?'global_disabled':!(await d.businessHours())?'outside_business_hours':null
    if(!reason&&c.channel==='whatsapp'&&!(await d.whatsappEligible(c)))reason='sleep_or_cooldown'
    if(reason){await d.cancel(c.batch_id,c.lease_token,reason);out.cancelled++;continue}
+   if(runtimeEnabled){
+    const activity=await d.beginActivity?.(c.batch_id,c.lease_token)
+    if(!activity){out.failed++;continue}
+    const heartbeat=startHeartbeat(d,c.batch_id,c.lease_token,activity.attempt_id)
+    try{
+     const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
+     await heartbeat.settle()
+     if(heartbeat.lost()){out.failed++;continue}
+     if(!(await d.complete(c.batch_id,c.lease_token,text))){out.failed++;continue}out.completed++
+    }finally{
+     heartbeat.stop()
+     await d.clearActivity?.(c.batch_id,activity.attempt_id)
+    }
+    continue
+   }
    const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
    if(!(await d.complete(c.batch_id,c.lease_token,text))){out.failed++;continue} out.completed++
   }catch{await d.fail(c.batch_id,c.lease_token,'generation_failed');out.failed++}
@@ -57,6 +87,8 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
   claimBatch:()=>rpc('claim_sofia_inbound_batch',{p_lease_seconds:60}),cancel:(id,l,r)=>rpc('cancel_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_reason:r}),fail:(id,l,e)=>rpc('fail_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_error:e}),
   businessHours:async()=>(await verificarHorarioAtendimento()).dentro,globalEnabled:async c=>(await obterSofiaGlobalChannelConfig(c)).enabled,whatsappEligible:async c=>(await isWhatsAppInboundEligibleForSofia({supabase:db,clienteId:c.cliente_id,conversaId:c.conversa_id})).eligible,
   generate:processarRagBatchPipeline,complete:async(id,l,t)=>!!await rpc('complete_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_response_text:t}),claimDelivery:()=>rpc('claim_sofia_response_delivery',{p_lease_seconds:60}),beginDelivery:(id,l)=>rpc('begin_sofia_response_delivery',{p_batch_id:id,p_lease_token:l}),recordDeliveryFailure:(id,r)=>rpc('record_sofia_response_delivery_failure',{p_batch_id:id,p_failure:r}),
+  beginActivity:(id,l)=>rpc('begin_sofia_batch_activity',{p_batch_id:id,p_batch_lease_token:l,p_ttl_seconds:30}),renewActivity:async(id,l,a)=>!!await rpc('renew_sofia_owner_activity',{p_batch_id:id,p_owner_kind:'generation',p_owner_token:l,p_attempt_id:a,p_owner_ttl_seconds:30,p_activity_ttl_seconds:30}),clearActivity:(id,a)=>rpc('clear_sofia_batch_activity',{p_batch_id:id,p_attempt_id:a}),
+  setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),
   sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',salvarNoBanco:false})
  }
 }
