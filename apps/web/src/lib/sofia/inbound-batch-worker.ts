@@ -21,7 +21,7 @@ export interface BatchWorkerDeps {
  claimDelivery():Promise<Delivery|null>; beginDelivery(id:string,lease:string):Promise<boolean>; recordDeliveryFailure(id:string,reason:string):Promise<unknown>
  beginActivity?(id:string,lease:string):Promise<Activity|null>;renewActivity?(id:string,lease:string,attempt:string):Promise<boolean>;clearActivity?(id:string,attempt:string):Promise<boolean>;adoptActivity(id:string,lease:string):Promise<Activity|null>
  setInterval?(callback:()=>void,ms:number):unknown;clearInterval?(timer:unknown):void;now():number;sleep(ms:number):Promise<void>
- sendTelegramTyping(id:string):Promise<void>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string):Promise<unknown>
+ sendTelegramTyping(id:string):Promise<void>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string,typingDelayMs?:number):Promise<unknown>
 }
 export function formatBatchContext(members:Member[]):string {
  return ['MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):',...members.map((m,i)=>{
@@ -93,10 +93,10 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
   const typing=runtimeEnabled&&job.canal==='telegram'?startTelegramTyping(d,job.conversa_id):null
   try{
    const remainingMs=pacedRemainders.get(job.batch_id)
-   if(remainingMs!==undefined)await d.sleep(remainingMs)
+   if(remainingMs!==undefined&&job.canal!=='whatsapp')await d.sleep(remainingMs)
    if(!(await d.beginDelivery(job.batch_id,job.lease_token)))continue
    out.delivery_attempted++
-   const result=await(job.canal==='telegram'?d.sendTelegram(job.conversa_id,job.response_text):d.sendWhatsApp(job.conversa_id,job.response_text))
+   const result=await(job.canal==='telegram'?d.sendTelegram(job.conversa_id,job.response_text):d.sendWhatsApp(job.conversa_id,job.response_text,remainingMs))
    if(result&&typeof result==='object'&&(('success'in result&&result.success===false)||('sucesso'in result&&result.sucesso===false)))await d.recordDeliveryFailure(job.batch_id,'provider_rejected')
   }catch{await d.recordDeliveryFailure(job.batch_id,'provider_unavailable')}
   finally{typing?.stop();if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
@@ -112,6 +112,6 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
   generate:processarRagBatchPipeline,complete:async(id,l,t)=>!!await rpc('complete_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_response_text:t}),completePaced:(id,l,t,e)=>rpc('complete_sofia_inbound_batch_paced',{p_batch_id:id,p_lease_token:l,p_response_text:t,p_generation_elapsed_ms:e}),claimDelivery:()=>rpc('claim_sofia_response_delivery',{p_lease_seconds:60}),beginDelivery:(id,l)=>rpc('begin_sofia_response_delivery',{p_batch_id:id,p_lease_token:l}),recordDeliveryFailure:(id,r)=>rpc('record_sofia_response_delivery_failure',{p_batch_id:id,p_failure:r}),
   beginActivity:(id,l)=>rpc('begin_sofia_batch_activity',{p_batch_id:id,p_batch_lease_token:l,p_ttl_seconds:30}),renewActivity:async(id,l,a)=>!!await rpc('renew_sofia_owner_activity',{p_batch_id:id,p_owner_kind:'generation',p_owner_token:l,p_attempt_id:a,p_owner_ttl_seconds:30,p_activity_ttl_seconds:30}),clearActivity:(id,a)=>rpc('clear_sofia_batch_activity',{p_batch_id:id,p_attempt_id:a}),adoptActivity:(id,l)=>rpc('adopt_sofia_response_activity',{p_batch_id:id,p_delivery_lease_token:l,p_ttl_seconds:30}),
   setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),sendTelegramTyping:id=>enviarAcaoChatTelegram(id,'typing'),
-  sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',salvarNoBanco:false})
+  sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text,typingDelayMs)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',typingDelayMs,salvarNoBanco:false})
  }
 }
