@@ -87,6 +87,34 @@ describe('Sofia inbound batch worker', () => {
     expect(d.beginDelivery).toHaveBeenCalledBefore(d.sendWhatsApp as ReturnType<typeof vi.fn>)
     expect(d.sendWhatsApp).toHaveBeenCalledWith('c','r',37)
   })
+  it('finalizes a claimed Web delivery without invoking a provider sender', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'web' as const,response_text:'r',lease_token:'dl'}
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:37}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+    })
+
+    const result=await runSofiaBatchMaintenance(d,2)
+
+    expect(d.beginDelivery).toHaveBeenCalledWith('b','dl')
+    expect(d.sendTelegram).not.toHaveBeenCalled()
+    expect(d.sendWhatsApp).not.toHaveBeenCalled()
+    expect(d.clearActivity).toHaveBeenCalledWith('b','d')
+    expect(result.delivery_attempted).toBe(1)
+  })
+  it('uses the Web admission gate rather than a provider global gate for Web batches', async () => {
+    const claim={batch_id:'web-b',conversa_id:'c',cliente_id:'customer',channel:'web' as const,lease_token:'web-l',eligibility:{db_eligible:true},members:[]}
+    const d=deps({claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null)})
+
+    await runSofiaBatchMaintenance(d,1)
+
+    expect(d.globalEnabled).not.toHaveBeenCalled()
+    expect(d.complete).toHaveBeenCalledWith('web-b','web-l','resposta')
+  })
   it('clears G when paced completion loses its fence', async () => {
     vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
     const d=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),completePaced:vi.fn().mockResolvedValue(null),clearActivity:vi.fn().mockResolvedValue(true)})
