@@ -3,7 +3,7 @@ import { processarRagBatchPipeline } from '@/lib/ai/openrouter'
 import { obterSofiaGlobalChannelConfig } from '@/lib/config/sistema'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
-import { enviarMensagemTelegram } from '@/lib/telegram/send'
+import { enviarAcaoChatTelegram, enviarMensagemTelegram } from '@/lib/telegram/send'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
 import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
 
@@ -21,7 +21,7 @@ export interface BatchWorkerDeps {
  claimDelivery():Promise<Delivery|null>; beginDelivery(id:string,lease:string):Promise<boolean>; recordDeliveryFailure(id:string,reason:string):Promise<unknown>
  beginActivity?(id:string,lease:string):Promise<Activity|null>;renewActivity?(id:string,lease:string,attempt:string):Promise<boolean>;clearActivity?(id:string,attempt:string):Promise<boolean>;adoptActivity(id:string,lease:string):Promise<Activity|null>
  setInterval?(callback:()=>void,ms:number):unknown;clearInterval?(timer:unknown):void;now():number;sleep(ms:number):Promise<void>
- sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string):Promise<unknown>
+ sendTelegramTyping(id:string):Promise<void>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string):Promise<unknown>
 }
 export function formatBatchContext(members:Member[]):string {
  return ['MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):',...members.map((m,i)=>{
@@ -40,6 +40,12 @@ function startHeartbeat(deps:BatchWorkerDeps,batchId:string,lease:string,attempt
  const timer=deps.setInterval?.(()=>{void renew()},10_000)
  return {lost:()=>lost,settle:async()=>{await renewal},stop:()=>timer!==undefined&&deps.clearInterval?.(timer)}
 }
+function startTelegramTyping(deps:BatchWorkerDeps,conversationId:string){
+ const refresh=()=>{try{const request=deps.sendTelegramTyping(conversationId);if(request&&typeof (request as Promise<void>).catch==='function')void (request as Promise<void>).catch(()=>undefined)}catch{}}
+ refresh()
+ const timer=deps.setInterval?.(refresh,4_000)
+ return {stop:()=>timer!==undefined&&deps.clearInterval?.(timer)}
+}
 export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promise<BatchCounts>{
  const out:BatchCounts={claimed:0,completed:0,cancelled:0,failed:0,delivery_attempted:0}
  const processingLimit=Math.ceil(limit/2),runtimeEnabled=inboundBatchRuntimeEnabled(),pacedRemainders=new Map<string,number>()
@@ -57,6 +63,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
    const activity=await d.beginActivity?.(c.batch_id,c.lease_token)
    if(!activity){out.failed++;continue}
    const heartbeat=startHeartbeat(d,c.batch_id,c.lease_token,activity.attempt_id)
+   const typing=c.channel==='telegram'?startTelegramTyping(d,c.conversa_id):null
    let retainGenerationActivity=false
    try{
     const startedAt=d.now()
@@ -70,6 +77,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
     retainGenerationActivity=true;out.completed++
    }finally{
     heartbeat.stop()
+    typing?.stop()
     if(!retainGenerationActivity)await d.clearActivity?.(c.batch_id,activity.attempt_id)
    }
   }catch{await d.fail(c.batch_id,c.lease_token,'generation_failed');out.failed++}
@@ -82,6 +90,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
    deliveryActivity=await d.adoptActivity(job.batch_id,job.lease_token)
    if(!deliveryActivity)continue
   }
+  const typing=runtimeEnabled&&job.canal==='telegram'?startTelegramTyping(d,job.conversa_id):null
   try{
    const remainingMs=pacedRemainders.get(job.batch_id)
    if(remainingMs!==undefined)await d.sleep(remainingMs)
@@ -90,7 +99,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
    const result=await(job.canal==='telegram'?d.sendTelegram(job.conversa_id,job.response_text):d.sendWhatsApp(job.conversa_id,job.response_text))
    if(result&&typeof result==='object'&&(('success'in result&&result.success===false)||('sucesso'in result&&result.sucesso===false)))await d.recordDeliveryFailure(job.batch_id,'provider_rejected')
   }catch{await d.recordDeliveryFailure(job.batch_id,'provider_unavailable')}
-  finally{if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
+  finally{typing?.stop();if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
  }
  return out
 }
@@ -102,7 +111,7 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
   businessHours:async()=>(await verificarHorarioAtendimento()).dentro,globalEnabled:async c=>(await obterSofiaGlobalChannelConfig(c)).enabled,whatsappEligible:async c=>(await isWhatsAppInboundEligibleForSofia({supabase:db,clienteId:c.cliente_id,conversaId:c.conversa_id})).eligible,
   generate:processarRagBatchPipeline,complete:async(id,l,t)=>!!await rpc('complete_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_response_text:t}),completePaced:(id,l,t,e)=>rpc('complete_sofia_inbound_batch_paced',{p_batch_id:id,p_lease_token:l,p_response_text:t,p_generation_elapsed_ms:e}),claimDelivery:()=>rpc('claim_sofia_response_delivery',{p_lease_seconds:60}),beginDelivery:(id,l)=>rpc('begin_sofia_response_delivery',{p_batch_id:id,p_lease_token:l}),recordDeliveryFailure:(id,r)=>rpc('record_sofia_response_delivery_failure',{p_batch_id:id,p_failure:r}),
   beginActivity:(id,l)=>rpc('begin_sofia_batch_activity',{p_batch_id:id,p_batch_lease_token:l,p_ttl_seconds:30}),renewActivity:async(id,l,a)=>!!await rpc('renew_sofia_owner_activity',{p_batch_id:id,p_owner_kind:'generation',p_owner_token:l,p_attempt_id:a,p_owner_ttl_seconds:30,p_activity_ttl_seconds:30}),clearActivity:(id,a)=>rpc('clear_sofia_batch_activity',{p_batch_id:id,p_attempt_id:a}),adoptActivity:(id,l)=>rpc('adopt_sofia_response_activity',{p_batch_id:id,p_delivery_lease_token:l,p_ttl_seconds:30}),
-  setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),
+  setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),sendTelegramTyping:id=>enviarAcaoChatTelegram(id,'typing'),
   sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',salvarNoBanco:false})
  }
 }
