@@ -579,7 +579,7 @@ ${regraIdiomaRodape}`
 }
 
 /** Uses Sofia's existing retrieval and generation path without persistence or delivery. */
-export async function processarRagBatchPipeline(conversaId: string, contexto: string, canal: 'telegram'|'whatsapp'): Promise<string> {
+export async function processarRagBatchPipeline(conversaId: string, contexto: string, canal: 'telegram'|'whatsapp'|'web'): Promise<string> {
   const result = await processarRagPipeline(conversaId, contexto, canal, true)
   if (!result.sucesso || !('respostaIa' in result) || !result.respostaIa) throw new Error('SOFIA_BATCH_GENERATION_FAILED')
   return result.respostaIa

@@ -7,7 +7,7 @@ import { enviarAcaoChatTelegram, enviarMensagemTelegram } from '@/lib/telegram/s
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
 import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
 
-type Channel='telegram'|'whatsapp'
+type Channel='telegram'|'whatsapp'|'web'
 type Member={content:string|null;has_attachment:boolean;has_payment_proof:boolean}
 type Activity={attempt_id:string;expires_at:string}
 type PacedCompletion={remaining_ms:number}
@@ -53,7 +53,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
   const c=await d.claimBatch();if(!c)break;out.claimed++
   try{
    const e=c.eligibility
-   let reason:string|null=e.ia_ativa===false?'ia_inactive':e.automation_allowed===false||e.whatsapp_status==='opted_out'?'opt_out':e.global_enabled===false?'global_disabled':e.conversation_status&&e.conversation_status!=='ia_atendendo'?'handoff_or_pause':e.whatsapp_sleeping?'sleep_or_cooldown':!e.db_eligible?'handoff_or_pause':!(await d.globalEnabled(c.channel))?'global_disabled':!(await d.businessHours())?'outside_business_hours':null
+   let reason:string|null=e.ia_ativa===false?'ia_inactive':e.automation_allowed===false||e.whatsapp_status==='opted_out'?'opt_out':e.global_enabled===false?'global_disabled':e.conversation_status&&e.conversation_status!=='ia_atendendo'?'handoff_or_pause':e.whatsapp_sleeping?'sleep_or_cooldown':!e.db_eligible?'handoff_or_pause':c.channel!=='web'&&!(await d.globalEnabled(c.channel))?'global_disabled':!(await d.businessHours())?'outside_business_hours':null
    if(!reason&&c.channel==='whatsapp'&&!(await d.whatsappEligible(c)))reason='sleep_or_cooldown'
    if(reason){await d.cancel(c.batch_id,c.lease_token,reason);out.cancelled++;continue}
    if(!runtimeEnabled){
@@ -93,10 +93,14 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
   const typing=runtimeEnabled&&job.canal==='telegram'?startTelegramTyping(d,job.conversa_id):null
   try{
    const remainingMs=pacedRemainders.get(job.batch_id)
-   if(remainingMs!==undefined&&job.canal!=='whatsapp')await d.sleep(remainingMs)
+   if(remainingMs!==undefined&&job.canal==='telegram')await d.sleep(remainingMs)
    if(!(await d.beginDelivery(job.batch_id,job.lease_token)))continue
    out.delivery_attempted++
-   const result=await(job.canal==='telegram'?d.sendTelegram(job.conversa_id,job.response_text):d.sendWhatsApp(job.conversa_id,job.response_text,remainingMs))
+   const result=job.canal==='telegram'
+    ?await d.sendTelegram(job.conversa_id,job.response_text)
+    :job.canal==='whatsapp'
+      ?await d.sendWhatsApp(job.conversa_id,job.response_text,remainingMs)
+      :{success:true}
    if(result&&typeof result==='object'&&(('success'in result&&result.success===false)||('sucesso'in result&&result.sucesso===false)))await d.recordDeliveryFailure(job.batch_id,'provider_rejected')
   }catch{await d.recordDeliveryFailure(job.batch_id,'provider_unavailable')}
   finally{typing?.stop();if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
@@ -108,7 +112,7 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
  const rpc=async<T>(name:string,args:object={})=>{const r=await db.rpc(name,args);if(r.error)throw Error(name);return row(r.data) as T}
  return {
   claimBatch:()=>rpc('claim_sofia_inbound_batch',{p_lease_seconds:60}),cancel:(id,l,r)=>rpc('cancel_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_reason:r}),fail:(id,l,e)=>rpc('fail_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_error:e}),
-  businessHours:async()=>(await verificarHorarioAtendimento()).dentro,globalEnabled:async c=>(await obterSofiaGlobalChannelConfig(c)).enabled,whatsappEligible:async c=>(await isWhatsAppInboundEligibleForSofia({supabase:db,clienteId:c.cliente_id,conversaId:c.conversa_id})).eligible,
+  businessHours:async()=>(await verificarHorarioAtendimento()).dentro,globalEnabled:async c=>c==='web'?true:(await obterSofiaGlobalChannelConfig(c)).enabled,whatsappEligible:async c=>(await isWhatsAppInboundEligibleForSofia({supabase:db,clienteId:c.cliente_id,conversaId:c.conversa_id})).eligible,
   generate:processarRagBatchPipeline,complete:async(id,l,t)=>!!await rpc('complete_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_response_text:t}),completePaced:(id,l,t,e)=>rpc('complete_sofia_inbound_batch_paced',{p_batch_id:id,p_lease_token:l,p_response_text:t,p_generation_elapsed_ms:e}),claimDelivery:()=>rpc('claim_sofia_response_delivery',{p_lease_seconds:60}),beginDelivery:(id,l)=>rpc('begin_sofia_response_delivery',{p_batch_id:id,p_lease_token:l}),recordDeliveryFailure:(id,r)=>rpc('record_sofia_response_delivery_failure',{p_batch_id:id,p_failure:r}),
   beginActivity:(id,l)=>rpc('begin_sofia_batch_activity',{p_batch_id:id,p_batch_lease_token:l,p_ttl_seconds:30}),renewActivity:async(id,l,a)=>!!await rpc('renew_sofia_owner_activity',{p_batch_id:id,p_owner_kind:'generation',p_owner_token:l,p_attempt_id:a,p_owner_ttl_seconds:30,p_activity_ttl_seconds:30}),clearActivity:(id,a)=>rpc('clear_sofia_batch_activity',{p_batch_id:id,p_attempt_id:a}),adoptActivity:(id,l)=>rpc('adopt_sofia_response_activity',{p_batch_id:id,p_delivery_lease_token:l,p_ttl_seconds:30}),
   setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),sendTelegramTyping:id=>enviarAcaoChatTelegram(id,'typing'),
