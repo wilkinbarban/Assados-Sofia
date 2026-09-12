@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { POST } from '@/app/api/webhooks/telegram/route'
 import { deriveTelegramMessageKey } from '@/lib/telegram/idempotency'
-import { enviarMensagemTelegram } from '@/lib/telegram/send'
+import { enviarAcaoChatTelegram, enviarMensagemTelegram } from '@/lib/telegram/send'
 
 const mocks = vi.hoisted(() => ({
   createAdminClient: vi.fn(),
@@ -247,6 +247,22 @@ describe('Telegram webhook security', () => {
         payload: expect.objectContaining({ telegram_mensagem_id: 'telegram:1001:44' }),
       }),
     ]))
+  })
+
+  it('sends a Telegram typing action without creating a message', async () => {
+    const { client, log } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toBeUndefined()
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://api.telegram.org/botsecret-token/sendChatAction',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ chat_id: '1001', action: 'typing' }),
+      }),
+    )
+    expect(log.inserts).toEqual([])
   })
 
   it('persists missing-phone text before welcome prompts and ignores duplicate retries before sending them again', async () => {

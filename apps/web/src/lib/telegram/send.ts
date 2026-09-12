@@ -74,6 +74,31 @@ export async function responderCallbackTelegram(callbackQueryId: string, text: s
   })
 }
 
+export async function enviarAcaoChatTelegram(
+  conversaId: string,
+  action: 'typing',
+): Promise<void> {
+  const supabase = createAdminClient()
+  const { data: conversa, error } = await supabase
+    .from('conversas')
+    .select('id, clientes (telegram_chat_id)')
+    .eq('id', conversaId)
+    .single()
+
+  const telegramChatId = (conversa as any)?.clientes?.telegram_chat_id
+  if (error || !telegramChatId) {
+    throw new Error('Telegram Chat ID do cliente não encontrado para esta conversa.')
+  }
+
+  const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
+  if (!token) throw new Error('Token do bot do Telegram não configurado.')
+
+  await postTelegram(token, 'sendChatAction', {
+    chat_id: telegramChatId,
+    action,
+  })
+}
+
 export async function enviarMensagemTelegram(
   conversaId: string,
   payload: { texto: string; remetente: 'ia' | 'operador'; salvarNoBanco?: boolean }
