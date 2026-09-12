@@ -4,6 +4,12 @@ export function inboundBatchProcessingEnabled(
   return value === "true";
 }
 
+export function inboundBatchRuntimeEnabled(
+  value = process.env.SOFIA_INBOUND_BATCH_RUNTIME_ENABLED,
+): boolean {
+  return value === "true";
+}
+
 export function telegramInboundBatchEnqueueEnabled(
   value = process.env.SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED,
 ): boolean {
