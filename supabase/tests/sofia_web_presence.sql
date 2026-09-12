@@ -1,6 +1,7 @@
 create extension if not exists pgtap;
 \ir ../migrations/20260910010000_sofia_humanized_timing.sql
 \ir ../migrations/20260911020000_sofia_activity_core_a_corrective.sql
+\ir ../migrations/20260912010000_sofia_web_inbound_batch_admission.sql
 \ir ../migrations/20260912020000_sofia_web_presence.sql
 select plan(6);
 
@@ -38,8 +39,10 @@ select is(
   (select status from public.get_sofia_conversation_presence('cb300000-0000-4000-8000-000000000001')),
   'composing', 'conversation owner reads a live composing projection'
 );
+reset role;
 update public.sofia_conversation_presence set expires_at = clock_timestamp() - interval '1 second'
 where conversa_id = 'cb300000-0000-4000-8000-000000000001';
+set role authenticated;
 select is_empty(
   $$select * from public.get_sofia_conversation_presence('cb300000-0000-4000-8000-000000000001')$$,
   'expired presence never reaches the customer projection'
