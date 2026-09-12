@@ -12,6 +12,7 @@ vi.mock('next/navigation', () => ({
 // Mock Chat Server Action
 vi.mock('@/app/actions/chat', () => ({
   processarIaChat: vi.fn().mockResolvedValue({ success: true }),
+  obterSofiaPresence: vi.fn().mockResolvedValue({ success: true, presence: null }),
 }))
 
 // Mock Supabase Client
