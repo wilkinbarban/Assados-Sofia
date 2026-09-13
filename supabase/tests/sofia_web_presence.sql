@@ -1,7 +1,15 @@
 create extension if not exists pgtap;
-\ir ../migrations/20260910010000_sofia_humanized_timing.sql
+-- The canonical self-hosted clone can already contain the objects these imports replay, so clear
+-- them first: each import below stays the single source of truth for the definitions it owns.
+drop function if exists public.sofia_activity_service_only();
+drop function if exists public.begin_sofia_batch_activity(uuid,uuid,integer);
+drop function if exists public.renew_sofia_owner_activity(uuid,text,uuid,uuid,integer,integer);
+drop function if exists public.adopt_sofia_response_activity(uuid,uuid,integer);
+drop function if exists public.clear_sofia_batch_activity(uuid,uuid);
+drop table if exists public.sofia_conversation_presence;
 \ir ../migrations/20260911020000_sofia_activity_core_a_corrective.sql
 \ir ../migrations/20260912010000_sofia_web_inbound_batch_admission.sql
+drop function if exists public.get_sofia_conversation_presence(uuid);
 \ir ../migrations/20260912020000_sofia_web_presence.sql
 select plan(6);
 
