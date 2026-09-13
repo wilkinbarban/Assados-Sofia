@@ -7,6 +7,10 @@ const claim = { batch_id:'b', conversa_id:'c', cliente_id:'u', channel:'telegram
   { content:null, has_attachment:true, has_payment_proof:false },
   { content:'segue', has_attachment:true, has_payment_proof:true },
 ] }
+function provided<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error('expected the test to provide this dependency')
+  return value
+}
 function deps(overrides: Partial<BatchWorkerDeps> = {}): BatchWorkerDeps {
   return { claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null), cancel:vi.fn().mockResolvedValue(true), fail:vi.fn().mockResolvedValue(true), businessHours:vi.fn().mockResolvedValue(true), globalEnabled:vi.fn().mockResolvedValue(true), whatsappEligible:vi.fn().mockResolvedValue(true), generate:vi.fn().mockResolvedValue('resposta'), complete:vi.fn().mockResolvedValue(true), completePaced:vi.fn().mockResolvedValue({ remaining_ms:0 }), claimDelivery:vi.fn().mockResolvedValue(null), adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}), beginDelivery:vi.fn().mockResolvedValue(true), recordDeliveryFailure:vi.fn(), now:vi.fn().mockReturnValue(0), sleep:vi.fn().mockResolvedValue(undefined), sendTelegramTyping:vi.fn().mockResolvedValue(undefined), sendTelegram:vi.fn(), sendWhatsApp:vi.fn(), ...overrides }
 }
@@ -115,13 +119,14 @@ describe('Sofia inbound batch worker', () => {
     expect(d.globalEnabled).not.toHaveBeenCalled()
     expect(d.complete).toHaveBeenCalledWith('web-b','web-l','resposta')
   })
-  it('clears G when paced completion loses its fence', async () => {
+  it('clears G and the Telegram typing handle when paced completion loses its fence', async () => {
     vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
-    const d=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),completePaced:vi.fn().mockResolvedValue(null),clearActivity:vi.fn().mockResolvedValue(true)})
+    const d=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),completePaced:vi.fn().mockResolvedValue(null),clearActivity:vi.fn().mockResolvedValue(true),setInterval:vi.fn(()=> 'typing'),clearInterval:vi.fn()})
     await runSofiaBatchMaintenance(d,1)
     expect(d.clearActivity).toHaveBeenCalledWith('b','g')
+    expect(d.clearInterval).toHaveBeenCalledWith('typing')
   })
-  it('keeps Telegram typing refreshed under G and D without granting final delivery', async () => {
+  it('keeps one retained Telegram typing handle across generation and delivery without granting final delivery', async () => {
     vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
     const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
     const timers: Array<() => void> = []
@@ -137,11 +142,343 @@ describe('Sofia inbound batch worker', () => {
     expect(d.sendTelegramTyping).toHaveBeenCalledWith('c')
     expect(d.sendTelegramTyping).toHaveBeenCalledBefore(d.generate as ReturnType<typeof vi.fn>)
     expect(d.setInterval).toHaveBeenCalledWith(expect.any(Function),4_000)
+    expect(vi.mocked(provided(d.setInterval)).mock.calls.filter(([,ms])=>ms===4_000)).toHaveLength(1)
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+    expect(d.sendTelegramTyping).toHaveBeenCalledBefore(d.beginDelivery as ReturnType<typeof vi.fn>)
+    const typingClears=vi.mocked(provided(d.clearInterval)).mock.calls.map((call,index)=>({timer:call[0],order:vi.mocked(provided(d.clearInterval)).mock.invocationCallOrder[index]!})).filter(entry=>entry.timer===2)
+    expect(typingClears).toHaveLength(1)
+    expect(typingClears[0]!.order).toBeGreaterThan(vi.mocked(d.beginDelivery).mock.invocationCallOrder[0]!)
+    expect(d.clearInterval).toHaveBeenCalledTimes(2)
     timers.forEach(timer=>timer())
     await Promise.resolve()
-    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(4)
-    expect(d.sendTelegramTyping).toHaveBeenCalledBefore(d.beginDelivery as ReturnType<typeof vi.fn>)
-    expect(d.clearInterval).toHaveBeenCalledTimes(3)
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+  })
+  it('keeps Telegram typing refreshed through the paced wait until a pending send settles', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
+    const typingTimers: Array<() => void> = []
+    let releaseSend!:(value:unknown)=>void
+    const pendingSend=new Promise(resolve=>{releaseSend=resolve})
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:2500}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      sendTelegram:vi.fn().mockReturnValue(pendingSend),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return `typing-${typingTimers.length}`}return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    const run=runSofiaBatchMaintenance(d,2)
+    await vi.waitFor(()=>expect(d.sendTelegram).toHaveBeenCalledTimes(1))
+    expect(d.sleep).toHaveBeenCalledWith(2500)
+    expect(d.sendTelegramTyping).toHaveBeenCalledBefore(d.sleep as ReturnType<typeof vi.fn>)
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+    expect(d.clearInterval).not.toHaveBeenCalledWith('typing-1')
+    typingTimers.at(-1)!()
+    await Promise.resolve()
+    const typingCalls=vi.mocked(d.sendTelegramTyping).mock.invocationCallOrder
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(2)
+    expect(typingCalls[typingCalls.length-1]).toBeGreaterThan(vi.mocked(d.sendTelegram).mock.invocationCallOrder[0]!)
+    expect(d.clearInterval).not.toHaveBeenCalledWith('typing-1')
+    releaseSend({success:true})
+    await run
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-1')
+  })
+  it('clears Telegram typing when the pending provider send throws', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
+    const typingTimers: Array<() => void> = []
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:2500}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      sendTelegram:vi.fn().mockRejectedValue(Error('provider')),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return `typing-${typingTimers.length}`}return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    const result=await runSofiaBatchMaintenance(d,2)
+    expect(d.recordDeliveryFailure).toHaveBeenCalledWith('b','provider_unavailable')
+    expect(result.delivery_attempted).toBe(1)
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-1')
+    expect(d.clearActivity).toHaveBeenCalledWith('b','d')
+  })
+  it('keeps a retained Telegram typing handle refreshing while a second generation is pending', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const second={...claim,batch_id:'b2'}
+    const typingTimers: Array<() => void> = []
+    let generationCalls=0,releaseSecond!:(text:string)=>void
+    const secondGeneration=new Promise<string>(resolve=>{releaseSecond=resolve})
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValueOnce(second).mockResolvedValue(null),
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      generate:vi.fn().mockImplementation(()=>{generationCalls++;return generationCalls===1?Promise.resolve('resposta'):secondGeneration}),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return `typing-${typingTimers.length}`}return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    const run=runSofiaBatchMaintenance(d,4)
+    await vi.waitFor(()=>expect(d.generate).toHaveBeenCalledTimes(2))
+    expect(d.completePaced).toHaveBeenCalledTimes(1)
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(2)
+    expect(d.clearInterval).not.toHaveBeenCalledWith('typing-1')
+    typingTimers[0]!()
+    await Promise.resolve()
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(3)
+    expect(d.clearInterval).not.toHaveBeenCalledWith('typing-1')
+    releaseSecond('resposta')
+    await run
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-1')
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-2')
+  })
+  it('bounds retained Telegram typing refreshes while one refresh is still pending', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const second={...claim,batch_id:'b2'}
+    const typingTimers: Array<() => void> = []
+    const pendingTyping=new Promise<unknown>(()=>undefined)
+    let typingCalls=0,generationCalls=0,releaseSecond!:(text:string)=>void
+    const secondGeneration=new Promise<string>(resolve=>{releaseSecond=resolve})
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValueOnce(second).mockResolvedValue(null),
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      generate:vi.fn().mockImplementation(()=>{generationCalls++;return generationCalls===1?Promise.resolve('resposta'):secondGeneration}),
+      sendTelegramTyping:vi.fn().mockImplementation(()=>{typingCalls++;return typingCalls===1?Promise.resolve(undefined):pendingTyping}),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return `typing-${typingTimers.length}`}return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    const run=runSofiaBatchMaintenance(d,4)
+    await vi.waitFor(()=>expect(d.generate).toHaveBeenCalledTimes(2))
+    typingTimers[0]!();typingTimers[0]!()
+    await Promise.resolve()
+    expect(typingCalls).toBe(3)
+    releaseSecond('resposta')
+    await run
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-1')
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-2')
+  })
+  it('releases a retained Telegram typing handle when delivery adoption fails', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
+    const typingTimers: Array<() => void> = []
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue(null),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return `typing-${typingTimers.length}`}return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    const result=await runSofiaBatchMaintenance(d,2)
+    expect(result).toMatchObject({completed:1,delivery_attempted:0})
+    expect(d.clearActivity).not.toHaveBeenCalledWith('b','g')
+    expect(vi.mocked(provided(d.setInterval)).mock.calls.filter(([,ms])=>ms===4_000)).toHaveLength(1)
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-1')
+    const typingClearOrder=vi.mocked(provided(d.clearInterval)).mock.invocationCallOrder[vi.mocked(provided(d.clearInterval)).mock.calls.findIndex(call=>call[0]==='typing-1')]!
+    expect(typingClearOrder).toBeGreaterThan(vi.mocked(d.adoptActivity).mock.invocationCallOrder[0]!)
+    expect(d.sendTelegram).not.toHaveBeenCalled()
+  })
+  it('releases retained Telegram typing when delivery claiming or adoption throws', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const setup={beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),clearActivity:vi.fn().mockResolvedValue(true),setInterval:vi.fn((callback,ms)=>{if(ms===4_000)return 'typing';return 'heartbeat'}),clearInterval:vi.fn()}
+    const claiming=deps({...setup,claimDelivery:vi.fn().mockRejectedValue(Error('claim'))})
+    await expect(runSofiaBatchMaintenance(claiming,2)).rejects.toThrow()
+    expect(claiming.clearInterval).toHaveBeenCalledWith('typing')
+    const adopting=deps({...setup,claimDelivery:vi.fn().mockResolvedValueOnce({batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}).mockResolvedValue(null),adoptActivity:vi.fn().mockRejectedValue(Error('adopt'))})
+    await expect(runSofiaBatchMaintenance(adopting,2)).rejects.toThrow()
+    expect(adopting.clearInterval).toHaveBeenCalledWith('typing')
+    expect(adopting.sendTelegram).not.toHaveBeenCalled()
+  })
+  it.each(['whatsapp','web'] as const)('never starts Telegram typing for %s batches', async channel => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const claimed={...claim,batch_id:`b-${channel}`,channel}
+    const d=deps({claimBatch:vi.fn().mockResolvedValueOnce(claimed).mockResolvedValue(null),beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),claimDelivery:vi.fn().mockResolvedValue(null),clearActivity:vi.fn().mockResolvedValue(true),setInterval:vi.fn(()=> 'typing'),clearInterval:vi.fn()})
+    await runSofiaBatchMaintenance(d,2)
+    expect(d.sendTelegramTyping).not.toHaveBeenCalled()
+    expect(vi.mocked(provided(d.setInterval)).mock.calls.some(([,ms])=>ms===4_000)).toBe(false)
+  })
+  it('waits the durable claimed remainder when no local paced state survives an invocation', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:3400}
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValue(null),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+    })
+    const result=await runSofiaBatchMaintenance(d,1)
+    expect(result).toMatchObject({claimed:0,delivery_attempted:1})
+    expect(d.sleep).toHaveBeenCalledWith(3400)
+    expect(d.sendTelegramTyping).toHaveBeenCalledWith('c')
+    expect(d.sendTelegramTyping).toHaveBeenCalledBefore(d.sleep as ReturnType<typeof vi.fn>)
+    expect(d.sleep).toHaveBeenCalledBefore(d.beginDelivery as ReturnType<typeof vi.fn>)
+    expect(d.beginDelivery).toHaveBeenCalledBefore(d.sendTelegram as ReturnType<typeof vi.fn>)
+  })
+  it('prefers the durable claim remainder over a stale local paced state', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:900}
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:37}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+    })
+    await runSofiaBatchMaintenance(d,2)
+    expect(d.sleep).toHaveBeenCalledWith(900)
+    expect(d.sleep).not.toHaveBeenCalledWith(37)
+  })
+  const durableRemainders: Array<[string, number | null | undefined]> = [['0 ms',0],['absent',undefined],['null',null],['1 ms',1],['900 ms',900]]
+  it.each(durableRemainders)('restarts Telegram typing and applies the 2000ms floor to a %s claimed remainder without a retained generation handle', async (_label, remainingMs) => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:remainingMs}
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValue(null),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      setInterval:vi.fn(()=> 'typing'),
+      clearInterval:vi.fn(),
+    })
+    const result=await runSofiaBatchMaintenance(d,1)
+    expect(result).toMatchObject({claimed:0,delivery_attempted:1})
+    expect(d.sleep).toHaveBeenCalledTimes(1)
+    expect(d.sleep).toHaveBeenCalledWith(2000)
+    expect(d.sleep).not.toHaveBeenCalledWith(remainingMs)
+    expect(d.sendTelegramTyping).toHaveBeenCalledWith('c')
+    expect(d.sendTelegramTyping).toHaveBeenCalledBefore(d.sleep as ReturnType<typeof vi.fn>)
+    expect(d.sleep).toHaveBeenCalledBefore(d.beginDelivery as ReturnType<typeof vi.fn>)
+    expect(d.beginDelivery).toHaveBeenCalledBefore(d.sendTelegram as ReturnType<typeof vi.fn>)
+    expect(d.clearInterval).toHaveBeenCalledWith('typing')
+    expect(d.clearActivity).toHaveBeenCalledWith('b','d')
+  })
+  it('keeps a retained generation handle on its durable zero wait without applying the restart floor', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:0}
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+    })
+    await runSofiaBatchMaintenance(d,2)
+    expect(d.sleep).toHaveBeenCalledTimes(1)
+    expect(d.sleep).toHaveBeenCalledWith(0)
+    expect(d.sleep).not.toHaveBeenCalledWith(2000)
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+  })
+  const rejectedRemainders: Array<[string, number | null | undefined]> = [['0 ms',0],['an absent',undefined]]
+  it.each(rejectedRemainders)('applies no restart typing or floor wait when adoption rejects a %s claimed remainder', async (_label, remainingMs) => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:remainingMs}
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValue(null),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue(null),
+    })
+    const result=await runSofiaBatchMaintenance(d,1)
+    expect(result).toMatchObject({delivery_attempted:0})
+    expect(d.sleep).not.toHaveBeenCalled()
+    expect(d.sendTelegramTyping).not.toHaveBeenCalled()
+    expect(d.beginDelivery).not.toHaveBeenCalled()
+    expect(d.sendTelegram).not.toHaveBeenCalled()
+  })
+  it('repeats the restart floor in an independent invocation after an interrupted one', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const retainedDelivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:0}
+    const first=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(retainedDelivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+    })
+    await runSofiaBatchMaintenance(first,2)
+    expect(first.sleep).toHaveBeenCalledWith(0)
+    expect(first.sendTelegramTyping).toHaveBeenCalledTimes(1)
+    const orphanedDelivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
+    const second=deps({
+      claimBatch:vi.fn().mockResolvedValue(null),
+      claimDelivery:vi.fn().mockResolvedValueOnce(orphanedDelivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+    })
+    await runSofiaBatchMaintenance(second,1)
+    expect(second.sleep).toHaveBeenCalledWith(2000)
+    expect(second.sendTelegramTyping).toHaveBeenCalledWith('c')
+    expect(second.sendTelegramTyping).toHaveBeenCalledBefore(second.sleep as ReturnType<typeof vi.fn>)
+  })
+  it('keeps the restarted Telegram typing alive through the floor wait and a pending send until it settles', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:900}
+    const typingTimers: Array<() => void> = []
+    let releaseSend!:(value:unknown)=>void
+    const pendingSend=new Promise(resolve=>{releaseSend=resolve})
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValue(null),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      sendTelegram:vi.fn().mockReturnValue(pendingSend),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return `typing-${typingTimers.length}`}return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    const run=runSofiaBatchMaintenance(d,1)
+    await vi.waitFor(()=>expect(d.sendTelegram).toHaveBeenCalledTimes(1))
+    expect(d.sleep).toHaveBeenCalledWith(2000)
+    expect(d.sendTelegramTyping).toHaveBeenCalledBefore(d.sleep as ReturnType<typeof vi.fn>)
+    expect(d.clearInterval).not.toHaveBeenCalledWith('typing-1')
+    typingTimers.at(-1)!()
+    await Promise.resolve()
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(2)
+    expect(d.clearInterval).not.toHaveBeenCalledWith('typing-1')
+    releaseSend({success:true})
+    await run
+    expect(d.clearInterval).toHaveBeenCalledWith('typing-1')
+    expect(d.clearActivity).toHaveBeenCalledWith('b','d')
+  })
+  it('clears the restarted Telegram typing handle when the provider send fails', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValue(null),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      sendTelegram:vi.fn().mockRejectedValue(Error('provider')),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000)return 'typing';return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    const result=await runSofiaBatchMaintenance(d,1)
+    expect(d.sleep).toHaveBeenCalledWith(2000)
+    expect(d.recordDeliveryFailure).toHaveBeenCalledWith('b','provider_unavailable')
+    expect(result.delivery_attempted).toBe(1)
+    expect(d.clearInterval).toHaveBeenCalledWith('typing')
+    expect(d.clearActivity).toHaveBeenCalledWith('b','d')
+  })
+  it('never types, waits, or sends for an unadopted delivery claim', async () => {
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl',remaining_ms:3400}
+    const d=deps({
+      claimBatch:vi.fn().mockResolvedValue(null),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue(null),
+      setInterval:vi.fn(()=> 'timer'),
+      clearInterval:vi.fn(),
+    })
+    const result=await runSofiaBatchMaintenance(d,1)
+    expect(result).toMatchObject({delivery_attempted:0})
+    expect(d.sleep).not.toHaveBeenCalled()
+    expect(d.sendTelegramTyping).not.toHaveBeenCalled()
+    expect(d.sendTelegram).not.toHaveBeenCalled()
+    expect(d.setInterval).not.toHaveBeenCalledWith(expect.any(Function),4_000)
   })
   it('treats Telegram typing failures as best effort', async () => {
     vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
@@ -169,6 +506,7 @@ describe('Sofia inbound batch worker', () => {
     expect(d.setInterval).toHaveBeenCalledWith(expect.any(Function),10_000)
     expect(d.complete).not.toHaveBeenCalled()
     expect(d.clearActivity).toHaveBeenCalledWith('b','g')
+    expect(d.clearInterval).toHaveBeenCalledWith('timer-4000')
   })
   it('formats ordered context with safe attachment descriptors only', () => {
     expect(formatBatchContext(claim.members)).toBe('MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):\n[1] Cliente: "primeiro"\n[2] Cliente: [anexo recebido; mensagem sem texto]\n[3] Cliente: "segue" [anexo: comprovante de pagamento recebido]')
