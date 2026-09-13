@@ -1,7 +1,8 @@
 create extension if not exists pgtap;
-\ir ../migrations/20260910010000_sofia_humanized_timing.sql
+\ir ../migrations/20260912010000_sofia_web_inbound_batch_admission.sql
+\ir ../migrations/20260913010000_sofia_timing_and_pacing_correction.sql
 begin;
-select plan(18);
+select plan(21);
 
 select ok(pg_catalog.to_regrole('service_role') is not null and pg_catalog.to_regrole('anon') is not null and pg_catalog.to_regrole('authenticated') is not null,'required function roles exist');
 select ok(exists (select 1 from pg_catalog.pg_proc p cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) privilege where p.oid = 'public.attach_sofia_inbound_message(uuid,uuid,uuid,text)'::regprocedure and privilege.grantee = pg_catalog.to_regrole('service_role')::oid and privilege.privilege_type = 'EXECUTE'),'service role has direct attach EXECUTE');
@@ -30,13 +31,14 @@ select is((select count(*)::integer from public.sofia_inbound_batches where conv
 select is((select count(*)::integer from public.sofia_inbound_batch_messages bm join public.sofia_inbound_batches b on b.id=bm.batch_id where b.conversa_id='b2000000-0000-4000-8000-000000000001'),2,'duplicate attach creates no membership');
 select ok((select duplicate from attached where label='duplicate'),'repeat attach reports duplicate');
 select is((select array_agg(m.conteudo order by bm.message_created_at,bm.message_id) from public.sofia_inbound_batch_messages bm join public.sofia_inbound_batches b on b.id=bm.batch_id join public.mensagens m on m.id=bm.message_id where b.conversa_id='b2000000-0000-4000-8000-000000000001'),array['earlier','later']::text[],'chronology comes from stored message key');
-select ok((select abs(extract(epoch from scheduled_process_at-latest_message_at)-10)<0.1 from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000001'),'database admission time owns ten-second scheduling');
-update public.sofia_inbound_batches set first_message_at=clock_timestamp()-interval '19 seconds',latest_message_at=clock_timestamp()-interval '1 second',scheduled_process_at=clock_timestamp()+interval '0.5 seconds' where conversa_id='b2000000-0000-4000-8000-000000000001';
+select ok((select abs(extract(epoch from scheduled_process_at-latest_message_at)-25)<0.1 from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000001'),'database admission time owns twenty-five second scheduling');
+update public.sofia_inbound_batches set first_message_at=t,latest_message_at=t+interval '8.5 seconds',scheduled_process_at=t+interval '18.5 seconds' from (select clock_timestamp()-interval '17 seconds' t) trusted where conversa_id='b2000000-0000-4000-8000-000000000001';
 insert into public.mensagens(id,conversa_id,remetente,conteudo,telegram_mensagem_id) values ('b3000000-0000-4000-8000-000000000003','b2000000-0000-4000-8000-000000000001','cliente','cap','telegram:cap');
 set local role service_role;
 select * from public.attach_sofia_inbound_message('b3000000-0000-4000-8000-000000000003','b2000000-0000-4000-8000-000000000001','b1000000-0000-4000-8000-000000000001','telegram');
 reset role;
-select ok((select scheduled_process_at<=first_message_at+interval '20 seconds' from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000001'),'schedule respects twenty-second cap');
+select ok((select abs(extract(epoch from scheduled_process_at-latest_message_at)-25)<0.1 from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000001'),'an attached follow-up renews the twenty-five second silence window');
+select ok((select scheduled_process_at<=first_message_at+interval '60 seconds' from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000001'),'the widened batch bound accepts the sixty-second starvation cap');
 update public.sofia_inbound_batches set status='processing',lease_token=gen_random_uuid(),claimed_until=now()+interval '1 minute' where conversa_id='b2000000-0000-4000-8000-000000000001';
 insert into public.mensagens(id,conversa_id,remetente,conteudo,whatsapp_mensagem_id) values ('b3000000-0000-4000-8000-000000000004','b2000000-0000-4000-8000-000000000001','cliente','after claim','evo-after');
 set local role service_role;
@@ -44,6 +46,18 @@ select * from public.attach_sofia_inbound_message('b3000000-0000-4000-8000-00000
 reset role;
 select is((select count(*)::integer from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000001' and status='pending'),1,'post-claim arrival creates a new pending batch');
 select is((select count(*)::integer from public.mensagens where conversa_id='b2000000-0000-4000-8000-000000000001'),4,'post-claim attach still inserts no message');
+insert into public.clientes(id,nome,telefone) values ('b1000000-0000-4000-8000-000000000003','Web','5541991111203');
+insert into public.conversas(id,cliente_id) values ('b2000000-0000-4000-8000-000000000003','b1000000-0000-4000-8000-000000000003');
+insert into public.mensagens(id,conversa_id,remetente,conteudo,data_criacao) values
+ ('b3000000-0000-4000-8000-000000000005','b2000000-0000-4000-8000-000000000003','cliente','web first',now()),
+ ('b3000000-0000-4000-8000-000000000006','b2000000-0000-4000-8000-000000000003','cliente','web second',now()+interval '8.5 seconds');
+set local role service_role;
+select set_config('request.jwt.claim','{"role":"service_role"}',true);
+insert into attached select 'web-first',* from public.attach_sofia_inbound_message('b3000000-0000-4000-8000-000000000005','b2000000-0000-4000-8000-000000000003','b1000000-0000-4000-8000-000000000003','web');
+insert into attached select 'web-second',* from public.attach_sofia_inbound_message('b3000000-0000-4000-8000-000000000006','b2000000-0000-4000-8000-000000000003','b1000000-0000-4000-8000-000000000003','web');
+reset role;
+select is((select canal from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000003'),'web','the Web attach path admits its own channel');
+select ok((select abs(extract(epoch from scheduled_process_at-latest_message_at)-25)<0.1 from public.sofia_inbound_batches where conversa_id='b2000000-0000-4000-8000-000000000003'),'Web attachments renew the twenty-five second silence window');
 set local role service_role;
 select throws_ok($$select * from public.attach_sofia_inbound_message('b3000000-0000-4000-8000-000000000002','b2000000-0000-4000-8000-000000000002','b1000000-0000-4000-8000-000000000002','telegram')$$,'22023','SOFIA_BATCH_ATTACH_BINDING_INVALID','conversation identity mismatch fails closed');
 select throws_ok($$select * from public.attach_sofia_inbound_message('b3000000-0000-4000-8000-000000000002','b2000000-0000-4000-8000-000000000001','b1000000-0000-4000-8000-000000000001','whatsapp')$$,'22023','SOFIA_BATCH_ATTACH_CHANNEL_INVALID','channel identity mismatch fails closed');

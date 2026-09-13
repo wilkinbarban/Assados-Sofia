@@ -1,7 +1,7 @@
 create extension if not exists pgtap;
 create extension if not exists dblink;
-\ir ../migrations/20260910010000_sofia_humanized_timing.sql
-select plan(53);
+\ir ../migrations/20260913010000_sofia_timing_and_pacing_correction.sql
+select plan(55);
 
 select has_table('public','sofia_response_outbox','durable response intents exist');
 select table_privs_are('public','sofia_response_outbox','service_role',array[]::text[],'service role has no direct outbox access');
@@ -110,6 +110,8 @@ select is(public.claim_sofia_inbound_batch(30),null::jsonb,'expired fixture leas
 select is((select status from public.sofia_inbound_batches where id=(select (payload->>'batch_id')::uuid from recovered)),'completed','intent-backed recovery restores terminal completion');
 
 create temporary table delivery as select public.claim_sofia_response_delivery(30) payload;
+select ok((select payload ? 'remaining_ms' from delivery),'a claimed legacy intent still exposes the paced remainder key');
+select is((select payload->>'remaining_ms' from delivery),null::text,'a NULL deadline reports a NULL remainder');
 select ok((select public.begin_sofia_response_delivery((payload->>'batch_id')::uuid,(payload->>'lease_token')::uuid) from delivery),'matching delivery fence begins one external attempt');
 select ok(not (select public.begin_sofia_response_delivery((payload->>'batch_id')::uuid,(payload->>'lease_token')::uuid) from delivery),'attempt transition cannot repeat');
 select is(public.claim_sofia_response_delivery(30),null::jsonb,'attempted intent is never reclaimed');
