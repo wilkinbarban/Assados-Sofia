@@ -12,7 +12,7 @@ type Member={content:string|null;has_attachment:boolean;has_payment_proof:boolea
 type Activity={attempt_id:string;expires_at:string}
 type PacedCompletion={remaining_ms:number}
 type Claim={batch_id:string;conversa_id:string;cliente_id:string;channel:Channel;lease_token:string;eligibility:{db_eligible:boolean;ia_ativa?:boolean;conversation_status?:string;automation_allowed?:boolean;global_enabled?:boolean;whatsapp_status?:string;whatsapp_sleeping?:boolean};members:Member[]}
-type Delivery={batch_id:string;conversa_id:string;canal:Channel;response_text:string;lease_token:string}
+type Delivery={batch_id:string;conversa_id:string;canal:Channel;response_text:string;lease_token:string;remaining_ms?:number|null}
 export type BatchCounts={claimed:number;completed:number;cancelled:number;failed:number;delivery_attempted:number}
 export interface BatchWorkerDeps {
  claimBatch():Promise<Claim|null>; cancel(id:string,lease:string,reason:string):Promise<boolean>; fail(id:string,lease:string,error:string):Promise<boolean>
@@ -40,72 +40,91 @@ function startHeartbeat(deps:BatchWorkerDeps,batchId:string,lease:string,attempt
  const timer=deps.setInterval?.(()=>{void renew()},10_000)
  return {lost:()=>lost,settle:async()=>{await renewal},stop:()=>timer!==undefined&&deps.clearInterval?.(timer)}
 }
-function startTelegramTyping(deps:BatchWorkerDeps,conversationId:string){
- const refresh=()=>{try{const request=deps.sendTelegramTyping(conversationId);if(request&&typeof (request as Promise<void>).catch==='function')void (request as Promise<void>).catch(()=>undefined)}catch{}}
+type TypingHandle={stop:()=>void}
+const TELEGRAM_TYPING_RESTART_FLOOR_MS=2_000
+function startTelegramTyping(deps:BatchWorkerDeps,conversationId:string):TypingHandle{
+ let stopped=false,refreshing=false
+ const refresh=()=>{
+  if(stopped||refreshing)return
+  refreshing=true
+  try{
+   const request=deps.sendTelegramTyping(conversationId)
+   if(request&&typeof (request as Promise<void>).catch==='function')void (request as Promise<void>).catch(()=>undefined).then(()=>{refreshing=false})
+   else refreshing=false
+  }catch{refreshing=false}
+ }
  refresh()
- const timer=deps.setInterval?.(refresh,4_000)
- return {stop:()=>timer!==undefined&&deps.clearInterval?.(timer)}
+ const timer=deps.setInterval?.(()=>{void refresh()},4_000)
+ return {stop:()=>{stopped=true;if(timer!==undefined)deps.clearInterval?.(timer)}}
 }
 export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promise<BatchCounts>{
  const out:BatchCounts={claimed:0,completed:0,cancelled:0,failed:0,delivery_attempted:0}
  const processingLimit=Math.ceil(limit/2),runtimeEnabled=inboundBatchRuntimeEnabled(),pacedRemainders=new Map<string,number>()
- for(let i=0;i<processingLimit;i++){
-  const c=await d.claimBatch();if(!c)break;out.claimed++
-  try{
-   const e=c.eligibility
-   let reason:string|null=e.ia_ativa===false?'ia_inactive':e.automation_allowed===false||e.whatsapp_status==='opted_out'?'opt_out':e.global_enabled===false?'global_disabled':e.conversation_status&&e.conversation_status!=='ia_atendendo'?'handoff_or_pause':e.whatsapp_sleeping?'sleep_or_cooldown':!e.db_eligible?'handoff_or_pause':c.channel!=='web'&&!(await d.globalEnabled(c.channel))?'global_disabled':!(await d.businessHours())?'outside_business_hours':null
-   if(!reason&&c.channel==='whatsapp'&&!(await d.whatsappEligible(c)))reason='sleep_or_cooldown'
-   if(reason){await d.cancel(c.batch_id,c.lease_token,reason);out.cancelled++;continue}
-   if(!runtimeEnabled){
-    const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
-    if(!(await d.complete(c.batch_id,c.lease_token,text))){out.failed++;continue}out.completed++;continue
-   }
-   const activity=await d.beginActivity?.(c.batch_id,c.lease_token)
-   if(!activity){out.failed++;continue}
-   const heartbeat=startHeartbeat(d,c.batch_id,c.lease_token,activity.attempt_id)
-   const typing=c.channel==='telegram'?startTelegramTyping(d,c.conversa_id):null
-   let retainGenerationActivity=false
+ const typingHandles=new Map<string,TypingHandle>()
+ const releaseTyping=(batchId:string)=>{const handle=typingHandles.get(batchId);if(!handle)return;typingHandles.delete(batchId);handle.stop()}
+ const ensureTyping=(batchId:string,conversationId:string)=>{const retained=typingHandles.get(batchId);if(retained)return retained;const handle=startTelegramTyping(d,conversationId);typingHandles.set(batchId,handle);return handle}
+ try{
+  for(let i=0;i<processingLimit;i++){
+   const c=await d.claimBatch();if(!c)break;out.claimed++
    try{
-    const startedAt=d.now()
-    const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
-    const elapsedMs=Math.max(0,d.now()-startedAt)
-    await heartbeat.settle()
-    if(heartbeat.lost()){out.failed++;continue}
-    const paced=await d.completePaced(c.batch_id,c.lease_token,text,elapsedMs)
-    if(!paced){out.failed++;continue}
-    pacedRemainders.set(c.batch_id,paced.remaining_ms)
-    retainGenerationActivity=true;out.completed++
-   }finally{
-    heartbeat.stop()
-    typing?.stop()
-    if(!retainGenerationActivity)await d.clearActivity?.(c.batch_id,activity.attempt_id)
-   }
-  }catch{await d.fail(c.batch_id,c.lease_token,'generation_failed');out.failed++}
- }
- let workClaimed=out.claimed
- while(workClaimed<limit){
-  const job=await d.claimDelivery();if(!job)break;workClaimed++
-  let deliveryActivity:Activity|null=null
-  if(runtimeEnabled){
-   deliveryActivity=await d.adoptActivity(job.batch_id,job.lease_token)
-   if(!deliveryActivity)continue
+    const e=c.eligibility
+    let reason:string|null=e.ia_ativa===false?'ia_inactive':e.automation_allowed===false||e.whatsapp_status==='opted_out'?'opt_out':e.global_enabled===false?'global_disabled':e.conversation_status&&e.conversation_status!=='ia_atendendo'?'handoff_or_pause':e.whatsapp_sleeping?'sleep_or_cooldown':!e.db_eligible?'handoff_or_pause':c.channel!=='web'&&!(await d.globalEnabled(c.channel))?'global_disabled':!(await d.businessHours())?'outside_business_hours':null
+    if(!reason&&c.channel==='whatsapp'&&!(await d.whatsappEligible(c)))reason='sleep_or_cooldown'
+    if(reason){await d.cancel(c.batch_id,c.lease_token,reason);out.cancelled++;continue}
+    if(!runtimeEnabled){
+     const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
+     if(!(await d.complete(c.batch_id,c.lease_token,text))){out.failed++;continue}out.completed++;continue
+    }
+    const activity=await d.beginActivity?.(c.batch_id,c.lease_token)
+    if(!activity){out.failed++;continue}
+    const heartbeat=startHeartbeat(d,c.batch_id,c.lease_token,activity.attempt_id)
+    if(c.channel==='telegram')ensureTyping(c.batch_id,c.conversa_id)
+    let retainGenerationActivity=false
+    try{
+     const startedAt=d.now()
+     const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
+     const elapsedMs=Math.max(0,d.now()-startedAt)
+     await heartbeat.settle()
+     if(heartbeat.lost()){out.failed++;continue}
+     const paced=await d.completePaced(c.batch_id,c.lease_token,text,elapsedMs)
+     if(!paced){out.failed++;continue}
+     pacedRemainders.set(c.batch_id,paced.remaining_ms)
+     retainGenerationActivity=true;out.completed++
+    }finally{
+     heartbeat.stop()
+     if(!retainGenerationActivity){releaseTyping(c.batch_id);await d.clearActivity?.(c.batch_id,activity.attempt_id)}
+    }
+   }catch{await d.fail(c.batch_id,c.lease_token,'generation_failed');out.failed++}
   }
-  const typing=runtimeEnabled&&job.canal==='telegram'?startTelegramTyping(d,job.conversa_id):null
-  try{
-   const remainingMs=pacedRemainders.get(job.batch_id)
-   if(remainingMs!==undefined&&job.canal==='telegram')await d.sleep(remainingMs)
-   if(!(await d.beginDelivery(job.batch_id,job.lease_token)))continue
-   out.delivery_attempted++
-   const result=job.canal==='telegram'
-    ?await d.sendTelegram(job.conversa_id,job.response_text)
-    :job.canal==='whatsapp'
-      ?await d.sendWhatsApp(job.conversa_id,job.response_text,remainingMs)
-      :{success:true}
-   if(result&&typeof result==='object'&&(('success'in result&&result.success===false)||('sucesso'in result&&result.sucesso===false)))await d.recordDeliveryFailure(job.batch_id,'provider_rejected')
-  }catch{await d.recordDeliveryFailure(job.batch_id,'provider_unavailable')}
-  finally{typing?.stop();if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
+  let workClaimed=out.claimed
+  while(workClaimed<limit){
+   const job=await d.claimDelivery();if(!job)break;workClaimed++
+   let deliveryActivity:Activity|null=null
+   let retainedTyping=false
+   if(runtimeEnabled){
+    deliveryActivity=await d.adoptActivity(job.batch_id,job.lease_token)
+    if(!deliveryActivity){releaseTyping(job.batch_id);continue}
+    if(job.canal==='telegram'){retainedTyping=typingHandles.has(job.batch_id);ensureTyping(job.batch_id,job.conversa_id)}
+   }
+   try{
+    const remainingMs=job.remaining_ms??pacedRemainders.get(job.batch_id)
+    const waitMs=job.canal==='telegram'&&runtimeEnabled&&!retainedTyping?Math.max(TELEGRAM_TYPING_RESTART_FLOOR_MS,remainingMs??0):remainingMs
+    if(waitMs!==undefined&&waitMs!==null&&job.canal==='telegram')await d.sleep(waitMs)
+    if(!(await d.beginDelivery(job.batch_id,job.lease_token)))continue
+    out.delivery_attempted++
+    const result=job.canal==='telegram'
+     ?await d.sendTelegram(job.conversa_id,job.response_text)
+     :job.canal==='whatsapp'
+       ?await d.sendWhatsApp(job.conversa_id,job.response_text,remainingMs??undefined)
+       :{success:true}
+    if(result&&typeof result==='object'&&(('success'in result&&result.success===false)||('sucesso'in result&&result.sucesso===false)))await d.recordDeliveryFailure(job.batch_id,'provider_rejected')
+   }catch{await d.recordDeliveryFailure(job.batch_id,'provider_unavailable')}
+   finally{releaseTyping(job.batch_id);if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
+  }
+  return out
+ }finally{
+  for(const batchId of [...typingHandles.keys()])releaseTyping(batchId)
  }
- return out
 }
 function row<T>(data:T|T[]|null):T|null{return Array.isArray(data)?data[0]??null:data}
 export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
