@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildTelegramCatalogCard,
+  buildTelegramCatalogPromptMessage,
   normalizeTelegramPhotoUrl,
   parseTelegramCatalogCallback,
   selectOfficialTelegramCombos,
@@ -32,8 +33,29 @@ describe('Telegram catalog interactions', () => {
       action: 'add',
       productId: 'a:b:c',
     })
+    expect(parseTelegramCatalogCallback('catalog:details:product-1')).toEqual({
+      action: 'details',
+      productId: 'product-1',
+    })
     expect(parseTelegramCatalogCallback('catalog:cart')).toEqual({ action: 'cart' })
+    expect(parseTelegramCatalogCallback('catalog:view')).toEqual({ action: 'view' })
     expect(parseTelegramCatalogCallback('catalog:delete:product-1')).toBeNull()
+    expect(parseTelegramCatalogCallback('catalog:view:product-1')).toBeNull()
+  })
+
+  it('builds a single opt-in prompt button without any product card payload', () => {
+    const prompt = buildTelegramCatalogPromptMessage()
+
+    expect(prompt.text.trim().length).toBeGreaterThan(0)
+    expect(prompt.text.length).toBeLessThanOrEqual(200)
+    expect(prompt.reply_markup.inline_keyboard).toEqual([
+      [{ text: 'Ver catálogo', callback_data: 'catalog:view' }],
+    ])
+
+    const serialized = JSON.stringify(prompt)
+    expect(serialized).not.toContain('catalog:add')
+    expect(serialized).not.toContain('catalog:details')
+    expect(serialized).not.toContain('catalog:cart')
   })
 
   it('normalizes relative photos and rejects unusable image values', () => {

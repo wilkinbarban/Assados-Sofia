@@ -27,10 +27,14 @@ type DatabaseOptions = { existing?: boolean; phone?: string | null; iaAtiva?: bo
 
 function db({ existing = false, phone = '5541999990003', iaAtiva = true }: DatabaseOptions = {}) {
   const calls: string[] = []
+  const reads: string[] = []
   const client: any = {
     from: vi.fn((table: string) => {
       const builder: any = {
-        select: vi.fn(() => builder),
+        select: vi.fn(() => {
+          reads.push(table)
+          return builder
+        }),
         eq: vi.fn(() => builder),
         neq: vi.fn(() => builder),
         order: vi.fn(() => builder),
@@ -50,7 +54,7 @@ function db({ existing = false, phone = '5541999990003', iaAtiva = true }: Datab
       return builder
     }),
   }
-  return { client, calls }
+  return { client, calls, reads }
 }
 
 function req(message: Record<string, unknown> = { text: 'hello' }) {
@@ -171,5 +175,55 @@ describe('Telegram Sofia inbound batching producer', () => {
     expect(error).toHaveBeenCalledWith('[Telegram Webhook] SOFIA_BATCH_ATTACH_FAILED')
     expect(m.rag).not.toHaveBeenCalled()
     error.mockRestore()
+  })
+
+  it('answers a catalog keyword with one opt-in prompt button and no cards', async () => {
+    const { client, calls, reads } = db()
+    m.admin.mockReturnValue(client)
+    vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', 'true')
+    const fetchMock = vi.fn<
+      (url: string, init: { body?: string }) => Promise<{ ok: boolean; json: () => Promise<unknown> }>
+    >(async () => ({ ok: true, json: async () => ({ ok: true, result: { message_id: 1 } }) }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const response = await POST(req({ text: 'Boa noite! Qual é o cardápio?' }))
+
+    expect(await response.json()).toMatchObject({ ok: true, status: 'catalog_prompt_sent' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url.toString()).toContain('/sendMessage')
+
+    const sent = JSON.parse(String(init.body))
+    expect(sent.chat_id).toBe('1001')
+    expect(sent.reply_markup.inline_keyboard).toEqual([
+      [{ text: 'Ver catálogo', callback_data: 'catalog:view' }],
+    ])
+    expect(sent.text.length).toBeLessThanOrEqual(200)
+    expect(JSON.stringify(sent)).not.toContain('catalog:add')
+
+    // The keyword turn keeps the existing early return: the inbound message is
+    // persisted once, the product query is skipped, and neither the batching
+    // producer nor the legacy RAG dispatch runs.
+    expect(reads).not.toContain('produtos')
+    expect(calls).toEqual(['persist:mensagens'])
+    expect(m.attach).not.toHaveBeenCalled()
+    expect(m.rag).not.toHaveBeenCalled()
+  })
+
+  it('keeps a regular text on the batching producer and never sends a catalog prompt', async () => {
+    const { client, calls } = db()
+    m.admin.mockReturnValue(client)
+    vi.stubEnv('SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED', 'true')
+    m.attach.mockImplementation(async () => {
+      calls.push('attach')
+      return true
+    })
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect((await POST(req({ text: 'Bom dia, tudo bem?' }))).status).toBe(200)
+    expect(calls).toEqual(['persist:mensagens', 'attach'])
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(m.rag).not.toHaveBeenCalled()
   })
 })

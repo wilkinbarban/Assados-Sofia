@@ -8,9 +8,54 @@ const OFFICIAL_COMBO_IDS = [
 ] as const
 
 export type TelegramCatalogCallback =
+  | { action: 'view' }
   | { action: 'add'; productId: string }
   | { action: 'details'; productId: string }
   | { action: 'cart' }
+
+export const TELEGRAM_CATALOG_VIEW_CALLBACK = 'catalog:view'
+
+/**
+ * Prompt curto e estático devolvido quando o cliente pede o cardápio por palavra-chave.
+ * Os cartões oficiais só saem depois do clique explícito neste botão.
+ */
+const TELEGRAM_CATALOG_PROMPT_TEXT =
+  '🍖 Quer dar uma olhada no nosso cardápio? Toque no botão abaixo para ver os combos oficiais.'
+
+export type TelegramCatalogPrompt = {
+  text: string
+  reply_markup: {
+    inline_keyboard: Array<Array<{ text: string; callback_data: string }>>
+  }
+}
+
+export function buildTelegramCatalogPromptMessage(): TelegramCatalogPrompt {
+  return {
+    text: TELEGRAM_CATALOG_PROMPT_TEXT,
+    reply_markup: {
+      inline_keyboard: [[{ text: 'Ver catálogo', callback_data: TELEGRAM_CATALOG_VIEW_CALLBACK }]],
+    },
+  }
+}
+
+export type TelegramCatalogFeedbackReason = 'unavailable' | 'empty'
+
+/**
+ * Respostas curtas para quando o clique em "Ver catálogo" não pode ser atendido.
+ * Nunca afirmam que o catálogo foi enviado.
+ */
+const TELEGRAM_CATALOG_FEEDBACK_TEXT: Record<TelegramCatalogFeedbackReason, string> = {
+  unavailable: 'Não consegui carregar o catálogo agora. Tente novamente em instantes.',
+  empty: 'O catálogo está indisponível no momento. Tente novamente em instantes.',
+}
+
+export type TelegramCatalogFeedback = { text: string }
+
+export function buildTelegramCatalogFeedbackMessage(
+  reason: TelegramCatalogFeedbackReason,
+): TelegramCatalogFeedback {
+  return { text: TELEGRAM_CATALOG_FEEDBACK_TEXT[reason] }
+}
 
 export function normalizeTelegramPhotoUrl(value: string | null | undefined, baseUrl: string) {
   if (!value || /\s/.test(value)) return null
@@ -56,6 +101,7 @@ export function buildTelegramCatalogCard(
 
 export function parseTelegramCatalogCallback(value: string): TelegramCatalogCallback | null {
   if (value === 'catalog:cart') return { action: 'cart' }
+  if (value === TELEGRAM_CATALOG_VIEW_CALLBACK) return { action: 'view' }
 
   const [scope, action, ...productParts] = value.split(':')
   const productId = productParts.join(':')
