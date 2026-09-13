@@ -15,7 +15,9 @@ import { telegramInboundBatchEnqueueEnabled } from '@/lib/sofia/inbound-batch-ga
 import { attachPersistedSofiaInboundMessage } from '@/lib/sofia/inbound-batch-producer'
 import {
   enviarCatalogoTelegram,
+  enviarFeedbackCatalogoTelegram,
   enviarOrientacaoComprovanteTelegram,
+  enviarPromptCatalogoTelegram,
   responderCallbackTelegram,
 } from '@/lib/telegram/send'
 
@@ -192,6 +194,10 @@ export async function POST(request: Request) {
 
     const body = await request.json()
     const callbackQuery = body.callback_query as TelegramCallbackQuery | undefined
+    // O Telegram pode reentregar um callback_query. O tratamento de callbacks não tem
+    // ledger durável de ids nem deduplicação, então um clique em catalog:view
+    // reentregue pode reenviar os cartões oficiais. Isso é entrega ao menos uma vez,
+    // não exatamente uma vez: não há garantia de supressão do envio repetido.
     if (callbackQuery) {
       const action = parseTelegramCatalogCallback(callbackQuery.data || '')
       const chatId = callbackQuery.message?.chat.id?.toString() || callbackQuery.from.id.toString()
@@ -214,6 +220,34 @@ export async function POST(request: Request) {
       if (clientError || !client) {
         await responderCallbackTelegram(callbackQuery.id, 'Compartilhe seu telefone antes de montar o pedido.')
         return Response.json({ ok: true, status: 'client_required' })
+      }
+
+      // Clique explícito em "Ver catálogo": só aqui o catálogo oficial em cartões sai.
+      if (action.action === 'view') {
+        // Ack neutro primeiro: nenhum texto promete envio antes de existir cartão confirmado.
+        await responderCallbackTelegram(callbackQuery.id, 'Consultando o cardápio...')
+
+        const { data: products, error: productsError } = await supabaseAdmin
+          .from('produtos')
+          .select('id, nome, descricao, preco_centavos, quantidade_estoque, url_imagem')
+          .eq('ativo', true)
+          .order('ordem_exibicao', { ascending: true })
+
+        if (productsError) {
+          await enviarFeedbackCatalogoTelegram(chatId, 'unavailable')
+          return Response.json({ ok: true, status: 'catalog_view_unavailable' })
+        }
+
+        // A lista oficial é resolvida antes de qualquer afirmação de envio: o clique nunca
+        // termina em "enviado" com zero cartões.
+        const officialCombos = selectOfficialTelegramCombos(products ?? [])
+        if (!officialCombos.length) {
+          await enviarFeedbackCatalogoTelegram(chatId, 'empty')
+          return Response.json({ ok: true, status: 'catalog_view_empty' })
+        }
+
+        await enviarCatalogoTelegram(chatId, officialCombos)
+        return Response.json({ ok: true, status: 'catalog_view_sent' })
       }
 
       const result = action.action === 'cart'
@@ -715,17 +749,12 @@ Como posso te ajudar com o churrasco hoje? 🥩`
       return Response.json({ ok: true, message: 'Opt-out processado' })
     }
 
+    // Opt-in do catálogo: a palavra-chave devolve apenas um prompt curto com um único
+    // botão. Os cartões oficiais saem somente no clique explícito em catalog:view, e o
+    // retorno antecipado mantém o turno fora do RAG e do produtor de batching.
     if (isCatalogRequest(messageText)) {
-      const { data: products, error: productsError } = await supabaseAdmin
-        .from('produtos')
-        .select('id, nome, descricao, preco_centavos, quantidade_estoque, url_imagem')
-        .eq('ativo', true)
-        .order('ordem_exibicao', { ascending: true })
-
-      if (!productsError && products?.length) {
-        await enviarCatalogoTelegram(telegramChatId, selectOfficialTelegramCombos(products))
-        return Response.json({ ok: true, status: 'catalog_sent' })
-      }
+      await enviarPromptCatalogoTelegram(telegramChatId)
+      return Response.json({ ok: true, status: 'catalog_prompt_sent' })
     }
 
     // Disparar pipeline RAG ou anexar a mensagem canônica já persistida.

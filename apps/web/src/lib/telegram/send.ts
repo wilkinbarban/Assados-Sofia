@@ -1,7 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { deriveTelegramMessageKey } from '@/lib/telegram/idempotency'
-import { buildTelegramCatalogCard } from '@/lib/telegram/catalog'
+import {
+  buildTelegramCatalogCard,
+  buildTelegramCatalogFeedbackMessage,
+  buildTelegramCatalogPromptMessage,
+  type TelegramCatalogFeedbackReason,
+} from '@/lib/telegram/catalog'
 import type { ProdutoCardapio } from '@/lib/cardapio/formatar'
 
 async function postTelegram(token: string, method: string, payload: unknown) {
@@ -17,6 +22,32 @@ async function postTelegram(token: string, method: string, payload: unknown) {
   }
 
   return response.json()
+}
+
+export async function enviarPromptCatalogoTelegram(chatId: string): Promise<void> {
+  const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
+  if (!token) throw new Error('Token do bot do Telegram não configurado.')
+
+  const prompt = buildTelegramCatalogPromptMessage()
+  await postTelegram(token, 'sendMessage', {
+    chat_id: chatId,
+    text: prompt.text,
+    reply_markup: prompt.reply_markup,
+  })
+}
+
+export async function enviarFeedbackCatalogoTelegram(
+  chatId: string,
+  reason: TelegramCatalogFeedbackReason,
+): Promise<void> {
+  const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
+  if (!token) throw new Error('Token do bot do Telegram não configurado.')
+
+  const feedback = buildTelegramCatalogFeedbackMessage(reason)
+  await postTelegram(token, 'sendMessage', {
+    chat_id: chatId,
+    text: feedback.text,
+  })
 }
 
 export async function enviarCatalogoTelegram(chatId: string, products: ProdutoCardapio[]) {
