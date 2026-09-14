@@ -121,6 +121,24 @@ function createSupabaseMock(options: { persistTelegramKeys?: boolean; cliente?: 
   return { client, log }
 }
 
+function stubTelegramResponse(body: unknown, status = 200) {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(
+    typeof body === 'string' ? body : JSON.stringify(body),
+    { status },
+  )))
+}
+
+function conversaLookupClient(result: { data: unknown; error: unknown } | Error) {
+  const builder: Record<string, unknown> = {}
+  builder.select = vi.fn(() => builder)
+  builder.eq = vi.fn(() => builder)
+  builder.single = vi.fn(async () => {
+    if (result instanceof Error) throw result
+    return result
+  })
+  return { from: vi.fn(() => builder) }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.obterConfiguracaoSistema.mockResolvedValue('secret-token')
@@ -249,11 +267,12 @@ describe('Telegram webhook security', () => {
     ]))
   })
 
-  it('sends a Telegram typing action without creating a message', async () => {
+  it('accepts a Telegram typing action only for the documented ok and result true response', async () => {
     const { client, log } = createSupabaseMock()
     mocks.createAdminClient.mockReturnValue(client)
+    stubTelegramResponse({ ok: true, result: true })
 
-    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toBeUndefined()
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({ outcome: 'accepted' })
 
     expect(fetch).toHaveBeenCalledWith(
       'https://api.telegram.org/botsecret-token/sendChatAction',
@@ -263,6 +282,153 @@ describe('Telegram webhook security', () => {
       }),
     )
     expect(log.inserts).toEqual([])
+  })
+
+  it.each([
+    ['ok false', { ok: false, result: true }],
+    ['result false', { ok: true, result: false }],
+    ['a missing result', { ok: true }],
+    ['a non boolean result', { ok: true, result: { message_id: 44 } }],
+    ['an empty body', {}],
+    ['a null body', null],
+  ])('rejects a 200 typing response with %s', async (_label, body) => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    stubTelegramResponse(body)
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'rejected',
+      reason: 'provider_rejected',
+    })
+  })
+
+  it.each([400, 401, 429])('rejects a typing request the provider refused with HTTP %i', async (status) => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    stubTelegramResponse({ ok: false, error_code: status, description: 'Bad Request: chat not found' }, status)
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'rejected',
+      reason: 'provider_rejected',
+    })
+  })
+
+  it.each([500, 502, 503])('reports a typing request as unavailable for the provider failure HTTP %i', async (status) => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    stubTelegramResponse({ ok: false, description: 'Internal Server Error' }, status)
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'provider_error',
+    })
+  })
+
+  it('reports an unparsable typing response as unavailable', async () => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    stubTelegramResponse('<html>gateway</html>')
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'malformed_response',
+    })
+  })
+
+  it('reports a failed typing network request as unavailable without leaking the failure', async () => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('socket hang up for secret-token chat 1001')
+    }))
+
+    const result = await enviarAcaoChatTelegram('conversation-1', 'typing')
+    const serialized = JSON.stringify(result)
+
+    expect(result).toEqual({ outcome: 'unavailable', reason: 'network_error' })
+    expect(serialized).not.toContain('secret-token')
+    expect(serialized).not.toContain('1001')
+  })
+
+  it('reports a missing bot token as unavailable without calling the provider', async () => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    mocks.obterConfiguracaoSistema.mockResolvedValue(null)
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'token_missing',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('reports a failing configuration read as unavailable without leaking the failure', async () => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    mocks.obterConfiguracaoSistema.mockRejectedValue(new Error('config store offline with secret-token'))
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'config_unavailable',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['a missing conversation row', { data: null, error: { message: 'no rows' } }, 'conversation_not_found'],
+    ['a missing client link', { data: { id: 'conversation-1', clientes: null }, error: null }, 'chat_id_missing'],
+    ['a client without a telegram chat id', { data: { id: 'conversation-1', clientes: { telegram_chat_id: null } }, error: null }, 'chat_id_missing'],
+  ])('reports %s as unavailable without calling the provider', async (_label, lookup, reason) => {
+    mocks.createAdminClient.mockReturnValue(conversaLookupClient(lookup))
+    stubTelegramResponse({ ok: true, result: true })
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'unavailable',
+      reason,
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('reports conversation lookup failures as unavailable without leaking the failure', async () => {
+    mocks.createAdminClient.mockReturnValue(conversaLookupClient(new Error('db down with secret-token 1001')))
+    stubTelegramResponse({ ok: true, result: true })
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'query_unavailable',
+    })
+
+    mocks.createAdminClient.mockImplementation(() => {
+      throw new Error('admin client unavailable with secret-token')
+    })
+
+    await expect(enviarAcaoChatTelegram('conversation-1', 'typing')).resolves.toEqual({
+      outcome: 'unavailable',
+      reason: 'query_unavailable',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('never surfaces tokens, chat identifiers, or provider text in typing outcomes or console output', async () => {
+    const { client } = createSupabaseMock()
+    mocks.createAdminClient.mockReturnValue(client)
+    const consoleSpies = [
+      vi.spyOn(console, 'log'),
+      vi.spyOn(console, 'info'),
+      vi.spyOn(console, 'warn'),
+      vi.spyOn(console, 'error'),
+    ].map((spy) => spy.mockImplementation(() => undefined))
+    stubTelegramResponse({ ok: false, error_code: 400, description: 'Bad Request: chat not found secret-token 1001' }, 400)
+
+    const result = await enviarAcaoChatTelegram('conversation-1', 'typing')
+    const serialized = JSON.stringify(result)
+
+    expect(result).toEqual({ outcome: 'rejected', reason: 'provider_rejected' })
+    expect(serialized).not.toContain('secret-token')
+    expect(serialized).not.toContain('1001')
+    expect(serialized).not.toContain('chat not found')
+    for (const spy of consoleSpies) expect(spy).not.toHaveBeenCalled()
+    consoleSpies.forEach((spy) => spy.mockRestore())
   })
 
   it('persists missing-phone text before welcome prompts and ignores duplicate retries before sending them again', async () => {

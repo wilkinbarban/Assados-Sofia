@@ -105,29 +105,124 @@ export async function responderCallbackTelegram(callbackQueryId: string, text: s
   })
 }
 
+/**
+ * Conjunto fechado e sanitizado de motivos para uma ação de chat não aceita.
+ * Nunca é derivado de texto do provedor, token ou identificador de chat.
+ */
+export const TELEGRAM_CHAT_ACTION_REASONS = [
+  'conversation_not_found',
+  'chat_id_missing',
+  'token_missing',
+  'config_unavailable',
+  'query_unavailable',
+  'network_error',
+  'malformed_response',
+  'provider_rejected',
+  'provider_error',
+] as const
+
+export type TelegramChatActionReason = (typeof TELEGRAM_CHAT_ACTION_REASONS)[number]
+
+export type TelegramChatActionOutcome = 'accepted' | 'rejected' | 'unavailable'
+
+/**
+ * Resultado tipado de `sendChatAction`.
+ *
+ * `accepted` significa apenas que a API do Telegram confirmou a ação com o corpo
+ * documentado `ok: true` / `result: true`. Não é prova de que o cliente viu o
+ * indicador de digitação: a API só promete manter o status por até 5 segundos, ou
+ * até que uma mensagem chegue ao chat.
+ */
+export type TelegramChatActionReport =
+  | { outcome: 'accepted' }
+  | { outcome: 'rejected'; reason: TelegramChatActionReason }
+  | { outcome: 'unavailable'; reason: TelegramChatActionReason }
+
+function unavailableChatAction(reason: TelegramChatActionReason): TelegramChatActionReport {
+  return { outcome: 'unavailable', reason }
+}
+
+/**
+ * Caminho dedicado de `sendChatAction`. Não reutiliza `postTelegram` para não
+ * alterar o comportamento dos enviadores de mensagem, foto e callback.
+ */
+async function postTelegramChatAction(
+  token: string,
+  chatId: string,
+  action: 'typing',
+): Promise<TelegramChatActionReport> {
+  let response: Response
+  try {
+    response = await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, action }),
+    })
+  } catch {
+    // O detalhe da falha de rede pode carregar token ou identificadores: fica fora do relatório.
+    return unavailableChatAction('network_error')
+  }
+
+  if (!response.ok) {
+    // 4xx: o provedor avaliou e recusou a ação. 5xx: o provedor não conseguiu responder.
+    return response.status >= 500
+      ? unavailableChatAction('provider_error')
+      : { outcome: 'rejected', reason: 'provider_rejected' }
+  }
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    return unavailableChatAction('malformed_response')
+  }
+
+  // Contrato estrito e documentado: o sucesso de sendChatAction é `ok: true` + `result: true`.
+  const body = payload as { ok?: unknown; result?: unknown } | null
+  if (body && typeof body === 'object' && body.ok === true && body.result === true) {
+    return { outcome: 'accepted' }
+  }
+
+  return { outcome: 'rejected', reason: 'provider_rejected' }
+}
+
+/**
+ * Solicita a ação de chat para uma conversa do Sofía.
+ * Sempre resolve, nunca lança: a classificação `unavailable` cobre conversa, chat,
+ * token, consulta e provedor indisponíveis sem expor token, IDs ou texto do provedor.
+ */
 export async function enviarAcaoChatTelegram(
   conversaId: string,
   action: 'typing',
-): Promise<void> {
-  const supabase = createAdminClient()
-  const { data: conversa, error } = await supabase
-    .from('conversas')
-    .select('id, clientes (telegram_chat_id)')
-    .eq('id', conversaId)
-    .single()
+): Promise<TelegramChatActionReport> {
+  let telegramChatId: string
+  try {
+    const supabase = createAdminClient()
+    const { data: conversa, error } = await supabase
+      .from('conversas')
+      .select('id, clientes (telegram_chat_id)')
+      .eq('id', conversaId)
+      .single()
 
-  const telegramChatId = (conversa as any)?.clientes?.telegram_chat_id
-  if (error || !telegramChatId) {
-    throw new Error('Telegram Chat ID do cliente não encontrado para esta conversa.')
+    if (error || !conversa) return unavailableChatAction('conversation_not_found')
+
+    const chatId = (conversa as any)?.clientes?.telegram_chat_id
+    if (!chatId) return unavailableChatAction('chat_id_missing')
+
+    telegramChatId = String(chatId)
+  } catch {
+    return unavailableChatAction('query_unavailable')
   }
 
-  const token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
-  if (!token) throw new Error('Token do bot do Telegram não configurado.')
+  let token: string | null
+  try {
+    token = await obterConfiguracaoSistema('TELEGRAM_BOT_TOKEN')
+  } catch {
+    return unavailableChatAction('config_unavailable')
+  }
+  if (!token) return unavailableChatAction('token_missing')
 
-  await postTelegram(token, 'sendChatAction', {
-    chat_id: telegramChatId,
-    action,
-  })
+  return postTelegramChatAction(token, telegramChatId, action)
 }
 
 export async function enviarMensagemTelegram(

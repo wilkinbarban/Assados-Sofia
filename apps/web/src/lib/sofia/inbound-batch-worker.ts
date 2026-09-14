@@ -3,7 +3,7 @@ import { processarRagBatchPipeline } from '@/lib/ai/openrouter'
 import { obterSofiaGlobalChannelConfig } from '@/lib/config/sistema'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
-import { enviarAcaoChatTelegram, enviarMensagemTelegram } from '@/lib/telegram/send'
+import { enviarAcaoChatTelegram, enviarMensagemTelegram, TELEGRAM_CHAT_ACTION_REASONS, type TelegramChatActionOutcome, type TelegramChatActionReason, type TelegramChatActionReport } from '@/lib/telegram/send'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
 import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
 
@@ -21,7 +21,8 @@ export interface BatchWorkerDeps {
  claimDelivery():Promise<Delivery|null>; beginDelivery(id:string,lease:string):Promise<boolean>; recordDeliveryFailure(id:string,reason:string):Promise<unknown>
  beginActivity?(id:string,lease:string):Promise<Activity|null>;renewActivity?(id:string,lease:string,attempt:string):Promise<boolean>;clearActivity?(id:string,attempt:string):Promise<boolean>;adoptActivity(id:string,lease:string):Promise<Activity|null>
  setInterval?(callback:()=>void,ms:number):unknown;clearInterval?(timer:unknown):void;now():number;sleep(ms:number):Promise<void>
- sendTelegramTyping(id:string):Promise<void>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string,typingDelayMs?:number):Promise<unknown>
+ sendTelegramTyping(id:string):Promise<TelegramChatActionReport>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string,typingDelayMs?:number):Promise<unknown>
+ observeTelegramTyping?(event:TelegramTypingObservation):void
 }
 export function formatBatchContext(members:Member[]):string {
  return ['MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):',...members.map((m,i)=>{
@@ -42,16 +43,48 @@ function startHeartbeat(deps:BatchWorkerDeps,batchId:string,lease:string,attempt
 }
 type TypingHandle={stop:()=>void}
 const TELEGRAM_TYPING_RESTART_FLOOR_MS=2_000
+export const TELEGRAM_TYPING_TAG='telegram_typing'
+/** Evento de observabilidade com tag fixa e enums seguros: nunca carrega token, IDs ou texto do provedor. */
+export type TelegramTypingObservation={tag:typeof TELEGRAM_TYPING_TAG;event:'attempt'|TelegramChatActionOutcome;reason?:TelegramChatActionReason}
+const telegramTypingReasons:ReadonlySet<string>=new Set(TELEGRAM_CHAT_ACTION_REASONS)
+function settledTelegramTyping(value:unknown):TelegramTypingObservation{
+ const report=value&&typeof value==='object'?value as {outcome?:unknown;reason?:unknown}:null
+ const outcome=report?.outcome
+ if(outcome!=='accepted'&&outcome!=='rejected'&&outcome!=='unavailable')return {tag:TELEGRAM_TYPING_TAG,event:'unavailable'}
+ return typeof report?.reason==='string'&&telegramTypingReasons.has(report.reason)
+  ?{tag:TELEGRAM_TYPING_TAG,event:outcome,reason:report.reason as TelegramChatActionReason}
+  :{tag:TELEGRAM_TYPING_TAG,event:outcome}
+}
+function observeTelegramTyping(deps:BatchWorkerDeps,event:TelegramTypingObservation){
+ try{
+  const pending=deps.observeTelegramTyping?.(event)
+  // Observabilidade é registro, não entrega: nunca pode bloquear nem rejeitar sem tratamento.
+  if(pending&&typeof (pending as PromiseLike<unknown>).then==='function')void Promise.resolve(pending).catch(()=>undefined)
+ }catch{/* melhor esforço */}
+}
 function startTelegramTyping(deps:BatchWorkerDeps,conversationId:string):TypingHandle{
  let stopped=false,refreshing=false
  const refresh=()=>{
   if(stopped||refreshing)return
   refreshing=true
+  observeTelegramTyping(deps,{tag:TELEGRAM_TYPING_TAG,event:'attempt'})
+  let request:PromiseLike<TelegramChatActionReport>|undefined
   try{
-   const request=deps.sendTelegramTyping(conversationId)
-   if(request&&typeof (request as Promise<void>).catch==='function')void (request as Promise<void>).catch(()=>undefined).then(()=>{refreshing=false})
-   else refreshing=false
-  }catch{refreshing=false}
+   request=deps.sendTelegramTyping(conversationId)
+  }catch{
+   refreshing=false
+   observeTelegramTyping(deps,{tag:TELEGRAM_TYPING_TAG,event:'unavailable'})
+   return
+  }
+  if(!request||typeof (request as PromiseLike<unknown>).then!=='function'){
+   refreshing=false
+   observeTelegramTyping(deps,{tag:TELEGRAM_TYPING_TAG,event:'unavailable'})
+   return
+  }
+  void Promise.resolve(request).then(
+   report=>{refreshing=false;observeTelegramTyping(deps,settledTelegramTyping(report))},
+   ()=>{refreshing=false;observeTelegramTyping(deps,{tag:TELEGRAM_TYPING_TAG,event:'unavailable'})},
+  )
  }
  refresh()
  const timer=deps.setInterval?.(()=>{void refresh()},4_000)
@@ -135,6 +168,8 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
   generate:processarRagBatchPipeline,complete:async(id,l,t)=>!!await rpc('complete_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_response_text:t}),completePaced:(id,l,t,e)=>rpc('complete_sofia_inbound_batch_paced',{p_batch_id:id,p_lease_token:l,p_response_text:t,p_generation_elapsed_ms:e}),claimDelivery:()=>rpc('claim_sofia_response_delivery',{p_lease_seconds:60}),beginDelivery:(id,l)=>rpc('begin_sofia_response_delivery',{p_batch_id:id,p_lease_token:l}),recordDeliveryFailure:(id,r)=>rpc('record_sofia_response_delivery_failure',{p_batch_id:id,p_failure:r}),
   beginActivity:(id,l)=>rpc('begin_sofia_batch_activity',{p_batch_id:id,p_batch_lease_token:l,p_ttl_seconds:30}),renewActivity:async(id,l,a)=>!!await rpc('renew_sofia_owner_activity',{p_batch_id:id,p_owner_kind:'generation',p_owner_token:l,p_attempt_id:a,p_owner_ttl_seconds:30,p_activity_ttl_seconds:30}),clearActivity:(id,a)=>rpc('clear_sofia_batch_activity',{p_batch_id:id,p_attempt_id:a}),adoptActivity:(id,l)=>rpc('adopt_sofia_response_activity',{p_batch_id:id,p_delivery_lease_token:l,p_ttl_seconds:30}),
   setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),sendTelegramTyping:id=>enviarAcaoChatTelegram(id,'typing'),
+  // Observador de produção: tag fixa + enums seguros, uma linha por tentativa e por desfecho.
+  observeTelegramTyping:event=>console.info(`[sofia-inbound-batch] ${event.tag} event=${event.event}${event.reason?` reason=${event.reason}`:''}`),
   sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text,typingDelayMs)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',typingDelayMs,salvarNoBanco:false})
  }
 }
