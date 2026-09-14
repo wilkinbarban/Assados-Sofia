@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { formatBatchContext, runSofiaBatchMaintenance, type BatchWorkerDeps } from '@/lib/sofia/inbound-batch-worker'
+import { createSofiaBatchWorkerDeps, formatBatchContext, runSofiaBatchMaintenance, type BatchWorkerDeps } from '@/lib/sofia/inbound-batch-worker'
 import { inboundBatchProcessingEnabled, inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
 
 const claim = { batch_id:'b', conversa_id:'c', cliente_id:'u', channel:'telegram' as const, lease_token:'l', eligibility:{ db_eligible:true }, members:[
@@ -11,8 +11,11 @@ function provided<T>(value: T | undefined): T {
   if (value === undefined) throw new Error('expected the test to provide this dependency')
   return value
 }
+function observe(events: unknown[]) {
+  return vi.fn((event: unknown) => { events.push(event) })
+}
 function deps(overrides: Partial<BatchWorkerDeps> = {}): BatchWorkerDeps {
-  return { claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null), cancel:vi.fn().mockResolvedValue(true), fail:vi.fn().mockResolvedValue(true), businessHours:vi.fn().mockResolvedValue(true), globalEnabled:vi.fn().mockResolvedValue(true), whatsappEligible:vi.fn().mockResolvedValue(true), generate:vi.fn().mockResolvedValue('resposta'), complete:vi.fn().mockResolvedValue(true), completePaced:vi.fn().mockResolvedValue({ remaining_ms:0 }), claimDelivery:vi.fn().mockResolvedValue(null), adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}), beginDelivery:vi.fn().mockResolvedValue(true), recordDeliveryFailure:vi.fn(), now:vi.fn().mockReturnValue(0), sleep:vi.fn().mockResolvedValue(undefined), sendTelegramTyping:vi.fn().mockResolvedValue(undefined), sendTelegram:vi.fn(), sendWhatsApp:vi.fn(), ...overrides }
+  return { claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValue(null), cancel:vi.fn().mockResolvedValue(true), fail:vi.fn().mockResolvedValue(true), businessHours:vi.fn().mockResolvedValue(true), globalEnabled:vi.fn().mockResolvedValue(true), whatsappEligible:vi.fn().mockResolvedValue(true), generate:vi.fn().mockResolvedValue('resposta'), complete:vi.fn().mockResolvedValue(true), completePaced:vi.fn().mockResolvedValue({ remaining_ms:0 }), claimDelivery:vi.fn().mockResolvedValue(null), adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}), beginDelivery:vi.fn().mockResolvedValue(true), recordDeliveryFailure:vi.fn(), now:vi.fn().mockReturnValue(0), sleep:vi.fn().mockResolvedValue(undefined), sendTelegramTyping:vi.fn().mockResolvedValue({outcome:'accepted'}), sendTelegram:vi.fn(), sendWhatsApp:vi.fn(), ...overrides }
 }
 afterEach(() => vi.unstubAllEnvs())
 describe('Sofia inbound batch worker', () => {
@@ -247,7 +250,7 @@ describe('Sofia inbound batch worker', () => {
       completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
       clearActivity:vi.fn().mockResolvedValue(true),
       generate:vi.fn().mockImplementation(()=>{generationCalls++;return generationCalls===1?Promise.resolve('resposta'):secondGeneration}),
-      sendTelegramTyping:vi.fn().mockImplementation(()=>{typingCalls++;return typingCalls===1?Promise.resolve(undefined):pendingTyping}),
+      sendTelegramTyping:vi.fn().mockImplementation(()=>{typingCalls++;return typingCalls===1?Promise.resolve({outcome:'accepted'}):pendingTyping}),
       setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return `typing-${typingTimers.length}`}return 'heartbeat'}),
       clearInterval:vi.fn(),
     })
@@ -490,6 +493,121 @@ describe('Sofia inbound batch worker', () => {
     const result=await runSofiaBatchMaintenance(d,1)
     expect(result).toMatchObject({completed:1,failed:0})
     expect(d.completePaced).toHaveBeenCalledOnce()
+  })
+  it('observes one sanitized typing attempt and its settled outcome per dispatched refresh',async()=>{
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const events:unknown[]=[]
+    const d=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),clearActivity:vi.fn().mockResolvedValue(true),observeTelegramTyping:observe(events)})
+    const result=await runSofiaBatchMaintenance(d,1)
+    expect(result).toMatchObject({completed:1,failed:0})
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+    expect(events).toEqual([{tag:'telegram_typing',event:'attempt'},{tag:'telegram_typing',event:'accepted'}])
+  })
+  it('observes the settled typing outcome only after the typing promise settles',async()=>{
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const events:unknown[]=[]
+    let settleTyping!:(value:unknown)=>void
+    const pendingTyping=new Promise(resolve=>{settleTyping=resolve})
+    const d=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),clearActivity:vi.fn().mockResolvedValue(true),sendTelegramTyping:vi.fn().mockReturnValue(pendingTyping),observeTelegramTyping:observe(events)})
+    const run=runSofiaBatchMaintenance(d,1)
+    await vi.waitFor(()=>expect(events).toHaveLength(1))
+    expect(events).toEqual([{tag:'telegram_typing',event:'attempt'}])
+    settleTyping({outcome:'accepted'})
+    await run
+    await vi.waitFor(()=>expect(events).toHaveLength(2))
+    expect(events).toEqual([{tag:'telegram_typing',event:'attempt'},{tag:'telegram_typing',event:'accepted'}])
+  })
+  it.each([
+    {outcome:'rejected',reason:'provider_rejected'},
+    {outcome:'unavailable',reason:'token_missing'},
+    {outcome:'unavailable',reason:'network_error'},
+  ] as const)('settles a $outcome typing outcome without failing delivery',async report=>{
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const events:unknown[]=[]
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      sendTelegramTyping:vi.fn().mockResolvedValue(report),
+      observeTelegramTyping:observe(events),
+    })
+    const result=await runSofiaBatchMaintenance(d,2)
+    expect(result).toMatchObject({completed:1,failed:0,delivery_attempted:1})
+    expect(d.sendTelegram).toHaveBeenCalledWith('c','r')
+    expect(events).toEqual([{tag:'telegram_typing',event:'attempt'},{tag:'telegram_typing',event:report.outcome,reason:report.reason}])
+  })
+  it('keeps typing single-flight and stops observing new attempts once the retained handle is released',async()=>{
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const events:unknown[]=[]
+    const typingTimers:Array<()=>void>=[]
+    const delivery={batch_id:'b',conversa_id:'c',canal:'telegram' as const,response_text:'r',lease_token:'dl'}
+    const d=deps({
+      beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),
+      completePaced:vi.fn().mockResolvedValue({remaining_ms:0}),
+      claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+      adoptActivity:vi.fn().mockResolvedValue({attempt_id:'d',expires_at:''}),
+      clearActivity:vi.fn().mockResolvedValue(true),
+      observeTelegramTyping:observe(events),
+      setInterval:vi.fn((callback,ms)=>{if(ms===4_000){typingTimers.push(callback);return 'typing'}return 'heartbeat'}),
+      clearInterval:vi.fn(),
+    })
+    await runSofiaBatchMaintenance(d,2)
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+    expect(d.clearInterval).toHaveBeenCalledWith('typing')
+    expect(events).toEqual([{tag:'telegram_typing',event:'attempt'},{tag:'telegram_typing',event:'accepted'}])
+    typingTimers.forEach(timer=>timer())
+    await Promise.resolve()
+    expect(d.sendTelegramTyping).toHaveBeenCalledTimes(1)
+    expect(events).toHaveLength(2)
+  })
+  it('keeps a throwing or rejecting typing observer from failing delivery or leaking an unhandled rejection',async()=>{
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const unhandled:unknown[]=[]
+    const onUnhandled=(reason:unknown)=>{unhandled.push(reason)}
+    process.on('unhandledRejection',onUnhandled)
+    try{
+      const rejectingObserver=vi.fn(()=>Promise.reject(Error('observer down')))
+      const rejecting=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),clearActivity:vi.fn().mockResolvedValue(true),observeTelegramTyping:rejectingObserver})
+      expect(await runSofiaBatchMaintenance(rejecting,1)).toMatchObject({completed:1,failed:0})
+      expect(rejectingObserver).toHaveBeenCalled()
+      const throwingObserver=vi.fn(()=>{throw Error('observer down')})
+      const throwing=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),clearActivity:vi.fn().mockResolvedValue(true),observeTelegramTyping:throwingObserver})
+      expect(await runSofiaBatchMaintenance(throwing,1)).toMatchObject({completed:1,failed:0})
+      expect(throwingObserver).toHaveBeenCalled()
+      await new Promise(resolve=>setTimeout(resolve,0))
+      expect(unhandled).toEqual([])
+    }finally{process.off('unhandledRejection',onUnhandled)}
+  })
+  it.each([
+    ['an unknown outcome',{outcome:'accepted_confirmed',reason:'provider_rejected'},{event:'unavailable'}],
+    ['provider text in the reason',{outcome:'rejected',reason:'Bad Request: chat not found secret-token 1001'},{event:'rejected'}],
+    ['a non object settlement','accepted',{event:'unavailable'}],
+    ['a missing settlement',undefined,{event:'unavailable'}],
+  ])('never forwards %s through the typing observer',async(_label,settlement,expected)=>{
+    vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+    const events:unknown[]=[]
+    const d=deps({beginActivity:vi.fn().mockResolvedValue({attempt_id:'g',expires_at:''}),clearActivity:vi.fn().mockResolvedValue(true),sendTelegramTyping:vi.fn().mockResolvedValue(settlement),observeTelegramTyping:observe(events)})
+    await runSofiaBatchMaintenance(d,1)
+    expect(events).toEqual([{tag:'telegram_typing',event:'attempt'},{tag:'telegram_typing',...expected}])
+    const serialized=JSON.stringify(events)
+    expect(serialized).not.toContain('secret-token')
+    expect(serialized).not.toContain('1001')
+    expect(serialized).not.toContain('chat not found')
+  })
+  it('wires a sanitized production typing observer that emits only fixed tags and safe enums',()=>{
+    const infoSpy=vi.spyOn(console,'info').mockImplementation(()=>undefined)
+    const production=createSofiaBatchWorkerDeps({} as never)
+    const observeProduction=provided(production.observeTelegramTyping)
+    observeProduction({tag:'telegram_typing',event:'attempt'})
+    observeProduction({tag:'telegram_typing',event:'rejected',reason:'provider_rejected'})
+    expect(infoSpy.mock.calls).toEqual([
+      ['[sofia-inbound-batch] telegram_typing event=attempt'],
+      ['[sofia-inbound-batch] telegram_typing event=rejected reason=provider_rejected'],
+    ])
+    infoSpy.mockRestore()
   })
   it('serializes ten-second G heartbeats and discards output after a fence loss', async () => {
     vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
