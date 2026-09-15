@@ -53,7 +53,7 @@ describe('Evolution Sofia paced delivery', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ key: { id: 'evolution-message-1' } }), { status: 200 })))
   })
 
-  it('keeps Evolution composing for the durable worker remainder without persisting a second message', async () => {
+  it('sends the durable worker remainder without provider-side pacing or presence', async () => {
     const result = await enviarMensagemEvolution('conversation-1', {
       texto: 'Resposta pronta',
       remetente: 'ia',
@@ -67,11 +67,13 @@ describe('Evolution Sofia paced delivery', () => {
       expect.objectContaining({
         body: JSON.stringify({
           number: '5541999990003',
-          options: { delay: 37, presence: 'composing' },
           text: 'Resposta pronta',
-          textMessage: { text: 'Resposta pronta' },
         }),
       }),
     )
+    const requestBody = JSON.parse((fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body)
+    expect(requestBody).not.toHaveProperty('delay')
+    expect(requestBody).not.toHaveProperty('options')
+    expect(requestBody).not.toHaveProperty('presence')
   })
 })
