@@ -49,7 +49,7 @@ describe('E2E Integration: Sofía, Canais (WhatsApp & Telegram), On/Off & Módul
   // 1. WhatsApp Evolution Webhook (Normalização com Yadira 554187021106)
   // ─────────────────────────────────────────────────────────────
   describe('1. WhatsApp Inbound via Evolution API', () => {
-    it('normalizes 12-digit WhatsApp mobile numbers missing leading 9 and triggers RAG pipeline', async () => {
+    it('normalizes 12-digit WhatsApp mobile numbers missing leading 9 and processes the message', async () => {
       const mockSupabaseAdmin = {
         from: vi.fn().mockImplementation((table: string) => {
           if (table === 'configuracoes_sistema') {
@@ -145,7 +145,7 @@ describe('E2E Integration: Sofía, Canais (WhatsApp & Telegram), On/Off & Módul
             },
             pushName: 'Yadira Piquera',
             message: {
-              conversation: 'Olá, quero ver o cardápio',
+              conversation: 'Olá, quero fazer uma pergunta',
             },
           },
         }),

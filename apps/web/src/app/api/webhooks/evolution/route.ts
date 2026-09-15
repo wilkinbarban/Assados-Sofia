@@ -8,6 +8,7 @@ import { normalizeCuritibaPhone } from '@/lib/auth/phone'
 import { processarStatusContatoInbound } from '@/lib/whatsapp/contact-status'
 import { normalizarMensagemEvolution } from '@/lib/whatsapp/inbound-normalizer'
 import { processarAcaoInterativaWhatsApp } from '@/lib/whatsapp/action-router'
+import { enviarPromptCatalogoWhatsApp } from '@/lib/whatsapp/gateways/catalog-gateway'
 import { ingestEvolutionCanonicalPaymentProof } from '@/lib/payment-proofs/canonical-intake'
 import { downloadEvolutionMedia } from '@/lib/whatsapp/evolution-media-download'
 import { evaluateEvolutionPaymentProofCompatibility } from '@/lib/whatsapp/evolution-payment-proof-compatibility'
@@ -482,6 +483,16 @@ export async function POST(request: Request) {
         }
       }
       return NextResponse.json({ success: true, message: 'Fora do horário de atendimento', data: novaMensagem }, { status: 200 })
+    }
+
+    // Catalog opt-in is handled before batching/RAG; keywords only send one prompt button.
+    if (!norm?.interactiveId && /\b(card[aá]pio|menu|combos?)\b/i.test(textBody || caption || '')) {
+      const prompt = await enviarPromptCatalogoWhatsApp(sanitizedPhone)
+      return NextResponse.json({
+        success: prompt.success,
+        status: prompt.success ? 'catalog_prompt_sent' : 'catalog_prompt_unavailable',
+        data: novaMensagem,
+      }, { status: 200 })
     }
 
     // 11. Never infer financial receipt from an attachment or payment-like text.
