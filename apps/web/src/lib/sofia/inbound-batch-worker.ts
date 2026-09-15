@@ -5,6 +5,9 @@ import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
 import { enviarAcaoChatTelegram, enviarMensagemTelegram, TELEGRAM_CHAT_ACTION_REASONS, type TelegramChatActionOutcome, type TelegramChatActionReason, type TelegramChatActionReport } from '@/lib/telegram/send'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
+import { startEvolutionPresence } from '@/lib/whatsapp/evolution'
+    import type { EvolutionPresenceEvent } from '@/lib/whatsapp/evolution-presence'
+    import { obterProvedorAtivo } from '@/lib/whatsapp/provider'
 import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
 
 type Channel='telegram'|'whatsapp'|'web'
@@ -21,8 +24,9 @@ export interface BatchWorkerDeps {
  claimDelivery():Promise<Delivery|null>; beginDelivery(id:string,lease:string):Promise<boolean>; recordDeliveryFailure(id:string,reason:string):Promise<unknown>
  beginActivity?(id:string,lease:string):Promise<Activity|null>;renewActivity?(id:string,lease:string,attempt:string):Promise<boolean>;clearActivity?(id:string,attempt:string):Promise<boolean>;adoptActivity(id:string,lease:string):Promise<Activity|null>
  setInterval?(callback:()=>void,ms:number):unknown;clearInterval?(timer:unknown):void;now():number;sleep(ms:number):Promise<void>
- sendTelegramTyping(id:string):Promise<TelegramChatActionReport>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string,typingDelayMs?:number):Promise<unknown>
+ sendTelegramTyping(id:string):Promise<TelegramChatActionReport>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string,typingDelayMs?:number):Promise<unknown>;startWhatsAppPresence?(id:string,observe?:(event:EvolutionPresenceEvent)=>void):TypingHandle|Promise<TypingHandle>
  observeTelegramTyping?(event:TelegramTypingObservation):void
+ observeWhatsAppPresence?(event:EvolutionPresenceEvent):void
 }
 export function formatBatchContext(members:Member[]):string {
  return ['MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):',...members.map((m,i)=>{
@@ -62,6 +66,19 @@ function observeTelegramTyping(deps:BatchWorkerDeps,event:TelegramTypingObservat
   if(pending&&typeof (pending as PromiseLike<unknown>).then==='function')void Promise.resolve(pending).catch(()=>undefined)
  }catch{/* melhor esforço */}
 }
+const whatsappPresenceReasons:ReadonlySet<string>=new Set(['provider_unavailable','provider_rejected','invalid_response'])
+function safeWhatsAppPresenceEvent(value:unknown):EvolutionPresenceEvent{
+ const event=value&&typeof value==='object'?value as {event?:unknown;reason?:unknown}:{}
+ if(event.event==='attempt'||event.event==='accepted')return {tag:'evolution_presence',event:event.event}
+ const reason=typeof event.reason==='string'&&whatsappPresenceReasons.has(event.reason)?event.reason as 'provider_unavailable'|'provider_rejected'|'invalid_response':'provider_unavailable'
+ return {tag:'evolution_presence',event:'unavailable',reason}
+}
+function observeWhatsAppPresence(deps:BatchWorkerDeps,event:unknown){
+ try{
+  const pending=deps.observeWhatsAppPresence?.(safeWhatsAppPresenceEvent(event))
+  if(pending&&typeof (pending as PromiseLike<unknown>).then==='function')void Promise.resolve(pending).catch(()=>undefined)
+ }catch{/* best effort */}
+}
 function startTelegramTyping(deps:BatchWorkerDeps,conversationId:string):TypingHandle{
  let stopped=false,refreshing=false
  const refresh=()=>{
@@ -94,7 +111,10 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
  const out:BatchCounts={claimed:0,completed:0,cancelled:0,failed:0,delivery_attempted:0}
  const processingLimit=Math.ceil(limit/2),runtimeEnabled=inboundBatchRuntimeEnabled(),pacedRemainders=new Map<string,number>()
  const typingHandles=new Map<string,TypingHandle>()
+ const presenceHandles=new Map<string,TypingHandle|undefined>()
+ const closedPresence=new Set<string>()
  const releaseTyping=(batchId:string)=>{const handle=typingHandles.get(batchId);if(!handle)return;typingHandles.delete(batchId);handle.stop()}
+ const releasePresence=(batchId:string)=>{closedPresence.add(batchId);const handle=presenceHandles.get(batchId);presenceHandles.delete(batchId);handle?.stop()}
  const ensureTyping=(batchId:string,conversationId:string)=>{const retained=typingHandles.get(batchId);if(retained)return retained;const handle=startTelegramTyping(d,conversationId);typingHandles.set(batchId,handle);return handle}
  try{
   for(let i=0;i<processingLimit;i++){
@@ -112,6 +132,14 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
     if(!activity){out.failed++;continue}
     const heartbeat=startHeartbeat(d,c.batch_id,c.lease_token,activity.attempt_id)
     if(c.channel==='telegram')ensureTyping(c.batch_id,c.conversa_id)
+   if(c.channel==='whatsapp'&&d.startWhatsAppPresence){
+    presenceHandles.set(c.batch_id,undefined)
+    try{
+     const started=d.startWhatsAppPresence(c.conversa_id,event=>observeWhatsAppPresence(d,event))
+     if(started&&typeof (started as PromiseLike<TypingHandle>).then==='function')void Promise.resolve(started as Promise<TypingHandle>).then(handle=>{if(closedPresence.has(c.batch_id)||!presenceHandles.has(c.batch_id))handle.stop();else presenceHandles.set(c.batch_id,handle)}).catch(()=>observeWhatsAppPresence(d,{event:'unavailable',reason:'provider_unavailable'}))
+     else { const handle=started as TypingHandle;if(closedPresence.has(c.batch_id))handle.stop();else presenceHandles.set(c.batch_id,handle) }
+    }catch{observeWhatsAppPresence(d,{event:'unavailable',reason:'provider_unavailable'});releasePresence(c.batch_id)}
+   }
     let retainGenerationActivity=false
     try{
      const startedAt=d.now()
@@ -125,7 +153,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
      retainGenerationActivity=true;out.completed++
     }finally{
      heartbeat.stop()
-     if(!retainGenerationActivity){releaseTyping(c.batch_id);await d.clearActivity?.(c.batch_id,activity.attempt_id)}
+     if(!retainGenerationActivity){releaseTyping(c.batch_id);releasePresence(c.batch_id);await d.clearActivity?.(c.batch_id,activity.attempt_id)}
     }
    }catch{await d.fail(c.batch_id,c.lease_token,'generation_failed');out.failed++}
   }
@@ -142,7 +170,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
    try{
     const remainingMs=job.remaining_ms??pacedRemainders.get(job.batch_id)
     const waitMs=job.canal==='telegram'&&runtimeEnabled&&!retainedTyping?Math.max(TELEGRAM_TYPING_RESTART_FLOOR_MS,remainingMs??0):remainingMs
-    if(waitMs!==undefined&&waitMs!==null&&job.canal==='telegram')await d.sleep(waitMs)
+    if(waitMs!==undefined&&waitMs!==null&&(job.canal==='telegram'||job.canal==='whatsapp'))await d.sleep(waitMs)
     if(!(await d.beginDelivery(job.batch_id,job.lease_token)))continue
     out.delivery_attempted++
     const result=job.canal==='telegram'
@@ -152,11 +180,12 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
        :{success:true}
     if(result&&typeof result==='object'&&(('success'in result&&result.success===false)||('sucesso'in result&&result.sucesso===false)))await d.recordDeliveryFailure(job.batch_id,'provider_rejected')
    }catch{await d.recordDeliveryFailure(job.batch_id,'provider_unavailable')}
-   finally{releaseTyping(job.batch_id);if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
+   finally{releaseTyping(job.batch_id);releasePresence(job.batch_id);if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
   }
   return out
  }finally{
   for(const batchId of [...typingHandles.keys()])releaseTyping(batchId)
+  for(const batchId of [...presenceHandles.keys()])releasePresence(batchId)
  }
 }
 function row<T>(data:T|T[]|null):T|null{return Array.isArray(data)?data[0]??null:data}
@@ -170,6 +199,6 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
   setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),sendTelegramTyping:id=>enviarAcaoChatTelegram(id,'typing'),
   // Observador de produção: tag fixa + enums seguros, uma linha por tentativa e por desfecho.
   observeTelegramTyping:event=>console.info(`[sofia-inbound-batch] ${event.tag} event=${event.event}${event.reason?` reason=${event.reason}`:''}`),
-  sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text,typingDelayMs)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',typingDelayMs,salvarNoBanco:false})
+  sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',salvarNoBanco:false}),startWhatsAppPresence:async(id,observe)=>{const provider=await obterProvedorAtivo();return provider.constructor.name==='EvolutionProvider'?startEvolutionPresence(id,observe):{stop:()=>undefined}},observeWhatsAppPresence:event=>console.info(`[sofia-inbound-batch] ${event.tag} event=${event.event}${event.event==='unavailable'?` reason=${event.reason}`:''}`)
  }
 }

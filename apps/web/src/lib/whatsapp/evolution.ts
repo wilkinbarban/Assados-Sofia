@@ -6,6 +6,7 @@ import { validarEnvioWhatsAppSafety } from './safety'
 import { withSafeRetry } from './retry'
 import { calcularDelayDigitacao } from './delays'
 import { whatsappCircuitBreaker } from './circuit-breaker'
+import { createEvolutionPresence, type EvolutionPresenceEvent } from './evolution-presence'
 
 export function evolutionMaxRetries(payload: EnviarMensagemPayload): number {
   return payload.salvarNoBanco === false ? 0 : 2
@@ -136,14 +137,8 @@ export async function enviarMensagemEvolution(
       url = `${cleanUrl}/message/sendText/${instanceName}`
       bodyData = {
         number: telefone,
-        options: {
-          delay: typingDelayMs,
-          presence: 'composing'
-        },
+        ...(payload.salvarNoBanco === false ? {} : { delay: typingDelayMs }),
         text: conteudoFinal || '',
-        textMessage: {
-          text: conteudoFinal || ''
-        }
       }
     }
 
@@ -160,8 +155,8 @@ export async function enviarMensagemEvolution(
         })
 
         if (!res.ok) {
-          const errorData = await res.json().catch(() => ({}))
-          throw new Error(`HTTP ${res.status} Erro na Evolution API (${res.statusText}): ${JSON.stringify(errorData)}`)
+          await res.text().catch(() => '')
+          throw new Error(`HTTP ${res.status} Erro na Evolution API (${res.statusText})`)
         }
 
         return res
@@ -205,6 +200,32 @@ export async function enviarMensagemEvolution(
     whatsappMensagemId,
     mensagem: novaMensagem
   }
+}
+
+export async function startEvolutionPresence(
+  conversaId: string,
+  observe?: (event: EvolutionPresenceEvent) => void | Promise<void>,
+): Promise<{ stop: () => void }> {
+  const apiUrl = await obterConfiguracaoSistema('EVOLUTION_API_URL')
+  const apiKey = await obterConfiguracaoSistema('EVOLUTION_API_KEY')
+  const instanceName = await obterConfiguracaoSistema('EVOLUTION_INSTANCE_NAME')
+  if (isEvolutionMockMode(apiUrl, apiKey, instanceName)) return { stop: () => undefined }
+  const { telefone } = await validarJanelaEnvio(conversaId, { texto: '', templateName: 'presence' })
+  const cleanUrl = apiUrl!.replace(/\/$/, '')
+  return createEvolutionPresence({
+    observe,
+    setTimeout: (callback, ms) => setTimeout(callback, ms),
+    clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+    send: async () => {
+      const response = await fetch(`${cleanUrl}/chat/sendPresence/${instanceName}`, {
+        method: 'POST', headers: { 'apikey': apiKey!, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ number: telefone, presence: 'composing', delay: 4000 }),
+      })
+      if (!response.ok) return false
+      const body: unknown = await response.json().catch(() => null)
+      return !!body && typeof body === 'object' && (body as { presence?: unknown }).presence === 'composing'
+    },
+  })
 }
 
 export class EvolutionProvider implements ProvedorWhatsApp {
@@ -258,10 +279,10 @@ export async function sendOtpEvolution(
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
+      await response.text().catch(() => '')
       return {
         sucesso: false,
-        error: `Erro na Evolution API (${response.statusText}): ${JSON.stringify(errorData)}`
+        error: `Erro na Evolution API (${response.statusText}): `
       }
     }
 

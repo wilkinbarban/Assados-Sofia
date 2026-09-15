@@ -1,4 +1,6 @@
 import { extrairAcaoInterativa } from './inbound-normalizer'
+import { obterCartoesCombosOficiais } from '@/lib/cardapio/cards'
+import { enviarCatalogoCombosWhatsApp } from './gateways/catalog-gateway'
 import {
   adicionarItemAoCarrinho,
   obterOuCriarCarrinhoAtivo,
@@ -18,6 +20,7 @@ export interface ProcessarAcaoOutput {
   respostaTexto?: string
   carrinho?: CarrinhoCompleto
   error?: string
+  catalog?: { sent?: number; error?: string }
 }
 
 function formatarMoeda(centavos: number): string {
@@ -65,6 +68,29 @@ export async function processarAcaoInterativaWhatsApp(
   }
 
   const { scope, action, entityId } = acao
+
+  if (scope === 'catalog' && action === 'view') {
+    const officialCards = obterCartoesCombosOficiais()
+    const query = input.supabaseClient?.from?.('produtos')
+    if (!query) return { handled: true, error: 'query_unavailable', respostaTexto: 'Não consegui carregar o catálogo agora. Tente novamente em instantes.' }
+    const { data, error } = await query.select('id, nome, descricao, preco_centavos, url_imagem').eq('ativo', true)
+    if (error) return { handled: true, error: 'query_unavailable', respostaTexto: 'Não consegui carregar o catálogo agora. Tente novamente em instantes.' }
+    const productsById = new Map<string, any>((data || []).map((product: any) => [product.id, product]))
+    const products = officialCards.map((official) => {
+      const product = productsById.get(official.id)
+      if (!product) return null
+      return {
+        id: product.id,
+        nome: product.nome,
+        descricao: product.descricao,
+        precoCentavos: product.preco_centavos,
+        urlImagem: product.url_imagem,
+      }
+    }).filter(Boolean).slice(0, 4) as any[]
+    if (!products.length) return { handled: true, error: 'empty', respostaTexto: 'O catálogo está indisponível no momento. Tente novamente em instantes.' }
+    const delivery = await enviarCatalogoCombosWhatsApp(input.telefone, products)
+    return { handled: true, catalog: delivery, error: delivery.error, respostaTexto: delivery.success ? undefined : 'Não consegui carregar o catálogo agora. Tente novamente em instantes.' }
+  }
 
   // 1. Escopo de Carrinho
   if (scope === 'cart') {

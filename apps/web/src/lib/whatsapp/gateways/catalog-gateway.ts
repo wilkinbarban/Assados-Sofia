@@ -19,6 +19,78 @@ export interface EnviarCardapioResult {
   error?: string
 }
 
+export interface CatalogDeliveryResult {
+  success: boolean
+  messageId?: string
+  sent?: number
+  error?: 'config_unavailable' | 'provider_rejected' | 'provider_unavailable' | 'no_viable_products'
+}
+
+function safeCatalogError(response: Response): CatalogDeliveryResult['error'] {
+  return response.status >= 500 ? 'provider_unavailable' : 'provider_rejected'
+}
+
+async function getEvolutionConfig() {
+  const [url, apiKey, instance] = await Promise.all([
+    obterConfiguracaoSistema('EVOLUTION_API_URL'),
+    obterConfiguracaoSistema('EVOLUTION_API_KEY'),
+    obterConfiguracaoSistema('EVOLUTION_INSTANCE_NAME'),
+  ])
+  return url && apiKey && instance ? { url: url.replace(/\/$/, ''), apiKey, instance } : null
+}
+
+async function postCatalogMessage(path: string, config: { url: string; apiKey: string; instance: string }, payload: unknown) {
+  let response: Response
+  try {
+    response = await fetch(`${config.url}${path}/${encodeURIComponent(config.instance)}`, {
+      method: 'POST',
+      headers: { apikey: config.apiKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  } catch {
+    return { ok: false as const, error: 'provider_unavailable' as const }
+  }
+  if (response.status < 200 || response.status >= 300) return { ok: false as const, error: safeCatalogError(response) }
+  let body: any
+  try { body = await response.json() } catch { body = null }
+  const messageId = body?.key?.id || body?.message?.key?.id || body?.id
+  return typeof messageId === 'string' && messageId ? { ok: true as const, messageId } : { ok: false as const, error: 'provider_rejected' as const }
+}
+
+export async function enviarPromptCatalogoWhatsApp(telefone: string): Promise<CatalogDeliveryResult> {
+  const config = await getEvolutionConfig()
+  if (!config) return { success: false, error: 'config_unavailable' }
+  const result = await postCatalogMessage('/message/sendButtons', config, {
+    number: telefone,
+    title: '🔥 Cardápio Oficial de Domingo',
+    description: 'Toque no botão abaixo para ver os combos oficiais.',
+    footer: 'Casa de Assados Brasa & Sabor · Umbará',
+    buttons: [{ type: 'reply', displayText: 'Ver catálogo', id: 'catalog:view' }],
+  })
+  return result.ok ? { success: true, messageId: result.messageId } : { success: false, error: result.error }
+}
+
+export async function enviarCatalogoCombosWhatsApp(
+  telefone: string,
+  produtos: ProdutoCardapioItem[],
+): Promise<CatalogDeliveryResult> {
+  const config = await getEvolutionConfig()
+  if (!config) return { success: false, error: 'config_unavailable' }
+  let sent = 0
+  for (const produto of produtos.slice(0, 4)) {
+    if (!produto.urlImagem || !produto.nome || !produto.descricao || !Number.isFinite(produto.precoCentavos)) continue
+    const result = await postCatalogMessage('/message/sendMedia', config, {
+      number: telefone,
+      mediatype: 'image',
+      media: produto.urlImagem,
+      caption: `🔥 *${produto.nome}*\n${produto.descricao}\n\n💰 *${formatarMoeda(produto.precoCentavos)}*`,
+    })
+    if (!result.ok) return { success: false, sent, error: result.error }
+    sent += 1
+  }
+  return sent ? { success: true, sent } : { success: false, sent: 0, error: 'no_viable_products' }
+}
+
 function formatarMoeda(centavos: number): string {
   return (centavos / 100).toLocaleString('pt-BR', {
     style: 'currency',
@@ -122,8 +194,8 @@ async function postEvolution(
     body: JSON.stringify(payload),
   })
 
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '')
+  if (response.ok === false || (typeof response.status === 'number' && (response.status < 200 || response.status >= 300))) {
+    const detail = typeof response.text === 'function' ? await response.text().catch(() => '') : ''
     throw new Error(
       `Evolution API rejeitou ${mode} com status ${response.status}${detail ? `: ${detail}` : ''}`,
     )
