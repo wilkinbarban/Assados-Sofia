@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import {
   enviarCardapioWhatsApp,
+      enviarPromptCatalogoWhatsApp,
+      enviarCatalogoCombosWhatsApp,
   montarPayloadCarrossel,
   montarPayloadCardsFallback,
   type ProdutoCardapioItem,
@@ -35,6 +37,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+        mockFetch.mockReset()
     vi.mocked(configSistema.obterConfiguracaoSistema).mockImplementation(async (key: string) => {
       if (key === 'EVOLUTION_API_URL') return 'http://127.0.0.1:8086'
       if (key === 'EVOLUTION_API_KEY') return 'test-api-key'
@@ -72,9 +75,52 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
     expect(cards[0].caption).toContain('1️⃣ Adicionar ao pedido')
   })
 
-  it('enviarCardapioWhatsApp envia carrossel nativo quando feature flag está ativa e API responde 200', async () => {
+  it('enviarPromptCatalogoWhatsApp sends one safe reply button', async () => {
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ key: { id: 'ack-1' } }) })
+      const resultado = await enviarPromptCatalogoWhatsApp('5541999998888')
+      expect(resultado).toEqual({ success: true, messageId: 'ack-1' })
+      expect(mockFetch).toHaveBeenCalledWith(
+        'http://127.0.0.1:8086/message/sendButtons/asados-bot',
+        expect.objectContaining({ method: 'POST' }),
+      )
+    })
+
+    it('enviarCatalogoCombosWhatsApp sends at most four individual image messages', async () => {
+      mockFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({ key: { id: 'ack' } }) })
+      const produtos = Array.from({ length: 5 }, (_, index) => ({
+        id: `a${index + 1}`, nome: `Combo ${index + 1}`, descricao: `Descrição ${index + 1}`,
+        precoCentavos: 1000 + index, urlImagem: `https://example.test/${index + 1}.jpg`,
+      }))
+      const resultado = await enviarCatalogoCombosWhatsApp('5541999998888', produtos)
+      expect(resultado).toEqual({ success: true, sent: 4 })
+      expect(mockFetch).toHaveBeenCalledTimes(4)
+    })
+
+    it('skips invalid image cards and reports no viable products honestly', async () => {
+          const resultado = await enviarCatalogoCombosWhatsApp('5541999998888', [{ ...mockProdutos[0], urlImagem: null }])
+          expect(resultado).toEqual({ success: false, sent: 0, error: 'no_viable_products' })
+          expect(mockFetch).not.toHaveBeenCalled()
+        })
+
+        it('stops after the first sequential acknowledgement failure', async () => {
+          mockFetch.mockResolvedValueOnce({ status: 201, json: async () => ({ key: { id: 'ack-1' } }) }).mockResolvedValueOnce({ status: 503, json: async () => ({}) }).mockResolvedValueOnce({ status: 201, json: async () => ({ key: { id: 'ack-3' } }) })
+          const resultado = await enviarCatalogoCombosWhatsApp('5541999998888', [...mockProdutos, { id: 'prod-3', nome: 'Combo 3', descricao: 'Descrição', precoCentavos: 1000, urlImagem: 'https://example.test/3.jpg' }])
+          expect(resultado).toEqual({ success: false, sent: 1, error: 'provider_unavailable' })
+          expect(mockFetch).toHaveBeenCalledTimes(2)
+        })
+
+        it('URL-encodes the configured Evolution instance', async () => {
+          vi.mocked(configSistema.obterConfiguracaoSistema).mockImplementation(async (key: string) => key === 'EVOLUTION_API_URL' ? 'http://127.0.0.1:8086' : key === 'EVOLUTION_API_KEY' ? 'key' : key === 'EVOLUTION_API_INSTANCE_NAME' ? 'asados/bot' : key === 'EVOLUTION_INSTANCE_NAME' ? 'asados/bot' : key === 'WHATSAPP_INTERACTIVE_CAROUSEL_ENABLED' ? 'true' : null)
+          mockFetch.mockResolvedValueOnce({ status: 200, json: async () => ({ key: { id: 'ack-1' } }) })
+          await enviarPromptCatalogoWhatsApp('5541999998888')
+          expect(mockFetch.mock.calls[0][0]).toBe('http://127.0.0.1:8086/message/sendButtons/asados%2Fbot')
+        })
+
+        it('enviarCardapioWhatsApp envia carrossel nativo quando feature flag está ativa e API responde 200', async () => {
     mockFetch.mockResolvedValueOnce({
       ok: true,
+      status: 200,
+          text: async () => '',
       json: async () => ({ status: 'SUCCESS' }),
     })
 
