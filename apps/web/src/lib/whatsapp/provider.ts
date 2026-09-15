@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import type { EvolutionPresenceEvent } from './evolution-presence'
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
 import { cache } from 'react'
 
@@ -32,6 +33,8 @@ export interface ResultadoEnvio {
 
 export interface ProvedorWhatsApp {
   enviarMensagem(conversaId: string, payload: EnviarMensagemPayload): Promise<ResultadoEnvio>;
+  /** Capability-based presence avoids class-name checks, which production minification renames. */
+  iniciarPresenca?(conversaId: string, observe?: (event: EvolutionPresenceEvent) => void | Promise<void>): Promise<{ stop: () => void }>;
 }
 
 export class WhatsAppWindowClosedError extends Error {

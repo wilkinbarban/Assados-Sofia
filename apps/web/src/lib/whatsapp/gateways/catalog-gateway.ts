@@ -1,4 +1,5 @@
 import { obterConfiguracaoSistema } from '@/lib/config/sistema'
+import { evolutionHeaders } from '@/lib/whatsapp/evolution-headers'
 
 export interface ProdutoCardapioItem {
   id: string
@@ -44,7 +45,7 @@ async function postCatalogMessage(path: string, config: { url: string; apiKey: s
   try {
     response = await fetch(`${config.url}${path}/${encodeURIComponent(config.instance)}`, {
       method: 'POST',
-      headers: { apikey: config.apiKey, 'Content-Type': 'application/json' },
+      headers: evolutionHeaders(config.apiKey),
       body: JSON.stringify(payload),
     })
   } catch {
@@ -252,11 +253,7 @@ export async function enviarCardapioWhatsApp(
   }
 
   const cleanUrl = evolutionUrl.replace(/\/$/, '')
-  const headers = {
-    apikey: evolutionApiKey,
-    'Content-Type': 'application/json',
-    Origin: process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org',
-  }
+  const headers = evolutionHeaders(evolutionApiKey)
 
   // Native carousel stays opt-in until the pinned Evolution image passes the compatibility matrix.
   if (carouselEnabled === 'true') {
