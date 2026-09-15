@@ -1,4 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+const presenceMocks = vi.hoisted(() => {
+  class EvolutionProvider {}
+  class MetaProvider {}
+  const state: { activeProvider: object } = { activeProvider: new MetaProvider() }
+  return {
+    EvolutionProvider,
+    MetaProvider,
+    state,
+    startEvolutionPresence: vi.fn(),
+    obterProvedorAtivo: vi.fn(async () => state.activeProvider),
+  }
+})
+vi.mock('@/lib/whatsapp/evolution', () => ({
+  EvolutionProvider: presenceMocks.EvolutionProvider,
+  startEvolutionPresence: presenceMocks.startEvolutionPresence,
+}))
+vi.mock('@/lib/whatsapp/provider', () => ({ obterProvedorAtivo: presenceMocks.obterProvedorAtivo }))
+
 import { createSofiaBatchWorkerDeps, formatBatchContext, runSofiaBatchMaintenance, type BatchWorkerDeps } from '@/lib/sofia/inbound-batch-worker'
 import { inboundBatchProcessingEnabled, inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
 
@@ -90,7 +109,9 @@ describe('Sofia inbound batch worker', () => {
       clearActivity:vi.fn().mockResolvedValue(true),
     })
     await runSofiaBatchMaintenance(d,2)
-    expect(d.sleep).not.toHaveBeenCalled()
+    expect(d.sleep).toHaveBeenCalledWith(37)
+     expect(d.sleep).toHaveBeenCalledBefore(d.beginDelivery as ReturnType<typeof vi.fn>)
+
     expect(d.beginDelivery).toHaveBeenCalledBefore(d.sendWhatsApp as ReturnType<typeof vi.fn>)
     expect(d.sendWhatsApp).toHaveBeenCalledWith('c','r',37)
   })
@@ -597,7 +618,89 @@ describe('Sofia inbound batch worker', () => {
     expect(serialized).not.toContain('1001')
     expect(serialized).not.toContain('chat not found')
   })
-  it('wires a sanitized production typing observer that emits only fixed tags and safe enums',()=>{
+  it('stops a deferred WhatsApp presence handle after a null delivery claim', async () => {
+        vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+        let resolvePresence!: (handle: { stop: () => void }) => void
+        const stop = vi.fn()
+        const deferredPresence = new Promise<{ stop: () => void }>(resolve => { resolvePresence = resolve })
+        const d = deps({
+          claimBatch: vi.fn().mockResolvedValueOnce({ ...claim, channel:'whatsapp' as const }).mockResolvedValue(null),
+          beginActivity: vi.fn().mockResolvedValue({ attempt_id:'g', expires_at:'' }),
+          clearActivity: vi.fn().mockResolvedValue(true),
+          startWhatsAppPresence: vi.fn().mockReturnValue(deferredPresence),
+          claimDelivery: vi.fn().mockResolvedValue(null),
+        })
+        await runSofiaBatchMaintenance(d, 1)
+        resolvePresence({ stop })
+        await Promise.resolve(); await Promise.resolve()
+        expect(d.startWhatsAppPresence).toHaveBeenCalledWith('c', expect.any(Function))
+        expect(stop).toHaveBeenCalledOnce()
+      })
+      it('stops a deferred WhatsApp presence handle after generation failure', async () => {
+        vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+        let resolvePresence!: (handle: { stop: () => void }) => void
+        const stop = vi.fn()
+        const deferredPresence = new Promise<{ stop: () => void }>(resolve => { resolvePresence = resolve })
+        const d = deps({
+          claimBatch: vi.fn().mockResolvedValueOnce({ ...claim, channel:'whatsapp' as const }).mockResolvedValue(null),
+          beginActivity: vi.fn().mockResolvedValue({ attempt_id:'g', expires_at:'' }),
+          clearActivity: vi.fn().mockResolvedValue(true),
+          startWhatsAppPresence: vi.fn().mockReturnValue(deferredPresence),
+          generate: vi.fn().mockRejectedValue(new Error('generation failed')),
+        })
+        await runSofiaBatchMaintenance(d, 1)
+        resolvePresence({ stop })
+        await Promise.resolve(); await Promise.resolve()
+        expect(d.startWhatsAppPresence).toHaveBeenCalledWith('c', expect.any(Function))
+        expect(stop).toHaveBeenCalledOnce()
+      })
+      it('reports sanitized WhatsApp presence initialization failure without blocking delivery', async () => {
+        vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+        const events: unknown[] = []
+        const delivery = { batch_id:'b', conversa_id:'c', canal:'whatsapp' as const, response_text:'r', lease_token:'dl' }
+        const d = deps({
+          claimBatch: vi.fn().mockResolvedValueOnce({ ...claim, channel:'whatsapp' as const }).mockResolvedValue(null),
+          beginActivity: vi.fn().mockResolvedValue({ attempt_id:'g', expires_at:'' }),
+          completePaced: vi.fn().mockResolvedValue({ remaining_ms:0 }),
+          claimDelivery: vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+          adoptActivity: vi.fn().mockResolvedValue({ attempt_id:'d', expires_at:'' }),
+          clearActivity: vi.fn().mockResolvedValue(true),
+          startWhatsAppPresence: vi.fn().mockRejectedValue(new Error('provider secret leaked')),
+          observeWhatsAppPresence: observe(events),
+        })
+        const result = await runSofiaBatchMaintenance(d, 2)
+        expect(result).toMatchObject({ completed:1, delivery_attempted:1 })
+        expect(d.sendWhatsApp).toHaveBeenCalledWith('c','r',0)
+        expect(events).toEqual([{ tag:'evolution_presence', event:'unavailable', reason:'provider_unavailable' }])
+        expect(JSON.stringify(events)).not.toContain('provider secret leaked')
+      })
+      it('starts Evolution presence only for the active Evolution provider', async () => {
+        const db = { rpc: vi.fn() }
+        const production = createSofiaBatchWorkerDeps(db as never)
+        const observer = vi.fn()
+        presenceMocks.startEvolutionPresence.mockResolvedValue({ stop: vi.fn() })
+        presenceMocks.state.activeProvider = new presenceMocks.EvolutionProvider()
+        await provided(production.startWhatsAppPresence)('c', observer)
+        expect(presenceMocks.startEvolutionPresence).toHaveBeenCalledWith('c', observer)
+        presenceMocks.startEvolutionPresence.mockClear()
+        presenceMocks.state.activeProvider = new presenceMocks.MetaProvider()
+        const metaHandle = await provided(production.startWhatsAppPresence)('c', observer)
+        expect(presenceMocks.startEvolutionPresence).not.toHaveBeenCalled()
+        expect(metaHandle).toEqual({ stop: expect.any(Function) })
+      })
+      it('wires a sanitized production WhatsApp presence observer', () => {
+        const infoSpy = vi.spyOn(console,'info').mockImplementation(() => undefined)
+        const production = createSofiaBatchWorkerDeps({} as never)
+        const observeProduction = provided(production.observeWhatsAppPresence)
+        observeProduction({ tag:'evolution_presence', event:'attempt' })
+        observeProduction({ tag:'evolution_presence', event:'unavailable', reason:'provider_unavailable' })
+        expect(infoSpy.mock.calls).toEqual([
+          ['[sofia-inbound-batch] evolution_presence event=attempt'],
+          ['[sofia-inbound-batch] evolution_presence event=unavailable reason=provider_unavailable'],
+        ])
+        infoSpy.mockRestore()
+      })
+      it('wires a sanitized production typing observer that emits only fixed tags and safe enums',()=>{
     const infoSpy=vi.spyOn(console,'info').mockImplementation(()=>undefined)
     const production=createSofiaBatchWorkerDeps({} as never)
     const observeProduction=provided(production.observeTelegramTyping)
