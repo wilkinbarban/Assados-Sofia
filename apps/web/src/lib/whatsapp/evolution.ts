@@ -7,6 +7,7 @@ import { withSafeRetry } from './retry'
 import { calcularDelayDigitacao } from './delays'
 import { whatsappCircuitBreaker } from './circuit-breaker'
 import { createEvolutionPresence, type EvolutionPresenceEvent } from './evolution-presence'
+import { evolutionHeaders } from './evolution-headers'
 
 export function evolutionMaxRetries(payload: EnviarMensagemPayload): number {
   return payload.salvarNoBanco === false ? 0 : 2
@@ -146,11 +147,7 @@ export async function enviarMensagemEvolution(
       return withSafeRetry(async () => {
         const res = await fetch(url, {
           method: 'POST',
-          headers: {
-            'apikey': apiKey!,
-            'Content-Type': 'application/json',
-            'Origin': process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org'
-          },
+          headers: evolutionHeaders(apiKey!),
           body: JSON.stringify(bodyData)
         })
 
@@ -218,7 +215,7 @@ export async function startEvolutionPresence(
     clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
     send: async () => {
       const response = await fetch(`${cleanUrl}/chat/sendPresence/${instanceName}`, {
-        method: 'POST', headers: { 'apikey': apiKey!, 'Content-Type': 'application/json' },
+        method: 'POST', headers: evolutionHeaders(apiKey!),
         body: JSON.stringify({ number: telefone, presence: 'composing', delay: 4000 }),
       })
       if (!response.ok) return false

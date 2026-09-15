@@ -2,10 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const presenceMocks = vi.hoisted(() => {
   class EvolutionProvider {}
+  // Next.js production minification renames the exported EvolutionProvider class (it ships as `q`),
+  // so presence must be selected by capability and never by constructor name.
+  class q { iniciarPresenca = vi.fn() }
   class MetaProvider {}
   const state: { activeProvider: object } = { activeProvider: new MetaProvider() }
   return {
     EvolutionProvider,
+    q,
     MetaProvider,
     state,
     startEvolutionPresence: vi.fn(),
@@ -674,19 +678,23 @@ describe('Sofia inbound batch worker', () => {
         expect(events).toEqual([{ tag:'evolution_presence', event:'unavailable', reason:'provider_unavailable' }])
         expect(JSON.stringify(events)).not.toContain('provider secret leaked')
       })
-      it('starts Evolution presence only for the active Evolution provider', async () => {
-        const db = { rpc: vi.fn() }
-        const production = createSofiaBatchWorkerDeps(db as never)
+      it('starts presence from a provider whose class name was renamed by minification', async () => {
+        const production = createSofiaBatchWorkerDeps({ rpc: vi.fn() } as never)
         const observer = vi.fn()
-        presenceMocks.startEvolutionPresence.mockResolvedValue({ stop: vi.fn() })
-        presenceMocks.state.activeProvider = new presenceMocks.EvolutionProvider()
-        await provided(production.startWhatsAppPresence)('c', observer)
-        expect(presenceMocks.startEvolutionPresence).toHaveBeenCalledWith('c', observer)
-        presenceMocks.startEvolutionPresence.mockClear()
+        const handle = { stop: vi.fn() }
+        const provider = new presenceMocks.q()
+        provider.iniciarPresenca.mockResolvedValue(handle)
+        presenceMocks.state.activeProvider = provider
+        const result = await provided(production.startWhatsAppPresence)('c', observer)
+        expect(provider.iniciarPresenca).toHaveBeenCalledWith('c', observer)
+        expect(result).toBe(handle)
+      })
+      it('does not start presence for a provider without the capability', async () => {
+        const production = createSofiaBatchWorkerDeps({ rpc: vi.fn() } as never)
         presenceMocks.state.activeProvider = new presenceMocks.MetaProvider()
-        const metaHandle = await provided(production.startWhatsAppPresence)('c', observer)
+        const result = await provided(production.startWhatsAppPresence)('c', vi.fn())
+        expect(result).toEqual({ stop: expect.any(Function) })
         expect(presenceMocks.startEvolutionPresence).not.toHaveBeenCalled()
-        expect(metaHandle).toEqual({ stop: expect.any(Function) })
       })
       it('wires a sanitized production WhatsApp presence observer', () => {
         const infoSpy = vi.spyOn(console,'info').mockImplementation(() => undefined)

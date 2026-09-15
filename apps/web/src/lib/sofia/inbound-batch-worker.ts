@@ -5,7 +5,6 @@ import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
 import { inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
 import { enviarAcaoChatTelegram, enviarMensagemTelegram, TELEGRAM_CHAT_ACTION_REASONS, type TelegramChatActionOutcome, type TelegramChatActionReason, type TelegramChatActionReport } from '@/lib/telegram/send'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
-import { startEvolutionPresence } from '@/lib/whatsapp/evolution'
     import type { EvolutionPresenceEvent } from '@/lib/whatsapp/evolution-presence'
     import { obterProvedorAtivo } from '@/lib/whatsapp/provider'
 import { isWhatsAppInboundEligibleForSofia } from '@/lib/whatsapp/sofia-control'
@@ -199,6 +198,6 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
   setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),sendTelegramTyping:id=>enviarAcaoChatTelegram(id,'typing'),
   // Observador de produção: tag fixa + enums seguros, uma linha por tentativa e por desfecho.
   observeTelegramTyping:event=>console.info(`[sofia-inbound-batch] ${event.tag} event=${event.event}${event.reason?` reason=${event.reason}`:''}`),
-  sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',salvarNoBanco:false}),startWhatsAppPresence:async(id,observe)=>{const provider=await obterProvedorAtivo();return provider.constructor.name==='EvolutionProvider'?startEvolutionPresence(id,observe):{stop:()=>undefined}},observeWhatsAppPresence:event=>console.info(`[sofia-inbound-batch] ${event.tag} event=${event.event}${event.event==='unavailable'?` reason=${event.reason}`:''}`)
+  sendTelegram:(id,text)=>enviarMensagemTelegram(id,{texto:text,remetente:'ia',salvarNoBanco:false}),sendWhatsApp:(id,text)=>enviarMensagemWhatsapp(id,{texto:text,remetente:'ia',salvarNoBanco:false}),startWhatsAppPresence:async(id,observe)=>{const provider=await obterProvedorAtivo();const iniciarPresenca=provider.iniciarPresenca;if(typeof iniciarPresenca!=='function')return {stop:()=>undefined};return iniciarPresenca.call(provider,id,observe)}, observeWhatsAppPresence:event=>console.info(`[sofia-inbound-batch] ${event.tag} event=${event.event}${event.event==='unavailable'?` reason=${event.reason}`:''}`)
  }
 }

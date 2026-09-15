@@ -28,7 +28,7 @@ function setup() {
   return { conversation, messages }
 }
 
-beforeEach(() => { vi.clearAllMocks(); setup() })
+beforeEach(() => { vi.clearAllMocks(); setup(); vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://test.example') })
 
 describe('Evolution transport contract', () => {
   it('sends durable messages with top-level delay and no vendor options', async () => {
@@ -48,6 +48,23 @@ describe('Evolution transport contract', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('SECRET_BODY', { status: 400, statusText: 'Bad Request' })))
     await expect(enviarMensagemEvolution('c', { texto: 'hello' })).rejects.toThrow('HTTP 400 Erro na Evolution API (Bad Request)')
     await expect(enviarMensagemEvolution('c', { texto: 'hello' })).rejects.not.toThrow('SECRET_BODY')
+  })
+  it('sends presence with the configured Origin and API key', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ presence: 'composing' }), { status: 200 })))
+    const handle = await startEvolutionPresence('c')
+    expect(fetch).toHaveBeenCalledWith('https://evolution.example/chat/sendPresence/instance', expect.objectContaining({
+      headers: expect.objectContaining({ apikey: 'test-key', Origin: 'https://test.example' }),
+    }))
+    handle.stop()
+  })
+  it('uses the fallback Origin when the public app URL is empty', async () => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', '')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ presence: 'composing' }), { status: 200 })))
+    const handle = await startEvolutionPresence('c')
+    expect(fetch).toHaveBeenCalledWith('https://evolution.example/chat/sendPresence/instance', expect.objectContaining({
+      headers: expect.objectContaining({ Origin: 'https://casadeasados.duckdns.org' }),
+    }))
+    handle.stop()
   })
   it.each([null, {}, { presence: 'paused' }])('sanitizes malformed or wrong presence responses', async body => {
     const events: unknown[] = []

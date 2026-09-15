@@ -81,7 +81,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
       expect(resultado).toEqual({ success: true, messageId: 'ack-1' })
       expect(mockFetch).toHaveBeenCalledWith(
         'http://127.0.0.1:8086/message/sendButtons/asados-bot',
-        expect.objectContaining({ method: 'POST' }),
+        expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Origin: 'https://casadeasados.duckdns.org' }) }),
       )
     })
 
@@ -94,6 +94,12 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
       const resultado = await enviarCatalogoCombosWhatsApp('5541999998888', produtos)
       expect(resultado).toEqual({ success: true, sent: 4 })
       expect(mockFetch).toHaveBeenCalledTimes(4)
+      for (const [url, init] of mockFetch.mock.calls) {
+        expect(url).toBe('http://127.0.0.1:8086/message/sendMedia/asados-bot')
+        expect(init).toEqual(expect.objectContaining({
+          headers: expect.objectContaining({ apikey: 'test-api-key', Origin: 'https://casadeasados.duckdns.org' }),
+        }))
+      }
     })
 
     it('skips invalid image cards and reports no viable products honestly', async () => {

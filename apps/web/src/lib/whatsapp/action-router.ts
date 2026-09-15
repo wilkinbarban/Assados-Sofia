@@ -1,6 +1,6 @@
 import { extrairAcaoInterativa } from './inbound-normalizer'
 import { obterCartoesCombosOficiais } from '@/lib/cardapio/cards'
-import { enviarCatalogoCombosWhatsApp } from './gateways/catalog-gateway'
+import { enviarCatalogoCombosWhatsApp, type CatalogDeliveryResult } from './gateways/catalog-gateway'
 import {
   adicionarItemAoCarrinho,
   obterOuCriarCarrinhoAtivo,
@@ -15,12 +15,22 @@ export interface ProcessarAcaoInput {
   supabaseClient?: any
 }
 
+/**
+ * Sanitized failure code. Closed by construction so it is always safe to log:
+ * the customer-facing detail lives only in `respostaTexto`.
+ */
+export type ProcessarAcaoError =
+  | 'cart_unavailable'
+  | 'query_unavailable'
+  | 'empty'
+  | NonNullable<CatalogDeliveryResult['error']>
+
 export interface ProcessarAcaoOutput {
   handled: boolean
   respostaTexto?: string
   carrinho?: CarrinhoCompleto
-  error?: string
-  catalog?: { sent?: number; error?: string }
+  error?: ProcessarAcaoError
+  catalog?: { sent?: number; error?: NonNullable<CatalogDeliveryResult['error']> }
 }
 
 function formatarMoeda(centavos: number): string {
@@ -106,7 +116,7 @@ export async function processarAcaoInterativaWhatsApp(
       if (!res.success || !res.carrinho) {
         return {
           handled: true,
-          error: res.error,
+          error: 'cart_unavailable',
           respostaTexto: `⚠️ Não consegui adicionar o item ao seu carrinho: ${res.error || 'Produto indisponível.'}`,
         }
       }
@@ -145,7 +155,7 @@ export async function processarAcaoInterativaWhatsApp(
       if (!res.success || !res.carrinho) {
         return {
           handled: true,
-          error: res.error,
+          error: 'cart_unavailable',
           respostaTexto: `⚠️ Não foi possível carregar seu carrinho no momento.`,
         }
       }

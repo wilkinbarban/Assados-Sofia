@@ -17,6 +17,7 @@ import { decodeEvolutionDocumentSize } from '@/lib/whatsapp/evolution-document-s
 import { paymentProofOperationalGates } from '@/lib/payment-proofs/operational-gates'
 import { evolutionInboundBatchEnqueueEnabled } from '@/lib/sofia/inbound-batch-gates'
 import { attachPersistedSofiaInboundMessage } from '@/lib/sofia/inbound-batch-producer'
+import { evolutionHeaders } from '@/lib/whatsapp/evolution-headers'
 
 async function resolveWhatsAppPersistenceConversation(
   supabaseAdmin: ReturnType<typeof createAdminClient>,
@@ -60,11 +61,7 @@ async function sendEvolutionScheduleMessage(phone: string, message: string): Pro
   const cleanUrl = evolutionUrl.replace(/\/$/, '')
   await fetch(`${cleanUrl}/message/sendText/${evolutionInstanceName}`, {
     method: 'POST',
-    headers: {
-      'apikey': evolutionApiKey,
-      'Content-Type': 'application/json',
-      'Origin': process.env.NEXT_PUBLIC_APP_URL || 'https://casadeasados.duckdns.org'
-    },
+    headers: evolutionHeaders(evolutionApiKey),
     body: JSON.stringify({
       number: phone,
       text: message,
@@ -449,6 +446,8 @@ export async function POST(request: Request) {
         supabaseClient: supabaseAdmin,
       })
 
+      if (acaoRes.handled && acaoRes.error) console.error('[Evolution Webhook] INTERACTIVE_ACTION_FAILED', acaoRes.error)
+
       if (acaoRes.handled && acaoRes.respostaTexto) {
         try {
           await sendEvolutionScheduleMessage(sanitizedPhone, acaoRes.respostaTexto)
@@ -488,6 +487,7 @@ export async function POST(request: Request) {
     // Catalog opt-in is handled before batching/RAG; keywords only send one prompt button.
     if (!norm?.interactiveId && /\b(card[aá]pio|menu|combos?)\b/i.test(textBody || caption || '')) {
       const prompt = await enviarPromptCatalogoWhatsApp(sanitizedPhone)
+      if (!prompt.success) console.error('[Evolution Webhook] CATALOG_PROMPT_FAILED', prompt.error)
       return NextResponse.json({
         success: prompt.success,
         status: prompt.success ? 'catalog_prompt_sent' : 'catalog_prompt_unavailable',
