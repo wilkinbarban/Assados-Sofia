@@ -229,6 +229,13 @@ export class EvolutionProvider implements ProvedorWhatsApp {
   async enviarMensagem(conversaId: string, payload: EnviarMensagemPayload): Promise<ResultadoEnvio> {
     return enviarMensagemEvolution(conversaId, payload)
   }
+
+  async iniciarPresenca(
+    conversaId: string,
+    observe?: (event: EvolutionPresenceEvent) => void
+  ): Promise<{ stop: () => void }> {
+    return startEvolutionPresence(conversaId, observe)
+  }
 }
 
 /**

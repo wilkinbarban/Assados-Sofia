@@ -75,15 +75,19 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
     expect(cards[0].caption).toContain('1️⃣ Adicionar ao pedido')
   })
 
-  it('enviarPromptCatalogoWhatsApp sends one safe reply button', async () => {
-      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ key: { id: 'ack-1' } }) })
-      const resultado = await enviarPromptCatalogoWhatsApp('5541999998888')
-      expect(resultado).toEqual({ success: true, messageId: 'ack-1' })
-      expect(mockFetch).toHaveBeenCalledWith(
-        'http://127.0.0.1:8086/message/sendButtons/asados-bot',
-        expect.objectContaining({ method: 'POST', headers: expect.objectContaining({ Origin: 'https://casadeasados.duckdns.org' }) }),
-      )
-    })
+  it('enviarPromptCatalogoWhatsApp sends official catalog prompt via sendText', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ key: { id: 'ack-1' } }) })
+    const resultado = await enviarPromptCatalogoWhatsApp('5541999998888')
+    expect(resultado).toEqual({ success: true, messageId: 'ack-1' })
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:8086/message/sendText/asados-bot',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ Origin: 'https://casadeasados.duckdns.org' }),
+        body: expect.stringContaining('Cardápio Oficial de Domingo'),
+      }),
+    )
+  })
 
     it('enviarCatalogoCombosWhatsApp sends at most four individual image messages', async () => {
       mockFetch.mockResolvedValue({ ok: true, status: 200, json: async () => ({ key: { id: 'ack' } }) })
@@ -119,7 +123,7 @@ describe('WhatsApp Catalog Gateway & Multi-Level Fallback (TDD)', () => {
           vi.mocked(configSistema.obterConfiguracaoSistema).mockImplementation(async (key: string) => key === 'EVOLUTION_API_URL' ? 'http://127.0.0.1:8086' : key === 'EVOLUTION_API_KEY' ? 'key' : key === 'EVOLUTION_API_INSTANCE_NAME' ? 'asados/bot' : key === 'EVOLUTION_INSTANCE_NAME' ? 'asados/bot' : key === 'WHATSAPP_INTERACTIVE_CAROUSEL_ENABLED' ? 'true' : null)
           mockFetch.mockResolvedValueOnce({ status: 200, json: async () => ({ key: { id: 'ack-1' } }) })
           await enviarPromptCatalogoWhatsApp('5541999998888')
-          expect(mockFetch.mock.calls[0][0]).toBe('http://127.0.0.1:8086/message/sendButtons/asados%2Fbot')
+          expect(mockFetch.mock.calls[0][0]).toBe('http://127.0.0.1:8086/message/sendText/asados%2Fbot')
         })
 
         it('enviarCardapioWhatsApp envia carrossel nativo quando feature flag está ativa e API responde 200', async () => {
