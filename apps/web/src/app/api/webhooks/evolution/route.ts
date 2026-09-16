@@ -484,10 +484,72 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, message: 'Fora do horário de atendimento', data: novaMensagem }, { status: 200 })
     }
 
-    // Catalog opt-in is handled before batching/RAG; keywords only send one prompt button.
+    // Catalog opt-in confirmation (e.g. customer replies "1" or "sim" after the prompt)
+    const trimmedInbound = (textBody || caption || '').trim()
+    if (!norm?.interactiveId && /^(1|sim|quero(\s+ver)?|ver\s+(as\s+)?fotos?|fotos?)$/i.test(trimmedInbound)) {
+      const { data: lastIaMsg } = await supabaseAdmin
+        .from('mensagens')
+        .select('conteudo, data_criacao')
+        .eq('conversa_id', conversaId)
+        .eq('remetente', 'ia')
+        .order('data_criacao', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      const promptAgeMs = lastIaMsg?.data_criacao
+        ? Date.now() - new Date(lastIaMsg.data_criacao).getTime()
+        : Infinity
+
+      const isPromptAnswer = !!lastIaMsg?.conteudo?.includes('Cardápio Oficial de Domingo') && promptAgeMs < 30 * 60 * 1000
+      if (isPromptAnswer) {
+        const acaoRes = await processarAcaoInterativaWhatsApp({
+          clienteId,
+          telefone: sanitizedPhone,
+          interactiveId: 'catalog:view',
+          supabaseClient: supabaseAdmin,
+        })
+
+        if (acaoRes.handled && acaoRes.error) {
+          console.error('[Evolution Webhook] CATALOG_CARDS_FAILED', acaoRes.error)
+        }
+
+        if (acaoRes.handled && acaoRes.respostaTexto) {
+          try {
+            await sendEvolutionScheduleMessage(sanitizedPhone, acaoRes.respostaTexto)
+            await supabaseAdmin.from('mensagens').insert({
+              conversa_id: conversaId,
+              remetente: 'ia',
+              conteudo: acaoRes.respostaTexto,
+            })
+          } catch {
+            console.error('[Evolution Webhook] CATALOG_FALLBACK_REPLY_FAILED')
+          }
+        }
+
+        return NextResponse.json({
+          success: true,
+          status: 'catalog_cards_delivered',
+          data: novaMensagem,
+        }, { status: 200 })
+      }
+    }
+
+    // Catalog opt-in is handled before batching/RAG; keywords only send one prompt text.
     if (!norm?.interactiveId && /\b(card[aá]pio|menu|combos?)\b/i.test(textBody || caption || '')) {
       const prompt = await enviarPromptCatalogoWhatsApp(sanitizedPhone)
-      if (!prompt.success) console.error('[Evolution Webhook] CATALOG_PROMPT_FAILED', prompt.error)
+      if (!prompt.success) {
+        console.error('[Evolution Webhook] CATALOG_PROMPT_FAILED', prompt.error)
+      } else {
+        try {
+          await supabaseAdmin.from('mensagens').insert({
+            conversa_id: conversaId,
+            remetente: 'ia',
+            conteudo: '🔥 *Cardápio Oficial de Domingo*\n\nGostaria de ver os nossos combos oficiais com fotos e valores?\nResponda *1* para eu te enviar as fotos! 📸\n\n_Casa de Assados Brasa & Sabor · Umbará_',
+          })
+        } catch {
+          console.error('[Evolution Webhook] CATALOG_PROMPT_PERSIST_FAILED')
+        }
+      }
       return NextResponse.json({
         success: prompt.success,
         status: prompt.success ? 'catalog_prompt_sent' : 'catalog_prompt_unavailable',

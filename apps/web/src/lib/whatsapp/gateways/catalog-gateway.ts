@@ -61,12 +61,17 @@ async function postCatalogMessage(path: string, config: { url: string; apiKey: s
 export async function enviarPromptCatalogoWhatsApp(telefone: string): Promise<CatalogDeliveryResult> {
   const config = await getEvolutionConfig()
   if (!config) return { success: false, error: 'config_unavailable' }
-  const result = await postCatalogMessage('/message/sendButtons', config, {
+  const text = [
+    '🔥 *Cardápio Oficial de Domingo*',
+    '',
+    'Gostaria de ver os nossos combos oficiais com fotos e valores?',
+    'Responda *1* para eu te enviar as fotos! 📸',
+    '',
+    '_Casa de Assados Brasa & Sabor · Umbará_',
+  ].join('\n')
+  const result = await postCatalogMessage('/message/sendText', config, {
     number: telefone,
-    title: '🔥 Cardápio Oficial de Domingo',
-    description: 'Toque no botão abaixo para ver os combos oficiais.',
-    footer: 'Casa de Assados Brasa & Sabor · Umbará',
-    buttons: [{ type: 'reply', displayText: 'Ver catálogo', id: 'catalog:view' }],
+    text,
   })
   return result.ok ? { success: true, messageId: result.messageId } : { success: false, error: result.error }
 }

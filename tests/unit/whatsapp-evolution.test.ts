@@ -7,7 +7,7 @@ vi.mock('@/lib/supabase/admin', () => admin)
 vi.mock('@/lib/whatsapp/safety', () => ({ validarEnvioWhatsAppSafety: vi.fn().mockResolvedValue({ permitido: true }) }))
 vi.mock('@/lib/whatsapp/circuit-breaker', () => ({ whatsappCircuitBreaker: { executar: (fn: () => unknown) => fn() } }))
 
-import { enviarMensagemEvolution, startEvolutionPresence } from '@/lib/whatsapp/evolution'
+import { enviarMensagemEvolution, startEvolutionPresence, EvolutionProvider } from '@/lib/whatsapp/evolution'
 
 function query(data: unknown) {
   const builder: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -80,5 +80,18 @@ describe('Evolution transport contract', () => {
     const handle = await startEvolutionPresence('c')
     expect(handle.stop()).toBeUndefined()
     expect(fetch).not.toHaveBeenCalled()
+  })
+  it('implements iniciarPresenca on EvolutionProvider and delegates to startEvolutionPresence', async () => {
+    const provider = new EvolutionProvider()
+    expect(typeof provider.iniciarPresenca).toBe('function')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ presence: 'composing' }), { status: 200 })))
+    const handle = await provider.iniciarPresenca!('c')
+    expect(handle).toBeDefined()
+    expect(typeof handle.stop).toBe('function')
+    expect(fetch).toHaveBeenCalledWith('https://evolution.example/chat/sendPresence/instance', expect.objectContaining({
+      headers: expect.objectContaining({ apikey: 'test-key', Origin: 'https://test.example' }),
+      body: JSON.stringify({ number: '5511999999999', presence: 'composing', delay: 4000 }),
+    }))
+    handle.stop()
   })
 })
