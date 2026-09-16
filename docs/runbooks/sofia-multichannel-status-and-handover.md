@@ -1,11 +1,11 @@
 # Sofia Multichannel Status, Evolution Limitations & Handover Runbook
 
-**Date:** 2026-09-16  
-**Repository:** `github.com/wilkinbarban/Assados-Sofia`  
-**Release HEAD on `main`:** `303a757`  
-**Current Production Web Image:** `asados-web:evolution-text-optin-303a757-20260916T010928Z` (`sha256:f92fa9326954e238be69c9798fe9cb963580625701a21c363b0f64dc0c12ba08`)  
-**Previous Web Image (Rollback Tag):** `asados-web:rollback-e7628e776c1f27f8c07f5b0dc136454a7adbbebea6eba6503d9a78db05178054`  
-**Production Database Identity:** `asados-supabase-db` (ID: `0bff70962b42e9757f1ecd9aa5b8ffaf4e4dbb051ade52f4ee30497cbffa9f54`, port 5432)  
+**Date:** 2026-09-16
+**Repository:** `github.com/wilkinbarban/Assados-Sofia`
+**Release HEAD on `main`:** `303a757`
+**Current Production Web Image:** `asados-web:evolution-text-optin-303a757-20260916T010928Z` (`sha256:f92fa9326954e238be69c9798fe9cb963580625701a21c363b0f64dc0c12ba08`)
+**Previous Web Image (Rollback Tag):** `asados-web:rollback-e7628e776c1f27f8c07f5b0dc136454a7adbbebea6eba6503d9a78db05178054`
+**Production Database Identity:** `asados-supabase-db` (ID: `0bff70962b42e9757f1ecd9aa5b8ffaf4e4dbb051ade52f4ee30497cbffa9f54`, port 5432)
 
 ---
 
