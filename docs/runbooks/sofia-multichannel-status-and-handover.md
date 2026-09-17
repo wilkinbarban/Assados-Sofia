@@ -1,7 +1,7 @@
 # Sofia Multichannel Status, Evolution Limitations & Handover Runbook
 
 **Date:** 2026-09-16
-**Repository:** `github.com/wilkinbarban/Assados-Sofia`
+**Repository:** `github.com/wilkinbarban/CRM_Sofia_Manager`
 **Release HEAD on `main`:** `303a757`
 **Current Production Web Image:** `asados-web:evolution-text-optin-303a757-20260916T010928Z` (`sha256:f92fa9326954e238be69c9798fe9cb963580625701a21c363b0f64dc0c12ba08`)
 **Previous Web Image (Rollback Tag):** `asados-web:rollback-e7628e776c1f27f8c07f5b0dc136454a7adbbebea6eba6503d9a78db05178054`

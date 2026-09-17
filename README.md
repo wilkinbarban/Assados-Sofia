@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🍖 Casa de Assados Sofia 🔥
+# 🍖 CRM Sofia Manager 🔥
 ### *Plataforma Omnichannel de Atendimento Inteligente, Gestão de Pedidos e RAG para Assados de Domingo*
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -22,7 +22,7 @@
 
 # 🇧🇷 Visão Geral do Projeto (pt-BR)
 
-A **Casa de Assados Sofia** é uma solução completa desenvolvida para transformar a operação tradicional de assados de domingo (bairro Umbará, Curitiba/PR) em uma infraestrutura digital de alta performance, unificando:
+O **CRM Sofia Manager** é uma solução completa desenvolvida para transformar a operação tradicional de assados de domingo (bairro Umbará, Curitiba/PR) em uma infraestrutura digital de alta performance, unificando:
 
 1. **Atendimento Omnichannel Automatizado (WhatsApp, Telegram e Web Chat)** com a agente de IA **Sofía** (Chef Executivo e Mestre Assador com tom formal e reverente).
 2. **Carrinho Interativo Sob Medida** que permite aos clientes montarem pedidos visualmente antes de dispará-los para a cozinha.
@@ -35,7 +35,7 @@ A **Casa de Assados Sofia** é uma solução completa desenvolvida para transfor
 
 # 🇪🇸 Visión General del Proyecto (ES)
 
-**Casa de Assados Sofia** es una plataforma integral diseñada para resolver los cuellos de botella operativos en negocios de asados dominicales:
+**CRM Sofia Manager** es una plataforma integral diseñada para resolver los cuellos de botella operativos en negocios de asados dominicales:
 
 1. **Atención Omnicanal con IA Consultiva (WhatsApp, Telegram y Web)**: Respuestas instantáneas, entrega del menú en formato de tarjetas visuales enriquecidas y asistencia 24/7.
 2. **Gestión de Pedidos en Tiempo Real**: Panel unificado para operadores con búsqueda multicriterio (cliente, teléfono, #PED, dirección y cortes del menú) y filtros avanzados (Pix, entrega, estados de pago).
@@ -146,8 +146,8 @@ flowchart TD
 
 1. **Clonar o Repositório**:
    ```bash
-   git clone https://github.com/wilkinbarban/Assados-Sofia.git
-   cd Assados-Sofia
+   git clone https://github.com/wilkinbarban/CRM_Sofia_Manager.git
+   cd CRM_Sofia_Manager
    ```
 
 2. **Instalar Dependências**:
@@ -207,5 +207,5 @@ Este projeto está licenciado sob os termos da **GNU General Public License v3.0
 ---
 
 <div align="center">
-  <sub>Desenvolvido com excelência técnica para a Casa de Assados Sofia — Umbará, Curitiba/PR.</sub>
+  <sub>Desenvolvido com excelência técnica para o CRM Sofia Manager — Umbará, Curitiba/PR.</sub>
 </div>

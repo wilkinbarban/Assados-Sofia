@@ -11,18 +11,18 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   metadataBase: new URL('https://casadeasados.duckdns.org'),
   title: {
-    default: 'Casa de Assados Brasa & Sabor | O Verdadeiro Sabor do Domingo',
-    template: '%s | Casa de Assados Brasa & Sabor',
+    default: 'CRM Sofia Manager | Casa de Assados Brasa & Sabor',
+    template: '%s | CRM Sofia Manager',
   },
   description:
-    'A autêntica Casa de Assados Brasa & Sabor no bairro Umbará, Curitiba - PR. Frango recheado dourado, costela no bafo por 6h, dueto especial e kit churrasco família com retirada sem filas em 15 minutos.',
+    'CRM Sofia Manager: Plataforma omnichannel de atendimento inteligente, gestão de pedidos e RAG para a Casa de Assados Brasa & Sabor no bairro Umbará, Curitiba - PR.',
   keywords: [
+    'CRM Sofia Manager',
     'Casa de Assados Brasa & Sabor',
     'Frango Assado Curitiba',
     'Costela no Bafo Umbará',
     'Churrasco de Domingo Curitiba',
     'Assados Umbará',
-    'CRM Sofia',
   ],
   authors: [{ name: 'Casa de Assados Brasa & Sabor' }],
   icons: {

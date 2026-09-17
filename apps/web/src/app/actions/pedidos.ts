@@ -1433,7 +1433,7 @@ export async function gerarCobrancaPixPedido(pedidoId: string) {
 
     const payload = {
       transaction_amount: valorReais,
-      description: `Pedido #${pedidoId.slice(0, 8).toUpperCase()} - Assados Sofia`,
+      description: `Pedido #${pedidoId.slice(0, 8).toUpperCase()} - CRM Sofia Manager`,
       payment_method_id: 'pix',
       payer: {
         email: payerEmail,
