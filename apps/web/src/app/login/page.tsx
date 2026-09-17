@@ -247,9 +247,9 @@ function LoginContent() {
         {/* Header com Logo */}
         <div className="flex flex-col items-center mb-8 text-center">
           <BrandLogo size="xl" showSubtitle={false} className="flex-col !gap-3" />
-          <p className="text-xs text-amber-500 font-bold tracking-widest uppercase mt-1">
-            Tradição em Assados de Domingo • Umbará
-          </p>
+          <span className="mt-1.5 inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-0.5 text-xs font-bold tracking-widest text-amber-400 uppercase">
+            CRM Sofia Manager
+          </span>
           <p className="text-sm text-zinc-400 mt-2">
             Acesse sua conta para pedir seu combo ou gerenciar o atendimento
           </p>
