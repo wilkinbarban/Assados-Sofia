@@ -56,6 +56,7 @@ yarn-error.log*
 /ops/backups/
 /.codex/
 /.atl/
+/.codegraph/
 .omo/
 .playwright-cli/
 .playwright-mcp/
@@ -72,3 +73,4 @@ next-env.d.ts
 # Local AI runtime state
 .atl/
 .pi/
+/odd/
