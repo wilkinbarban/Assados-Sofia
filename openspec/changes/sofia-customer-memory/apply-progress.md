@@ -395,3 +395,236 @@ main
 - **Review budget**: 263 authored additions/deletions (140 migration + 122 suite + 1 plan line)
   against the 400-line budget; no `size:exception` is requested or needed.
 - **Uncommitted**: the parent forbade committing; the unit is left in the working tree.
+
+## Slice 3 — Operator and owner RPCs, grants, isolation (tasks 11–14)
+
+Appended cumulatively; the Slice 1 and Slice 2 sections above are untouched.
+
+### Delivery ledger (this run)
+
+| Field | Value |
+|-------|-------|
+| Change | `sofia-customer-memory` |
+| Artifact store | `openspec` (native status is the lifecycle authority; no Engram write in this run) |
+| Delivery strategy | `ask-on-risk` |
+| Chain strategy (parent-resolved) | `stacked-to-main` |
+| This run | **PR 3 of 10 — Slice 3: five operator/owner RPCs + grants + isolation** |
+| PR base | `main` (chain; Slice 2 commit `a794fb9` is the parent work unit) |
+| Slice forecast | ~205 lines |
+| Slice measured | **452 changed lines** (254 migration + 197 suite additions + 1 deletion) |
+
+### Structured status consumed (native, read-only)
+
+Re-consumed before any edit with
+`gentle-ai sdd-status sofia-customer-memory --cwd /home/wilkin/proyectos/CRM_Sofia_Manager`:
+`schema: gentle-ai.sdd-status@2`, `store: openspec`, `next: apply`, `apply: ready`,
+`actionContext.mode: repo-local`, `allowedEditRoots: [/home/wilkin/proyectos/CRM_Sofia_Manager]`,
+`applyState: ready`, `tasks: 10/43 complete`; no blocked reasons, no notes.
+
+### Review Workload Gate — decision required
+
+`tasks.md` carries `Decision needed before apply: Yes`, `Chained PRs recommended: Yes`,
+`400-line budget risk: High`, `Chain strategy: pending`; the parent resolved `stacked-to-main` and
+scoped this run to tasks 11–14. **The measured slice is 452 changed lines — 13% above the 400-line
+budget and well above the ~205 forecast.** The overage is honest work, not padding:
+
+- the migration adds **five** functions (the slice forecast ~205 for a slice that actually holds
+  five RPCs plus their pt-BR comments and per-function `revoke`/`grant` blocks);
+- the suite adds **76 assertions** because task 13 mandates the full ACL matrix
+  (5 signatures × 3 roles), the complete §4.8 token set, both-way owner isolation, and the seven
+  assertions that prove `corrigir`'s in-place semantics; the ACL matrix alone is 15 lines that
+  cannot be dropped without losing the "per function signature, per role" requirement.
+
+No comments, blank lines, docs, or tests were deleted to reach a number, and the code was not
+restyled. Under `ask-on-risk` this is a delivery decision the parent must raise: accept
+`size:exception` for PR 3, or split Slice 3 into an operator-surface PR and an owner-surface PR.
+
+### Completed tasks and persisted checkbox state
+
+Re-read after the final runs; `grep -oE '^- \[[x ]\] [0-9]+\.' openspec/changes/sofia-customer-memory/tasks.md`
+shows tasks 1–14 as `- [x]` and tasks 15–43 as `- [ ]`:
+
+- [x] 11. RED — failing assertions for all five functions (operator gate, four-state listing with
+      provenance and order, review decisions, owner read/correction/refusal, error tokens).
+- [x] 12. GREEN — the five functions added to `supabase/migrations/20260918020000_fatos_cliente_rpcs.sql`.
+- [x] 13. TRIANGULATE — ACL matrix, `prosecdef`/empty `search_path`, §4.8 token matrix, anonymous
+      rejection on every owner function, two-way owner isolation, reviewed-refusal shape parity.
+- [x] 14. REFACTOR — shared advisory-key-lock expression proven by assertion, RLS enabled without
+      `force`, `plan(222)` reconciled.
+
+### Files changed
+
+| Path | Change | Lines |
+|------|--------|-------|
+| `supabase/migrations/20260918020000_fatos_cliente_rpcs.sql` | + five operator/owner functions, pt-BR comments, `revoke`/`grant` | +254 |
+| `supabase/tests/sofia_customer_memory.sql` | + `auth`/`perfis` fixtures, 76 assertions, `plan(146)` → `plan(222)` | +197 / -1 |
+| `openspec/changes/sofia-customer-memory/tasks.md` | tasks 11–14 checked off with in-line evidence | artifact |
+| `openspec/changes/sofia-customer-memory/apply-progress.md` | this cumulative Slice 3 section | artifact |
+
+No file outside the authorized edit surface was touched. `design.md`, `proposal.md`, the five spec
+artifacts, the Slice 1 migration, and all application (TypeScript) code are unmodified. No commit
+was created.
+
+### RPC content delivered (design §4.2–§4.6, §4.8, §9.2)
+
+- `listar_fatos_cliente(uuid,text[],integer)` — operator gate via `public.tem_funcoes`
+  (`admin`/`supervisor`/`vendedor`), all four states with provenance, `order by estado,
+  atualizado_em desc`, `p_limite` validated in `1..500`, `p_estados` validated against the enum,
+  unknown customer → `P0002 SOFIA_FATO_CLIENTE_NAO_ENCONTRADO`.
+- `revisar_fato_cliente(uuid,text,text)` — `aprovar`/`rejeitar` keep `confianca`; `corrigir` stores
+  the normalized value and sets `confianca = null`; all three record `revisado_por`/`revisado_em`;
+  `rejeitado`/`substituido` → `22023 SOFIA_FATO_NAO_REVISAVEL`; unknown id →
+  `P0002 SOFIA_FATO_NAO_ENCONTRADO`.
+- `meus_fatos_cliente(integer)` — resolves the owner through `clientes.usuario_id = auth.uid()`,
+  `42501 SOFIA_FATO_NAO_AUTENTICADO` when anonymous, approved non-`observacao` only, narrow
+  projection (`fato_id, tipo, chave, valor, origem, criado_em, atualizado_em`).
+- `corrigir_meu_fato_cliente(uuid,text)` — **in-place update, not a supersession**: sets
+  `origem='cliente'`, `estado='aprovado'`, `confianca=null`, `origem_conversa_id=null`, leaves
+  `revisado_por`/`revisado_em` untouched; `P0002` for a non-approved own fact and for a missing id,
+  `42501 SOFIA_FATO_NAO_EXPOSTO` for an own `observacao`, `42501 SOFIA_FATO_NAO_AUTORIZADO` for
+  another customer's fact.
+- `recusar_meu_fato_cliente(uuid)` — `estado='rejeitado'`, retains the row, leaves `origem`,
+  `confianca`, and `origem_conversa_id` unchanged; same ownership/`observacao` refusals.
+
+Grants follow design §9.2 exactly: `grant execute ... to authenticated` only for the five;
+`service_role` receives **no** EXECUTE on any operator/owner function; `anon`/`public` receive
+nothing anywhere. All seven functions are `prosecdef` with an empty `search_path`. The migration
+adds no `alter function ... owner to supabase_admin`, so `expected_owner_transfers=8` still holds.
+
+### Slice 2 consistency check (parent note honoured)
+
+Slice 2 simulated a refusal with a raw `update` because `revisar_fato_cliente` did not exist.
+Slice 3 now produces a refusal through `revisar_fato_cliente` (`revisar_recusa`, `origem='operador'`,
+`origem_conversa_id` set, `confianca` null) and asserts the same row shape Slice 2 expects:
+`estado='rejeitado'`, `origem`/`confianca`/`origem_conversa_id` unchanged, exactly one rejected row,
+zero superseded rows. The two paths cannot drift silently.
+
+### TDD Cycle Evidence
+
+**Sanctioned runner unavailable (honest limitation).**
+`bash scripts/run-local-sofia-sql-tests.sh supabase/tests/sofia_customer_memory.sql` was attempted
+three times and failed before any suite ran:
+`error: disposable local Supabase failed to start` with `supabase_realtime/storage/pg_meta ...
+unhealthy` and `supabase_studio ... starting` (host has ~3 GB RAM free and 27 containers already
+running). This is reported as an **unmet evidence surface**, not a pass.
+
+Because the slice's core is SQL, the RED/GREEN cycles were executed on the same upstream image the
+harness uses (`public.ecr.aws/supabase/postgres:17.6.1.143`) with a minimal faithful scaffolding for
+the objects the migrations reference (`auth.jwt()`, `public.tipo_funcao`, `public.perfis`,
+`public.tem_funcoes`, `public.clientes`, `public.conversas`), the repo's real suite and real
+migrations, and the harness's own psql flags:
+
+`docker exec sofia-static-check psql --no-psqlrc --quiet --tuples-only --no-align --pset pager=off -v ON_ERROR_STOP=1 -d "postgresql://postgres:postgres@127.0.0.1:5432/postgres" -v runtime_dblink_conninfo=... -f /tmp/check/supabase/tests/sofia_customer_memory.sql`
+
+| Cycle | Step | Migration staged | Observed result |
+|-------|------|------------------|-----------------|
+| 1 | RED (task 11) | slice-2-only (`git show HEAD:...`) | `1..222`, `ok=146`, `not ok=8`, psql exit 3, abort on `42883 function public.listar_fatos_cliente(unknown, unknown, integer) does not exist` |
+| 2 | GREEN (task 12) | full slice-3 migration | `1..222`, `ok=222`, `not ok=0`, psql exit 0 |
+| 3 | TRIANGULATE (task 13) | full | all ACL/provenance/isolation assertions inside the 222 pass |
+| 4 | REFACTOR (task 14) | full | `plan(222)` equals the 222 executed assertions; final re-run `ok=222`, `not ok=0`, exit 0 |
+
+The `plan(N)` values are the reconciled ones the suite actually executes; a plan/test mismatch would
+have failed both the psql run and the harness's TAP::Parser. TypeScript `vitest` is **not** an
+evidence surface for this slice: no application file changed.
+
+**Three real defects the scratch runner caught and the suite now fixes** (recorded rather than
+hidden): (1) `WITH ORDINALITY` cannot take a column definition list — rewritten as `with ordinality
+as t` with `t.ordinality`; (2) direct `select`s on `public.fatos_cliente` inside the
+`set local role authenticated` blocks were correctly denied — function calls now run as
+`authenticated` and row inspections run after `reset role`; (3) an undefined `f2_id` psql variable
+and untyped `:'var'` values (fixed with `::text`). Without a runner these would have shipped broken.
+
+### Deviations from the design and from this slice's task text
+
+1. **`meus_fatos_cliente` follows the §4.4 SQL signature (7 columns incl. `atualizado_em`), not the
+   §4.4 prose**, which lists `atualizado_em` among the omitted columns while the signature includes
+   it. The explicit signature was treated as authoritative; the test asserts the internal review
+   chain (`confianca`, `revisado_por`, `revisado_em`, `substitui_id`, `origem_conversa_id`) is
+   absent and does not assert `atualizado_em` absent. Flagged for verify/archive.
+2. **The advisory-key-lock expression is kept byte-identical inline in both write paths** rather
+   than factored into a helper, because PostgreSQL has no shared-expression macro and an extra
+   `SECURITY DEFINER` helper would widen the spec's declared seven-function surface. An assertion
+   proves `revisar_fato_cliente` and `registrar_fato_cliente` both carry
+   `pg_catalog.hashtextextended(..., 91423)`, which is the property that matters for serialization.
+   The same reasoning applies to the repeated value predicate: PostgreSQL cannot share it without a
+   helper, so it is repeated verbatim (no divergent copy).
+3. **Owner gate tests split calls and inspections across `reset role`.** `authenticated` correctly
+   holds no table privilege, so the suite calls the RPCs as `authenticated` and inspects rows as the
+   owner. This is fidelity to design §9.1, not a workaround.
+4. **The sanctioned harness did not run.** The scratch runner is an equivalent PostgreSQL 17.6
+   image with minimal scaffolding, not the repository harness; the whole default-suite regression
+   run (`bash scripts/run-local-sofia-sql-tests.sh`) could not be executed and is owed.
+5. **`tasks.md` forecast table left as-is**; this phase owns only the task checkboxes.
+
+### Remaining tasks (still unchecked)
+
+29 unchecked tasks, `grep -oE '^- \[ \] [0-9]+\.'` reproduces them: Slice 4 (15–18), Slice 5
+(19–23), Slice 6 (24–27), Slice 7 (28–31), Slice 8 (32–35), Slice 9 (36–39), Slice 10 (40–43).
+
+### Chain context (chained-pr / work-unit-commits contract)
+
+```text
+main
+ └── PR 1 (tasks 1-5)  ✅ landed 5665370 — schema, constraints, index set
+      └── PR 2 (tasks 6-10)  ✅ landed a794fb9 — backend RPCs
+           └── PR 3 (tasks 11-14)  📍 current  — operator/owner RPCs, grants, isolation
+                ├── PR 4 (tasks 15-18)  LGPD anonymization extension                 depends on PR 1
+                ├── PR 5 (tasks 19-23)  gate + helpers + extraction + deploy defaults depends on PR 2
+                ├── PR 6 (tasks 24-27)  worker post-completion hook                  depends on PR 5
+                ├── PR 7 (tasks 28-31)  approved-facts prompt block                  depends on PR 3,5
+                ├── PR 8 (tasks 32-35)  operator auth move + review actions          depends on PR 3
+                ├── PR 9 (tasks 36-39)  operator facts panel + `fatos` tab           depends on PR 8
+                └── PR 10 (tasks 40-43) client facts section in `/cliente/perfil`     depends on PR 3
+```
+
+- **Current PR**: 3 of 10, based on the Slice 2 work unit, ends at task 14. Out of scope for this
+  PR: every task 15–43, all TypeScript, the anonymization migration, and any commit.
+- **Follow-up**: PR 4 (Slice 4, tasks 15–18) and PR 5 (Slice 5, tasks 19–23) are unblocked by this
+  PR only where they already depended on PR 1/2; PR 7 and PR 8 now depend on PR 3.
+- **Rollback boundary**: reverting the slice-3 additions to `20260918020000_fatos_cliente_rpcs.sql`
+  removes the five functions and their grants and returns the change to the PR 2 state; the table,
+  its constraints, its indexes, the two backend functions, and the suite's Slice 1/2 assertions are
+  untouched.
+- **Review budget**: 452 changed lines against the 400-line budget. A `size:exception` is required,
+  or Slice 3 must be split (operator surface vs owner surface).
+- **Uncommitted**: the parent forbade committing; the unit is left in the working tree.
+
+### Workload / PR boundary
+
+- PR 3 of 10 delivers exactly the operator/owner RPC slice. The unit is cohesive: the five functions,
+  their grants, and the assertions that prove them cannot be separated without leaving either an
+  unverified authorization surface or a test file whose plan does not match its content.
+- Measured PR-3 code diff: **452 lines** (254 migration + 197 suite additions + 1 deletion).
+- Runtime boundary: the scratch PostgreSQL 17.6 runner executed the suite for real (222 assertions,
+  TAP-shaped output validated by hand); the repository harness boundary is **owed**.
+
+### Slice 3 — review budget exception and evidence status (parent, 2026-09-18)
+
+**Accepted exception.** Slice 3 measured **452 changed lines** (254 migration + 197 suite + 1 deletion)
+against the 400-line review budget, 13% over, and far above the ~205 forecast. The user explicitly
+accepted `size:exception` for this slice. The overage is honest work rather than padding: five RPCs
+plus a 76-assertion block, of which 15 assertions are the mandated per-signature ACL matrix
+(5 signatures x 3 roles). No comment, test, or code was deleted or compressed to reach a smaller
+number.
+
+**Sanctioned evidence obtained.** The repository harness did run for this slice:
+
+    bash scripts/run-local-sofia-sql-tests.sh supabase/tests/sofia_customer_memory.sql
+    -> PASS sofia_customer_memory.sql (assertions=222 failed=0 psql_exit=0)
+
+**Unmet evidence surface — full-set regression.** The harness's readiness gate is currently flaky on
+this host and aborts `supabase start` on a different container each attempt (`storage`, `realtime`,
+`studio`, `pg_meta`). Seven attempts produced exactly one successful start. Container logs show the
+services themselves starting successfully — for example storage logs
+`Server listening at http://127.0.0.1:5000` and `[Server] Started Successfully` while the Docker
+healthcheck still reports `unhealthy` — so the failure is in the readiness race, not in the services.
+The whole default suite set was therefore **not** re-run for this slice, and no claim is made that it
+is green. Re-run `bash scripts/run-local-sofia-sql-tests.sh` once the host is quieter; the regression
+surface is narrow, since this slice only appends functions to one migration and assertions to one
+suite, and no other suite references `fatos_cliente`.
+
+**Environment note.** This repository is the production deployment checkout: the running
+`asados-supabase` compose project resolves to `ops/supabase/docker-compose.yml` in this very
+directory, and 27 production containers share the host with the disposable harness. That resource
+contention is the plausible cause of the readiness flakiness. Freeing the Docker build cache
+(5.87 GB) converted a consistently failing start into an intermittently succeeding one.

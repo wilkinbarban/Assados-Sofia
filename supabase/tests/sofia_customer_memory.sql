@@ -14,7 +14,7 @@ select not to_regprocedure('public.registrar_fato_cliente(uuid,text,text,text,te
 \ir ../migrations/20260918020000_fatos_cliente_rpcs.sql
 \endif
 begin;
-select plan(146);
+select plan(222);
 set role postgres;
 
 insert into public.clientes(id,nome,telefone) values
@@ -258,6 +258,202 @@ reset role;
 set local role service_role;
 select throws_ok($$select * from public.fatos_cliente$$,'42501',null,'direct table access stays denied for service_role as well');
 reset role;
+
+-- Slice 3, task 11 (RED): superficie de operador e de proprietario. O operador entra por
+-- public.tem_funcoes; o proprietario e resolvido por clientes.usuario_id = auth.uid().
+insert into auth.users(id,instance_id,aud,role,email,created_at,updated_at) values
+ ('f3000000-0000-4000-8000-000000000001','00000000-0000-0000-0000-000000000000','authenticated','authenticated','memoria-operador@test',now(),now()),
+ ('f3000000-0000-4000-8000-000000000002','00000000-0000-0000-0000-000000000000','authenticated','authenticated','memoria-proprietario-a@test',now(),now()),
+ ('f3000000-0000-4000-8000-000000000003','00000000-0000-0000-0000-000000000000','authenticated','authenticated','memoria-proprietario-b@test',now(),now()),
+ ('f3000000-0000-4000-8000-000000000004','00000000-0000-0000-0000-000000000000','authenticated','authenticated','memoria-sem-perfil@test',now(),now())
+on conflict(id) do nothing;
+insert into public.perfis(id,nome,funcao,ativo) values
+ ('f3000000-0000-4000-8000-000000000001','Memoria Operador','vendedor',true),
+ ('f3000000-0000-4000-8000-000000000002','Memoria Proprietario A','cliente',true),
+ ('f3000000-0000-4000-8000-000000000003','Memoria Proprietario B','cliente',true),
+ ('f3000000-0000-4000-8000-000000000004','Memoria Sem Perfil','cliente',true)
+on conflict(id) do update set nome=excluded.nome, funcao=excluded.funcao, ativo=excluded.ativo;
+insert into public.clientes(id,usuario_id,nome,telefone) values
+ ('f1000000-0000-4000-8000-000000000005','f3000000-0000-4000-8000-000000000002','Memoria Proprietario A','5541997000005'),
+ ('f1000000-0000-4000-8000-000000000006','f3000000-0000-4000-8000-000000000003','Memoria Proprietario B','5541997000006'),
+ ('f1000000-0000-4000-8000-000000000007',null,'Memoria Listagem','5541997000007');
+insert into public.conversas(id,cliente_id) values
+ ('f2000000-0000-4000-8000-000000000005','f1000000-0000-4000-8000-000000000005');
+insert into public.fatos_cliente(cliente_id,tipo,chave,valor,origem,origem_conversa_id,confianca,estado,revisado_por,revisado_em) values
+ ('f1000000-0000-4000-8000-000000000005','endereco','endereco_principal','Rua Antiga, 10','ia','f2000000-0000-4000-8000-000000000005',0.90,'aprovado',null,null),
+ ('f1000000-0000-4000-8000-000000000005','preferencia','ponto_carne','bem passado','ia',null,0.50,'aprovado','f3000000-0000-4000-8000-000000000001',now()),
+ ('f1000000-0000-4000-8000-000000000005','observacao','nota_interna','cliente pede retirada','operador',null,null,'aprovado',null,null),
+ ('f1000000-0000-4000-8000-000000000005','formato_pedido','cebola','sem cebola','operador','f2000000-0000-4000-8000-000000000005',null,'aprovado',null,null),
+ ('f1000000-0000-4000-8000-000000000005','preferencia','novo_pendente','mal passado','ia',null,0.60,'pendente',null,null),
+ ('f1000000-0000-4000-8000-000000000005','preferencia','revisar_aprovar','ao ponto','ia',null,0.70,'pendente',null,null),
+ ('f1000000-0000-4000-8000-000000000005','preferencia','revisar_rejeitar','mal passado','ia',null,0.60,'pendente',null,null),
+ ('f1000000-0000-4000-8000-000000000005','preferencia','revisar_corrigir','no meio','ia',null,0.70,'pendente',null,null),
+ ('f1000000-0000-4000-8000-000000000005','formato_pedido','revisar_terminal','suspenso','operador',null,null,'rejeitado',null,null),
+ ('f1000000-0000-4000-8000-000000000005','formato_pedido','revisar_subs','antigo','operador',null,null,'substituido',null,null),
+ ('f1000000-0000-4000-8000-000000000005','formato_pedido','revisar_recusa','sem cebola','operador','f2000000-0000-4000-8000-000000000005',null,'aprovado',null,null),
+ ('f1000000-0000-4000-8000-000000000006','preferencia','bebida','sem acucar','operador',null,null,'aprovado',null,null);
+insert into public.fatos_cliente(cliente_id,tipo,chave,valor,origem,confianca,estado,atualizado_em) values
+ ('f1000000-0000-4000-8000-000000000007','preferencia','lista_aprovado_novo','ao ponto','ia',0.90,'aprovado',now()),
+ ('f1000000-0000-4000-8000-000000000007','preferencia','lista_aprovado_antigo','ao ponto','operador',null,'aprovado',now()-interval '1 hour'),
+ ('f1000000-0000-4000-8000-000000000007','preferencia','lista_pendente','mal passado','ia',0.40,'pendente',now()),
+ ('f1000000-0000-4000-8000-000000000007','formato_pedido','lista_rejeitado','sem cebola','operador',null,'rejeitado',now()),
+ ('f1000000-0000-4000-8000-000000000007','formato_pedido','lista_substituido','com cebola','operador',null,'substituido',now());
+select f.id as f1_id from public.fatos_cliente f where f.chave='endereco_principal' \gset
+select f.id as f2_id, f.revisado_por as f2_revisor, f.revisado_em as f2_revisado_em from public.fatos_cliente f where f.chave='ponto_carne' \gset
+select f.id as f3_id from public.fatos_cliente f where f.chave='nota_interna' \gset
+select f.id as f4_id from public.fatos_cliente f where f.chave='cebola' \gset
+select f.id as f5_id from public.fatos_cliente f where f.chave='novo_pendente' \gset
+select f.id as g1_id from public.fatos_cliente f where f.chave='bebida' \gset
+select f.id as r1_id from public.fatos_cliente f where f.chave='revisar_aprovar' \gset
+select f.id as r2_id from public.fatos_cliente f where f.chave='revisar_rejeitar' \gset
+select f.id as r3_id from public.fatos_cliente f where f.chave='revisar_corrigir' \gset
+select f.id as r4_id from public.fatos_cliente f where f.chave='revisar_terminal' \gset
+select f.id as r5_id from public.fatos_cliente f where f.chave='revisar_subs' \gset
+select f.id as r6_id from public.fatos_cliente f where f.chave='revisar_recusa' \gset
+
+-- Gate de operador e fila de revisao: todos os estados, com proveniencia e ordem estavel.
+set local role authenticated;
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000004',true);
+select throws_ok($$select * from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',null,200)$$,'42501','SOFIA_FATO_OPERADOR_REQUERIDO','a plain client cannot list another customer facts');
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'aprovar')$$,:'r1_id'),'42501','SOFIA_FATO_OPERADOR_REQUERIDO','a plain client cannot review a fact');
+select set_config('request.jwt.claim.sub','',true);
+select throws_ok($$select * from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',null,200)$$,'42501','SOFIA_FATO_OPERADOR_REQUERIDO','an anonymous caller cannot list facts');
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000001',true);
+select throws_ok($$select * from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',null,0)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a zero operator limit is invalid input');
+select throws_ok($$select * from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',null,501)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a limit above the operator cap is invalid input');
+select throws_ok($$select * from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',array['arquivado'],200)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','an unknown state filter is invalid input instead of an empty list');
+select throws_ok($$select * from public.listar_fatos_cliente(null,null,200)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a null customer is invalid input');
+select throws_ok($$select * from public.listar_fatos_cliente('f1000000-0000-4000-8000-0000000000ff',null,200)$$,'P0002','SOFIA_FATO_CLIENTE_NAO_ENCONTRADO','an unknown customer is reported instead of looking empty');
+select is(
+ (select array_agg(t.chave||'/'||t.origem order by t.ordinality) from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',null,500) with ordinality as t),
+ array['lista_aprovado_novo/ia','lista_aprovado_antigo/operador','lista_pendente/ia','lista_rejeitado/operador','lista_substituido/operador']::text[],
+ 'the operator sees all four states with provenance, ordered by estado then atualizado_em desc');
+select is((select count(*)::integer from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',null,1)),1,'the operator limit is honoured inside 1..500');
+select is(
+ (select array_agg(t.chave order by t.ordinality) from public.listar_fatos_cliente('f1000000-0000-4000-8000-000000000007',array['aprovado'],500) with ordinality as t),
+ array['lista_aprovado_novo','lista_aprovado_antigo']::text[],
+ 'the state filter returns only the requested states');
+reset role;
+
+-- Leitura do proprietario: resolucao por clientes.usuario_id, projecao estreita e sem observacao.
+set local role authenticated;
+select set_config('request.jwt.claim.sub','',true);
+select throws_ok($$select * from public.meus_fatos_cliente(200)$$,'42501','SOFIA_FATO_NAO_AUTENTICADO','an anonymous caller cannot read the owner surface');
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000004',true);
+select throws_ok($$select * from public.meus_fatos_cliente(200)$$,'P0002','SOFIA_FATO_CLIENTE_NAO_ENCONTRADO','an authenticated user without a customer profile has no facts');
+select throws_ok($$select * from public.meus_fatos_cliente(0)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','an owner limit below one is invalid input');
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000002',true);
+select is(
+ (select array_agg(t.tipo||'/'||t.chave||'/'||t.origem order by t.ordinality) from public.meus_fatos_cliente(200) with ordinality as t),
+ array['endereco/endereco_principal/ia','formato_pedido/cebola/operador','formato_pedido/revisar_recusa/operador','preferencia/ponto_carne/ia']::text[],
+ 'the owner reads exactly their own approved non-observacao facts');
+select ok(not exists (select 1 from public.meus_fatos_cliente(200) t where t.chave='nota_interna'),'the internal observacao never reaches the customer');
+select pg_catalog.pg_get_function_result('public.meus_fatos_cliente(integer)'::regprocedure) as meu_result \gset
+select ok(position('confianca' in :'meu_result') = 0 and position('revisado_por' in :'meu_result') = 0 and position('revisado_em' in :'meu_result') = 0 and position('substitui_id' in :'meu_result') = 0 and position('origem_conversa_id' in :'meu_result') = 0 and position('fato_id' in :'meu_result') > 0,'the owner projection omits the internal review chain and keeps the claim identity');
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000003',true);
+select is(
+ (select array_agg(t.chave order by t.ordinality) from public.meus_fatos_cliente(200) with ordinality as t),
+ array['bebida']::text[],
+ 'one customer never reads another customer facts');
+reset role;
+
+-- Decisao do operador: aprovar, rejeitar e corrigir, com historico terminal e revisor registrado.
+-- As chamadas rodam como `authenticated`; a inspecao direta da tabela roda depois do `reset role`,
+-- porque `authenticated` nao tem privilegio de tabela (design 9.1).
+set local role authenticated;
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000001',true);
+select (select estado from public.revisar_fato_cliente(:'r1_id'::uuid,'aprovar')) as r1_estado \gset
+select (select estado from public.revisar_fato_cliente(:'r2_id'::uuid,'rejeitar')) as r2_estado \gset
+select (select estado from public.revisar_fato_cliente(:'r3_id'::uuid,'corrigir','ao ponto para bem passado')) as r3_estado \gset
+select (select estado from public.revisar_fato_cliente(:'r6_id'::uuid,'rejeitar')) as r6_estado \gset
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'corrigir')$$,:'r1_id'),'22023','SOFIA_FATO_ENTRADA_INVALIDA','correcting without a value is invalid input');
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'aprovar','valor indevido')$$,:'r1_id'),'22023','SOFIA_FATO_ENTRADA_INVALIDA','approving with a value is invalid input');
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'arquivar')$$,:'r1_id'),'22023','SOFIA_FATO_ENTRADA_INVALIDA','an unknown decision is invalid input');
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'corrigir',' espaco')$$,:'r1_id'),'22023','SOFIA_FATO_ENTRADA_INVALIDA','an untrimmed corrected value is invalid input');
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'aprovar')$$,:'r4_id'),'22023','SOFIA_FATO_NAO_REVISAVEL','a rejected fact is terminal history');
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'rejeitar')$$,:'r5_id'),'22023','SOFIA_FATO_NAO_REVISAVEL','a superseded fact is terminal history');
+select throws_ok(format($$select * from public.revisar_fato_cliente(%L,'aprovar')$$,'f1000000-0000-4000-8000-0000000000ff'),'P0002','SOFIA_FATO_NAO_ENCONTRADO','an unknown fact is not found for review');
+reset role;
+select is(:'r1_estado'::text,'aprovado','approving a pending inference returns the approved state');
+select ok((select f.estado='aprovado' and f.revisado_por='f3000000-0000-4000-8000-000000000001' and f.revisado_em is not null and f.confianca=0.70 from public.fatos_cliente f where f.id=:'r1_id'::uuid),'approval records the reviewer and the time and keeps the inference confidence');
+select is(:'r2_estado'::text,'rejeitado','rejecting a pending inference returns the rejected state');
+select ok((select f.estado='rejeitado' and f.confianca=0.60 and f.revisado_por='f3000000-0000-4000-8000-000000000001' from public.fatos_cliente f where f.id=:'r2_id'::uuid),'rejection is retained and keeps the inference confidence');
+select is(:'r3_estado'::text,'aprovado','correcting a pending inference approves the corrected value');
+select ok((select f.origem='ia' and f.valor='ao ponto para bem passado' and f.confianca is null and f.revisado_por='f3000000-0000-4000-8000-000000000001' from public.fatos_cliente f where f.id=:'r3_id'::uuid),'correction clears the confidence and records the reviewer while keeping the origin');
+select is(:'r6_estado'::text,'rejeitado','a refusal through the review function lands rejected');
+select ok((select f.origem='operador' and f.confianca is null and f.origem_conversa_id='f2000000-0000-4000-8000-000000000005' from public.fatos_cliente f where f.id=:'r6_id'::uuid),'the reviewed refusal produces the same row shape the writer-level refusal assertions expect');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='revisar_recusa' and f.estado='substituido'),0,'the reviewed refusal supersedes nothing');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='revisar_recusa' and f.estado='rejeitado'),1,'the reviewed refusal retains exactly one rejected row');
+
+-- Retificacao LGPD: atualizacao no lugar, sem substituicao, e recusas de posse e de observacao.
+set local role authenticated;
+select set_config('request.jwt.claim.sub','',true);
+select throws_ok(format($$select * from public.corrigir_meu_fato_cliente(%L,'x')$$,:'f1_id'),'42501','SOFIA_FATO_NAO_AUTENTICADO','an anonymous caller cannot correct a fact');
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000002',true);
+select throws_ok(format($$select * from public.corrigir_meu_fato_cliente(%L,' ')$$,:'f1_id'),'22023','SOFIA_FATO_ENTRADA_INVALIDA','an untrimmed correction is invalid input');
+select (select f.valor||'|'||f.estado||'|'||f.origem from public.corrigir_meu_fato_cliente(:'f1_id'::uuid,'Rua Nova, 20') f) as correcao_a \gset
+select (select f.valor from public.corrigir_meu_fato_cliente(:'f2_id'::uuid,'bem passado mesmo') f) as correcao_b \gset
+select throws_ok(format($$select * from public.corrigir_meu_fato_cliente(%L,'x')$$,:'f3_id'),'42501','SOFIA_FATO_NAO_EXPOSTO','an internal observacao is never exposed to correction');
+select throws_ok(format($$select * from public.corrigir_meu_fato_cliente(%L,'x')$$,:'f5_id'),'P0002','SOFIA_FATO_NAO_ENCONTRADO','a pending fact does not exist for the customer surface');
+select throws_ok(format($$select * from public.corrigir_meu_fato_cliente(%L,'x')$$,'f1000000-0000-4000-8000-0000000000ff'),'P0002','SOFIA_FATO_NAO_ENCONTRADO','an unknown fact is not found for correction');
+select throws_ok(format($$select * from public.corrigir_meu_fato_cliente(%L,'x')$$,:'g1_id'),'42501','SOFIA_FATO_NAO_AUTORIZADO','another customer fact is refused for correction');
+reset role;
+select is(:'correcao_a'::text,'Rua Nova, 20|aprovado|cliente','correction updates the live fact in place with the customer as the strongest provenance');
+select ok((select f.confianca is null and f.origem_conversa_id is null from public.fatos_cliente f where f.id=:'f1_id'::uuid),'correction clears the model confidence and the conversation provenance');
+select is((select count(*)::integer from public.fatos_cliente f where f.id=:'f1_id'::uuid and f.estado in ('pendente','aprovado')),1,'correction leaves exactly one live fact for the key');
+select is(:'correcao_b'::text,'bem passado mesmo','a correction of a reviewed fact returns the new value');
+select ok((select f.revisado_por=:'f2_revisor'::uuid and f.revisado_em=:'f2_revisado_em'::timestamptz from public.fatos_cliente f where f.id=:'f2_id'::uuid),'correction preserves the previous review history');
+select ok((select f.valor='sem acucar' and f.estado='aprovado' and f.origem='operador' from public.fatos_cliente f where f.id=:'g1_id'::uuid),'the refused cross-customer fact is unchanged');
+select set_config('request.jwt.claim.sub','',true);
+select set_config('request.jwt.claim','{"role":"service_role"}',false);
+select is((select substituido_id from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000005','endereco','endereco_principal','Rua Errada, 99','ia',null,0.99,false)),null::uuid,'a later inference cannot supersede a customer correction');
+select ok((select f.valor='Rua Nova, 20' and f.origem='cliente' and f.estado='aprovado' from public.fatos_cliente f where f.id=:'f1_id'::uuid),'the corrected value remains the live fact after later inference');
+
+-- Recusa do proprietario: rejeita sem apagar e sem reescrever a proveniencia.
+set local role authenticated;
+select set_config('request.jwt.claim.sub','',true);
+select throws_ok(format($$select * from public.recusar_meu_fato_cliente(%L)$$,:'f4_id'),'42501','SOFIA_FATO_NAO_AUTENTICADO','an anonymous caller cannot refuse a fact');
+select set_config('request.jwt.claim.sub','f3000000-0000-4000-8000-000000000002',true);
+select (select estado from public.recusar_meu_fato_cliente(:'f4_id'::uuid)) as recusa_a \gset
+select throws_ok(format($$select * from public.recusar_meu_fato_cliente(%L)$$,:'f3_id'),'42501','SOFIA_FATO_NAO_EXPOSTO','recusal of an internal observacao is never exposed');
+select throws_ok(format($$select * from public.recusar_meu_fato_cliente(%L)$$,:'f5_id'),'P0002','SOFIA_FATO_NAO_ENCONTRADO','a pending own fact is not found for refusal');
+select throws_ok(format($$select * from public.recusar_meu_fato_cliente(%L)$$,'f1000000-0000-4000-8000-0000000000ff'),'P0002','SOFIA_FATO_NAO_ENCONTRADO','an unknown fact is not found for refusal');
+select throws_ok(format($$select * from public.recusar_meu_fato_cliente(%L)$$,:'g1_id'),'42501','SOFIA_FATO_NAO_AUTORIZADO','another customer fact cannot be refused');
+reset role;
+select is(:'recusa_a'::text,'rejeitado','a customer refusal marks the fact rejected');
+select ok((select f.origem='operador' and f.confianca is null and f.origem_conversa_id='f2000000-0000-4000-8000-000000000005' from public.fatos_cliente f where f.id=:'f4_id'::uuid),'refusal leaves origem, confianca and origem_conversa_id unchanged');
+select is((select count(*)::integer from public.fatos_cliente f where f.id=:'f4_id'::uuid),1,'the refused row is retained instead of deleted');
+select ok((select f.estado='aprovado' from public.fatos_cliente f where f.id=:'g1_id'::uuid),'the cross-customer refusal leaves the other customer fact unchanged');
+
+-- Slice 3, task 13 (TRIANGULATE): matriz de ACL, definidor de seguranca e trava compartilhada.
+select function_privs_are('public','listar_fatos_cliente',array['uuid','text[]','integer'],'authenticated',array['EXECUTE'],'the operator list is executable by authenticated');
+select function_privs_are('public','listar_fatos_cliente',array['uuid','text[]','integer'],'service_role',array[]::text[],'the operator list is not executable by service_role');
+select function_privs_are('public','listar_fatos_cliente',array['uuid','text[]','integer'],'anon',array[]::text[],'the operator list is not executable by anon');
+select function_privs_are('public','revisar_fato_cliente',array['uuid','text','text'],'authenticated',array['EXECUTE'],'the operator review is executable by authenticated');
+select function_privs_are('public','revisar_fato_cliente',array['uuid','text','text'],'service_role',array[]::text[],'the operator review is not executable by service_role');
+select function_privs_are('public','revisar_fato_cliente',array['uuid','text','text'],'anon',array[]::text[],'the operator review is not executable by anon');
+select function_privs_are('public','meus_fatos_cliente',array['integer'],'authenticated',array['EXECUTE'],'the owner read is executable by authenticated');
+select function_privs_are('public','meus_fatos_cliente',array['integer'],'service_role',array[]::text[],'the owner read is not executable by service_role');
+select function_privs_are('public','meus_fatos_cliente',array['integer'],'anon',array[]::text[],'the owner read is not executable by anon');
+select function_privs_are('public','corrigir_meu_fato_cliente',array['uuid','text'],'authenticated',array['EXECUTE'],'the owner correction is executable by authenticated');
+select function_privs_are('public','corrigir_meu_fato_cliente',array['uuid','text'],'service_role',array[]::text[],'the owner correction is not executable by service_role');
+select function_privs_are('public','corrigir_meu_fato_cliente',array['uuid','text'],'anon',array[]::text[],'the owner correction is not executable by anon');
+select function_privs_are('public','recusar_meu_fato_cliente',array['uuid'],'authenticated',array['EXECUTE'],'the owner refusal is executable by authenticated');
+select function_privs_are('public','recusar_meu_fato_cliente',array['uuid'],'service_role',array[]::text[],'the owner refusal is not executable by service_role');
+select function_privs_are('public','recusar_meu_fato_cliente',array['uuid'],'anon',array[]::text[],'the owner refusal is not executable by anon');
+select ok(not exists (
+ select 1 from pg_catalog.pg_proc p
+  cross join lateral pg_catalog.aclexplode(coalesce(p.proacl,pg_catalog.acldefault('f',p.proowner))) a
+  where p.oid in ('public.listar_fatos_cliente(uuid,text[],integer)'::regprocedure,
+                  'public.revisar_fato_cliente(uuid,text,text)'::regprocedure,
+                  'public.meus_fatos_cliente(integer)'::regprocedure,
+                  'public.corrigir_meu_fato_cliente(uuid,text)'::regprocedure,
+                  'public.recusar_meu_fato_cliente(uuid)'::regprocedure)
+    and a.grantee=0 and a.privilege_type='EXECUTE'),'PUBLIC cannot execute any of the five operator or owner functions');
+select ok(not exists (
+ select 1 from pg_catalog.pg_proc p where p.oid in ('public.listar_fatos_cliente(uuid,text[],integer)'::regprocedure,'public.revisar_fato_cliente(uuid,text,text)'::regprocedure,'public.meus_fatos_cliente(integer)'::regprocedure,'public.corrigir_meu_fato_cliente(uuid,text)'::regprocedure,'public.recusar_meu_fato_cliente(uuid)'::regprocedure)
+   and (not p.prosecdef or not exists (select 1 from pg_catalog.unnest(coalesce(p.proconfig,array[]::text[])) c where c in ('search_path=','search_path=""')))),'the five new functions are security definer with an empty search path');
+select ok(position('pg_catalog.hashtextextended(' in pg_catalog.pg_get_functiondef('public.revisar_fato_cliente(uuid,text,text)'::regprocedure)) > 0 and position(', 91423)' in pg_catalog.pg_get_functiondef('public.revisar_fato_cliente(uuid,text,text)'::regprocedure)) > 0 and position('pg_catalog.hashtextextended(' in pg_catalog.pg_get_functiondef('public.registrar_fato_cliente(uuid,text,text,text,text,uuid,numeric,boolean)'::regprocedure)) > 0,'review and write share the same advisory key lock expression');
 
 select * from finish();
 rollback;
