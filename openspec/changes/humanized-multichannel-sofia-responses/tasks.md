@@ -8,14 +8,31 @@ This change is **delivered and merged to `main`**. Implementation spans 12 commi
 
 The artifacts previously recorded "10 seconds of silence / 20-second cap". Delivered reality — deliberately restored by `15cdd6a` and documented as working in `docs/runbooks/sofia-multichannel-status-and-handover.md` — is a **25-second sliding silence window** under a **60-second starvation cap** (`supabase/migrations/20260913010000_sofia_timing_and_pacing_correction.sql`). The PR1 lines below remain checked (they were delivered as `bd275ae`) but their 10 s / 20 s figures are superseded by 25 s / 60 s.
 
-### Remaining incomplete tasks (exactly one, left unchecked)
+### Remaining incomplete tasks (none)
 
-One design item remains genuinely incomplete and unchecked:
+**No implementation task remains unchecked.** Both gaps identified during reconciliation are closed:
 
-- The deterministic TypeScript pace helper `apps/web/src/lib/sofia/response-pace.ts` (see Finishing design decisions below); pacing lives only in SQL via `sofia_response_pace_minimum_ms`.
+- The Web atomic insert+attach with a client-generated idempotency key was completed in
+  `supabase/migrations/20260914010000_sofia_web_atomic_admission.sql` and is checked off under PR5.
+- The deterministic TypeScript pace helper `apps/web/src/lib/sofia/response-pace.ts` was created with
+  its unit suite and a migration-parity drift guard, and is checked off under Finishing design
+  decisions.
 
-The Web atomic insert+attach with a client-generated idempotency key was completed in
-`supabase/migrations/20260914010000_sofia_web_atomic_admission.sql` and is checked off under PR5.
+### Delivered pacing arithmetic supersedes `design.md` Decision 2
+
+The helper mirrors the **delivered** SQL, not the design's design-time formula, because the two differ
+and the SQL is authoritative:
+
+- Delivered: `least(6000, 2000 + least(units, 500) * 10)` — pinned by
+  `supabase/tests/sofia_pacing_core_b.sql`, which asserts `repeat('a',100) -> 3000`.
+- `design.md` Decision 2 instead states `2000 + max(0, length - 100) * 10`, which would yield 2000 for
+  100 characters and contradict the delivered pin.
+- `20260913010000_sofia_timing_and_pacing_correction.sql` also dropped the generation-elapsed
+  subtraction, leaving `greatest(0, pace_minimum_ms(text))`. No elapsed-subtracting helper was shipped,
+  because that would have created a second pacing authority.
+
+The divergences are asserted in `tests/unit/sofia-response-pace-migration-parity.test.ts`, so a future
+reader cannot silently "fix" the helper back to the stale formula.
 
 ---
 
@@ -71,10 +88,10 @@ Retained as merged; the 10 s / 20 s figures are superseded by the 25 s / 60 s co
 - [x] Cover mount/reconnect readback, `expires_at > Date.now()` rendering, local expiry safety-net re-render, RLS isolation, and final-message subscription behavior *(evidence: `ChatContainer.tsx` mount refresh + 5 s interval + expiry safety-net effect; `supabase/tests/sofia_web_presence.sql` plan(6) incl. owner/outsider/expiry RLS isolation)*.
 - [x] Add deployment gates, canary entry evidence, observation/stop conditions, verification, and rollback documentation; all producer/runtime gates default-closed *(evidence: `cbe169a` closed-gate canary; `docs/runbooks/sofia-multichannel-status-and-handover.md`)*.
 
-## Finishing design decisions — delivered except the TS pace helper
+## Finishing design decisions — delivered
 
 - [x] Combined `renew_sofia_owner_activity(batch uuid,owner_kind text,owner_token uuid,attemptA uuid,owner_ttl int,activity_ttl int)` returning `{attempt_id,owner_expires_at,activity_expires_at}|null`; renews live actual `G`/`D` plus `A` atomically; TTL 10..300 inclusive, NULL invalid, defaults 60/30 seconds; 10-second serialized heartbeat; no result after fence loss *(evidence: `20260911020000_sofia_activity_core_a_corrective.sql`)*.
-- [ ] Implement explicit ECMAScript trim whitespace and UTF-16 SQL parity, including supplementary points >65535, with emoji/combining/NBSP/BOM/ASCII boundary tests. *(INCOMPLETE on the TypeScript side: SQL parity is delivered in `sofia_response_pace_minimum_ms` — exact ECMAScript whitespace trim via `regexp_replace` and UTF-16 unit counting via `octet_length(ch)=4 -> 2` — but the deterministic pure helper `apps/web/src/lib/sofia/response-pace.ts` from the design was never created; pacing lives only in SQL.)*
+- [x] Implement explicit ECMAScript trim whitespace and UTF-16 SQL parity, including supplementary points >65535, with emoji/combining/NBSP/BOM/ASCII boundary tests. *(evidence: `apps/web/src/lib/sofia/response-pace.ts` (new) mirrors the delivered SQL authority `public.sofia_response_pace_minimum_ms(text)` with the explicit ECMAScript WhiteSpace + LineTerminator list (`SOFIA_PACE_TRIM_CODE_POINTS`), the exported `SOFIA_PACE_BASE_MS=2000` / `SOFIA_PACE_STEP_MS=10` / `SOFIA_PACE_MAX_MS=6000` / `SOFIA_PACE_SCAN_LIMIT_UNITS=500` literals, and `trimSofiaResponseText` / `countSofiaResponseUtf16Units` / `sofiaResponsePaceMinimumMs`; `tests/unit/sofia-response-pace.test.ts` covers emoji (2 units → 2020 ms), combining marks (2020 / 4000 ms), NBSP+BOM trim (3000 ms), ASCII boundaries (0/1/99/100/101/500/501/100000) and native-`trim` equivalence across all 25 code points; `tests/unit/sofia-response-pace-migration-parity.test.ts` reads the migration from disk and asserts the constants rebuild the SQL arithmetic `least(6000, 2000 + least(v_units, 500) * 10)` and that the SQL trim class expands to exactly the TypeScript code point set, reproducing every pgTAP-pinned value (3000/6000/2020/3000) and proving non-vacuous detection against mutated SQL and a mutated constant. 16/16 Vitest pass (`npx vitest run` on both files); `tsc --noEmit` and `eslint` clean. Documented divergence: the delivered SQL has no `-100` free allowance and no generation-elapsed subtraction (pinned by `supabase/tests/sofia_pacing_core_b.sql` and `20260913010000_sofia_timing_and_pacing_correction.sql`), so the helper mirrors the delivered contract and the worker keeps using DB-derived `remaining_ms` / `pace_not_before`.)*
 - [x] Add nullable `pace_not_before`; paced wrapper calls existing three-argument completion in the same transaction, annotating only a newly created intent; existing `beginDelivery` gets the nullable due predicate and no paced-begin bypass; elapsed bounded integer 0..2147483647; DB returns `remaining_ms` from DB time *(evidence: `20260911030000_sofia_pacing_core_b.sql`)*.
 - [x] Use the dedicated hashed advisory activity lock *(evidence: `pg_advisory_xact_lock(hashtextextended('sofia-activity:' || conversa_id, 91022))` in `20260911020000_sofia_activity_core_a_corrective.sql`; empirical dblink concurrent test retained in `sofia_activity_core_a.sql`)*.
 
