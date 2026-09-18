@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { novaMensagemSchema } from '@/lib/validation/chat';
-import { obterSofiaPresence, processarIaChat } from '@/app/actions/chat';
+import { admitirMensagemSofiaWeb, obterSofiaPresence, processarIaChat } from '@/app/actions/chat';
 import { BrandLogo } from '@/components/ui/BrandLogo';
 import ModalVisualizadorComprovante from '@/components/comprovantes/ModalVisualizadorComprovante';
 import { PaymentProofChatCard } from '@/components/chat/PaymentProofChatCard';
@@ -271,6 +271,10 @@ export default function ChatContainer({
   // Input & Upload States
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
+  // Chave de idempotência gerada pelo cliente para a admissão atômica Web. Ela é mantida
+  // enquanto a mesma tentativa de envio não conclui, de modo que repetir o envio devolve a
+  // mensagem e o lote originais sem alterar o prazo do lote.
+  const pendingIdempotencyKeyRef = useRef<string | null>(null);
   const [sofiaPresenceExpiresAt, setSofiaPresenceExpiresAt] = useState<string | null>(null);
   const isIaTyping = sofiaPresenceExpiresAt !== null && new Date(sofiaPresenceExpiresAt).getTime() > Date.now();
   const [uploading, setUploading] = useState(false);
@@ -747,7 +751,39 @@ export default function ChatContainer({
 
     setIsSending(true);
 
+    // Elegibilidade idêntica à do acionamento atual da Sofia: texto, sem anexo e IA ativa.
+    const elegivelParaAdmissao = Boolean(conversa.ia_ativa && messageData.conteudo && !messageData.url_anexo);
+    const idempotencyKey = elegivelParaAdmissao
+      ? pendingIdempotencyKeyRef.current ?? crypto.randomUUID()
+      : null;
+    if (idempotencyKey) pendingIdempotencyKeyRef.current = idempotencyKey;
+
     try {
+      // Com o gate Web ativo a admissão é atômica no servidor (mensagem + lote na mesma
+      // transação) e o navegador não grava em `mensagens`; com o gate fechado a action
+      // devolve `mensagem: null` e o caminho direto abaixo permanece inalterado.
+      if (idempotencyKey && messageData.conteudo) {
+        const admissao = await admitirMensagemSofiaWeb(
+          conversa.id,
+          messageData.conteudo,
+          idempotencyKey,
+        );
+
+        if (!admissao.success) {
+          setValidationError('Erro ao enviar mensagem. Por favor, tente novamente.');
+          return;
+        }
+
+        if (admissao.mensagem) {
+          pendingIdempotencyKeyRef.current = null;
+          setMensagens((prev) => [...prev, admissao.mensagem as Mensagem]);
+          setInputValue('');
+          removeAttachment();
+          void refreshSofiaPresence();
+          return;
+        }
+      }
+
       const { data, error } = await supabase
         .from('mensagens')
         .insert({
@@ -760,6 +796,8 @@ export default function ChatContainer({
         .single();
 
       if (error) throw error;
+
+      pendingIdempotencyKeyRef.current = null;
 
       if (data) {
         setMensagens((prev) => [...prev, data]);
