@@ -374,3 +374,117 @@ The apply agent's envelope reported "43 focused Vitest cases", and `tasks.md` wa
 Vitest cases". Neither is reproducible: the measured count across the named files is 20 + 10 = 30.
 The annotation now records the measured number. The stale "exactly two" summary and the
 `## PR5` heading were also corrected to reflect one remaining task.
+
+## Run 4 — Deterministic TS pace helper with migration-parity drift guard (slice 2 of 2)
+
+Closes the last unchecked task: `tasks.md` line 77 (the "Finishing design decisions" item the
+parent prompt called line 75). Slice 1 (`f8986e4`, Web atomic admission) was not touched, and no
+SQL, migration, design, proposal, or spec file was edited.
+
+Artifacts: `apps/web/src/lib/sofia/response-pace.ts` (new, 77 lines),
+`tests/unit/sofia-response-pace.test.ts` (new, 77 lines),
+`tests/unit/sofia-response-pace-migration-parity.test.ts` (new, 160 lines).
+
+### What was delivered
+
+- Exported documented constants `SOFIA_PACE_BASE_MS=2000`, `SOFIA_PACE_STEP_MS=10`,
+  `SOFIA_PACE_MAX_MS=6000`, `SOFIA_PACE_SCAN_LIMIT_UNITS=500`, all rebuilt into the SQL expression
+  by the parity test — no inline magic numbers remain in the arithmetic.
+- `SOFIA_PACE_TRIM_CODE_POINTS` (25 code points) plus `trimSofiaResponseText`,
+  `countSofiaResponseUtf16Units`, `sofiaResponsePaceMinimumMs`. The helper is pure, clock-free,
+  I/O-free and deterministic.
+- The worker path is unchanged: it still consumes DB-derived `remaining_ms` / `pace_not_before`
+  from `complete_sofia_inbound_batch_paced` and `claim_sofia_response_delivery`.
+
+### Two recorded divergences from `design.md` Decision 2 (delivered SQL wins)
+
+The parent prompt quoted the design arithmetic `2000 + max(0, min(len,500) - 100) * 10` and an
+elapsed subtraction. The delivered, pgTAP-pinned SQL does neither:
+
+1. `supabase/migrations/20260911030000_sofia_pacing_core_b.sql` returns
+   `least(6000, 2000 + least(v_units, 500) * 10)`, and
+   `supabase/tests/sofia_pacing_core_b.sql` pins `100 units → 3000 ms`. Implementing the design's
+   `- 100` allowance would have produced 2000 ms and failed that pin, so the helper mirrors the
+   delivered formula. The divergence is asserted in code, not just prose.
+2. `20260913010000_sofia_timing_and_pacing_correction.sql` supersedes the Core B remainder with
+   `greatest(0, public.sofia_response_pace_minimum_ms(p_response_text))`, deliberately dropping the
+   generation-elapsed subtraction so model latency cannot shorten the pause. The helper therefore
+   exposes no elapsed-subtracting remainder function — shipping one would create a second,
+   divergent pacing authority.
+
+No SQL was modified. Both facts are pinned by the parity test.
+
+### TDD Cycle Evidence
+
+| Task | Test File | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+|------|-----------|-------|------------|-----|-------|-------------|----------|
+| pace helper | `tests/unit/sofia-response-pace.test.ts` | Unit | N/A (new helper) | ✅ Written (import of missing module, test file failed to resolve) | ✅ 4/4 passed | ✅ 10 cases (emoji, combining marks, NBSP/BOM, ASCII 0/1/99/101/500/100000, native-`trim` equivalence) | ➖ None needed (whitespace list exported as data during GREEN) |
+| drift guard | `tests/unit/sofia-response-pace-migration-parity.test.ts` | Unit (migration contract) | N/A (new) | ✅ Written; falsified by mutating `SOFIA_PACE_STEP_MS` 10→11 → 3/6 failed, then restored | ✅ 6/6 passed | ✅ Mutated-SQL and mutated-constant cases prove the guard is non-vacuous | ✅ Fixed the malformed mutation probe (`U&'^[` bracket) after the RED run |
+
+Exact commands and observed counts:
+
+- `npx vitest run tests/unit/sofia-response-pace.test.ts` → RED (module unresolved, 0 tests), then GREEN 4/4, then 10/10 after triangulation.
+- `npx vitest run tests/unit/sofia-response-pace-migration-parity.test.ts` → 1 failed / 5 passed during authoring (mutation probe bug), fixed → 6/6; falsification with `SOFIA_PACE_STEP_MS=11` → 3 failed / 3 passed; constant restored → 6/6.
+- `npx vitest run tests/unit/sofia-response-pace.test.ts tests/unit/sofia-response-pace-migration-parity.test.ts` → **16 passed / 2 files**.
+- `npx tsc --noEmit` → exit 0; `npx eslint <three files>` → exit 0, no output.
+- Not run: full `npm test` suite and any DB command (no database authorization in this slice).
+
+### Workload / PR boundary (authored lines, additions + deletions, measured)
+
+| Work unit | Lines |
+| --- | ---: |
+| `response-pace.ts` | 77 |
+| behavior test | 77 |
+| migration-parity drift guard | 160 |
+| `tasks.md` line 77 | 2 |
+| **Reviewable implementation + tests + task line** | **316** |
+| this apply-progress record | 96 |
+| **Total including the OpenSpec record** | **412** |
+
+The reviewable deliverable is **316 lines, 84 under the 400-line budget**, as one cohesive work
+unit — no chaining and no `size:exception` are needed for the code itself. The apply-progress
+record adds 96 lines of evidence, putting the whole authored diff at 412, i.e. 12 lines over the
+default budget if OpenSpec records are counted as review lines. Nothing was deleted or compressed
+to reach a number, and no chain was invented for a 12-line documentation overage: the honest
+remedy is either accepting the 412 total or excluding the OpenSpec record from the code-review
+count, which the parent owns. Rollback boundary: delete the two new test files and
+`apps/web/src/lib/sofia/response-pace.ts`; no other behaviour depends on them because the worker
+still reads DB-derived pacing.
+
+### Structured status consumed / produced
+
+- Consumed native `gentle-ai.sdd-status` v2 for this change: `applyState: ready`,
+  `nextRecommended: apply`, `taskProgress 35/36`, `dependencies.apply: ready`,
+  `blockedReasons: []`. After the check-off, `tasks.md` now has 36 checked and **0 unchecked**.
+- `actionContext`: `mode: repo-local`, `allowedEditRoots: ["/home/wilkin/proyectos/CRM_Sofia_Manager"]`
+  — every written path is inside that root. Status granted no writes; the parent prompt authorized
+  exactly these four paths.
+- Not committed, by instruction. `skill_resolution: paths-injected`
+  (`/home/wilkin/.agents/skills/work-unit-commits/SKILL.md`, read before work; strict-TDD support
+  read from `/home/wilkin/.pi/agent/gentle-ai/support/strict-tdd.md`; `openspec/config.yaml`
+  declares `strict_tdd: true`, runner `vitest`).
+
+### Known residual risks left for the parent
+
+- `response-pace.ts` has no production caller; its consumption is the migration-parity drift guard,
+  exactly as the parent's slice contract specified. The stale prose at `tasks.md` lines 14–16 and
+  the heading `## Finishing design decisions — delivered except the TS pace helper` now understate
+  completion and were left untouched because the allowed edit surface was line 77 only.
+
+### Slice 2 review workload — parent resolution
+
+The apply agent reported 316 authored lines (helper 77 + unit suite 77 + parity suite 160 + 2) and 412
+if the 96-line OpenSpec record is counted as review lines. **The parent resolves this as within budget,
+with no `size:exception` required:** 316 is the reviewable deliverable and sits 84 lines under the
+400-line threshold. The OpenSpec evidence record is a process artifact, not reviewable code, and is not
+counted against the code-review budget here. No content was trimmed to reach that number, which the
+slice contract prohibited.
+
+### Slice 2 consumption disclosure
+
+`apps/web/src/lib/sofia/response-pace.ts` has **no production caller**, and it must never be presented
+as a live pacing path. The worker continues to use the DB-derived `remaining_ms` and `pace_not_before`.
+The helper's consumption is its migration-parity drift guard, which `readFileSync`s the migration and
+asserts the TypeScript constants and the expanded whitespace code-point set still match the delivered
+SQL. Non-vacuity was demonstrated by mutating `SOFIA_PACE_STEP_MS` from 10 to 11, observing 3 of 6
+parity tests fail, then restoring it.
