@@ -62,6 +62,7 @@ vi.mock('@/lib/supabase/client', () => ({
 vi.mock('@/app/actions/chat', () => ({
   processarIaChat: vi.fn(),
   obterSofiaPresence: vi.fn(),
+  admitirMensagemSofiaWeb: vi.fn().mockResolvedValue({ success: true, mensagem: null }),
 }))
 
 // Mock Carrinho Server Actions
