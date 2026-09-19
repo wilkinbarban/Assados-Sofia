@@ -39,6 +39,8 @@ services:
       - SOFIA_INBOUND_BATCH_RUNTIME_ENABLED=${SOFIA_INBOUND_BATCH_RUNTIME_ENABLED:-false}
       - SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED=${SOFIA_INBOUND_BATCH_TELEGRAM_ENQUEUE_ENABLED:-false}
       - SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED=${SOFIA_INBOUND_BATCH_EVOLUTION_ENQUEUE_ENABLED:-false}
+      # Customer memory gate is process-startup-only and closed by default.
+      - SOFIA_CUSTOMER_MEMORY_ENABLED=${SOFIA_CUSTOMER_MEMORY_ENABLED:-false}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s

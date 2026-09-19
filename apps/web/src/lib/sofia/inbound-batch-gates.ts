@@ -27,3 +27,13 @@ export function webInboundBatchEnqueueEnabled(
 ): boolean {
   return value === "true";
 }
+
+/**
+ * Gate unico da memoria de cliente: cobre a extracao pos-conclusao e o bloco de
+ * fatos no prompt. Fechado por padrao, exatamente como os demais gates Sofia.
+ */
+export function customerMemoryEnabled(
+  value = process.env.SOFIA_CUSTOMER_MEMORY_ENABLED,
+): boolean {
+  return value === "true";
+}
