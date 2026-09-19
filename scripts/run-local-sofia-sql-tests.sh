@@ -66,6 +66,7 @@ readonly -a default_suites=(
   'supabase/tests/sofia_inbound_batch_processing.sql'
   'supabase/tests/sofia_pacing_core_b.sql'
   'supabase/tests/sofia_web_presence.sql'
+  'supabase/tests/sofia_customer_memory.sql'
 )
 
 log() { printf '%s\n' "$*"; }
@@ -76,7 +77,7 @@ usage() {
 Usage: scripts/run-local-sofia-sql-tests.sh [supabase/tests/<suite>.sql ...]
 
 Runs pgTAP suites inside a disposable local Supabase stack. With no arguments it runs
-the six Sofia suites this harness owns. Only files under supabase/tests may be named.
+the seven Sofia suites this harness owns. Only files under supabase/tests may be named.
 EOF
 }
 
