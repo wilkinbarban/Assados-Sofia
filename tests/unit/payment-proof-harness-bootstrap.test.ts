@@ -40,6 +40,8 @@ const forwardMigrationImports = new Map([
     '20260828340000_payment_proof_operator_leases.sql',
     '20260828380000_payment_proof_dead_letter_replay.sql',
     '20260828390000_payment_proof_purge_fencing_and_replay_purge.sql',
+    '20260918010000_fatos_cliente_schema.sql',
+    '20260918030000_anonymize_fatos_cliente.sql',
   ]],
 ])
 const importPattern = /^\s*\\ir?\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*(?:--.*)?$/gm

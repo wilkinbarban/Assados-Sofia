@@ -628,3 +628,314 @@ suite, and no other suite references `fatos_cliente`.
 directory, and 27 production containers share the host with the disposable harness. That resource
 contention is the plausible cause of the readiness flakiness. Freeing the Docker build cache
 (5.87 GB) converted a consistently failing start into an intermittently succeeding one.
+
+---
+
+## Slice 4 — LGPD anonymization extension (tasks 15–18)
+
+Appended cumulatively; every Slice 1–3 byte above is untouched.
+
+### Delivery ledger (this run)
+
+| Field | Value |
+|-------|-------|
+| Change | `sofia-customer-memory` |
+| Artifact store | `openspec` (native status is the lifecycle authority; no Engram write in this run) |
+| Delivery strategy | `ask-on-risk` |
+| Chain strategy (parent-resolved) | `stacked-to-main` |
+| This run | **PR 4 of 10 — Slice 4: `anonymizar_usuario_admin` removes the customer's facts before unlinking the identity** |
+| PR base | `main` (chain; depends only on Slice 1's `public.fatos_cliente` table) |
+| Slice forecast | ~85 lines |
+| Slice measured | **125 changed lines** (29 migration + 93 added + 3 deleted in the suite) |
+
+### Structured status consumed (native, read-only)
+
+Re-consumed before any edit with
+`gentle-ai sdd-status sofia-customer-memory --cwd /home/wilkin/proyectos/CRM_Sofia_Manager`:
+`schema: gentle-ai.sdd-status@2`, `store: openspec`, `next: apply`, `apply: ready`, `verify: ready`,
+`archive: ready`, `actionContext.mode: repo-local`,
+`allowedEditRoots: [/home/wilkin/proyectos/CRM_Sofia_Manager]`, `applyState: ready`,
+`tasks: 14/43 complete`; no blocked reasons, no notes. Status granted no writes; the parent scoped
+this run to tasks 15–18.
+
+### Review Workload Gate
+
+`tasks.md` still carries `Decision needed before apply: Yes`, `Chained PRs recommended: Yes`,
+`400-line budget risk: High`, `Chain strategy: pending`. The parent resolved `stacked-to-main` and
+assigned PR 4 of 10. **Measured: 125 changed lines — inside the 400-line budget, so no
+`size:exception` is requested or needed for this slice.** The forecast was ~85; the overage is real
+fixture and assertion work rather than padding (the ordering probe, the state-coverage fixtures, and
+the negative control are three distinct obligations of task 17). No comment, blank line, test, or
+documentation was deleted or compressed to reach any number.
+
+### Completed tasks and persisted checkbox state
+
+`grep -oE '^- \[[x ]\] [0-9]+\.' openspec/changes/sofia-customer-memory/tasks.md` re-read after the
+final run shows **tasks 1–18 as `- [x]`** and tasks 19–43 as `- [ ]` (18 checked, 25 unchecked, 43
+total):
+
+- [x] 15. RED — the leak reproduced: 3 `not ok` of 51.
+- [x] 16. GREEN — the migration plus the guarded include: 51 `ok`, 0 `not ok`.
+- [x] 17. TRIANGULATE — ordering probe, state coverage, negative control, purge cascade: 56 `ok`.
+- [x] 18. REFACTOR — own file, verbatim body proven, rollback pairing documented, `plan(56)` reconciled.
+
+### Files changed
+
+| Path | Change | Lines |
+|------|--------|-------|
+| `supabase/migrations/20260918030000_anonymize_fatos_cliente.sql` | new: `create or replace public.anonymizar_usuario_admin(uuid)` = the current body verbatim + exactly one `delete from public.fatos_cliente ...` immediately before the `clientes.usuario_id` update + the source `revoke`/`grant` line | +29 (new file) |
+| `supabase/tests/admin_user_dual_deletion.sql` | + two guarded includes, + fixtures (users/perfis/clientes/facts), + the `BEFORE UPDATE` ordering probe, + 18 assertions, `plan(38)` → `plan(56)` | +93 / -3 |
+| `openspec/changes/sofia-customer-memory/tasks.md` | tasks 15–18 checked with in-line evidence | artifact |
+| `openspec/changes/sofia-customer-memory/apply-progress.md` | this cumulative Slice 4 section | artifact |
+
+No file outside the authorized edit surface was touched. The Slice 1–3 migrations, the RPC migration,
+`sofia_customer_memory.sql`, `design.md`, `proposal.md`, the five spec artifacts,
+`scripts/run-local-sofia-sql-tests.sh`, and all application (TypeScript) code are unmodified. No
+commit was created.
+
+### The one statement added, and where
+
+```sql
+ -- Unica instrucao nova: antes de anular `usuario_id`, apagar os fatos do cliente alvo.
+ delete from public.fatos_cliente f using public.clientes c where c.id=f.cliente_id and c.usuario_id=p_usuario_alvo_id;
+```
+
+It sits on the line immediately before
+`update public.clientes set usuario_id=null,... where usuario_id=p_usuario_alvo_id;`. Machine-checked
+in this run:
+
+- `body preserved verbatim: True` — the reproduced body equals
+  `supabase/migrations/20260826222000_dual_deletion_runtime_fixes.sql` lines 2–20 byte-for-byte after
+  removing the one inserted statement;
+- `new statements inserted inside the body: 1`;
+- `delete immediately precedes the clientes update: True`;
+- `acl line identical to the source: True` — the reproduced `revoke all ... / grant execute ...` line
+  is byte-identical to line 36 of the source migration, which covers **both**
+  `anonymizar_usuario_admin(uuid)` and `iniciar_purga_total_usuario_admin(uuid)`. Keeping the
+  statement byte-identical is the literal reading of "preserve verbatim"; it is a no-op for the second
+  function (`create or replace` already preserved its ACL) and is flagged here so a reviewer can ask
+  for a narrowed pair if they prefer the migration to mention only the function it replaces.
+
+Everything else the task requires is present unchanged: the `admin` authority check through
+`public.tem_funcoes`, the anti-lockout rule, the target `for update` lock, the idempotent
+`deletion_requested_at` early return, the anonymized-phone allocation loop, the `perfis` update, and
+the `logs_auditoria` insert.
+
+### TDD Cycle Evidence
+
+Strict TDD is active (`openspec/config.yaml`: `strict_tdd: true`). SQL tasks have no `vitest` surface,
+so RED/GREEN/TRIANGULATE/REFACTOR are the four tasks as ordered below; no TypeScript file changed, so
+`vitest` is not on this slice's surface.
+
+| Cycle | Step | Command | Observed result |
+|-------|------|---------|-----------------|
+| 1 | RED | `bash /tmp/slice4-run.sh red1` | `plan(51)`; 51 assertions ran; **3 `not ok`**, 48 `ok`, psql exit 0 → `# Looks like you failed 3 tests of 51`: `not ok 10 - normal mode deletes every fact of the anonymized customer`, `not ok 14 - the target facts were already deleted at the instant clientes.usuario_id was nulled` (probe value `2`), `not ok 16 - the idempotent second call deletes no additional fact` |
+| 2 | GREEN | `bash /tmp/slice4-run.sh green` | `plan(51)`; **51 `ok`, 0 `not ok`**, psql exit 0 |
+| 3 | TRIANGULATE | `bash /tmp/slice4-run.sh triangulate` | `plan(56)`; **56 `ok`, 0 `not ok`**, psql exit 0 — the 18 new assertions include the ordering probe, the pending/rejected/superseded coverage pair, the negative control triple, and the purge cascade pair |
+| 4 | REFACTOR | `python3` verbatim/ordering checks + `git diff --check` + the TRIANGULATE run above | `body preserved verbatim: True`; `new statements inserted inside the body: 1`; `delete immediately precedes the clientes update: True`; `acl line identical to the source: True`; `no whitespace errors`; `plan(56)` = 56 executed assertions |
+
+The RED failure is the real defect, not a missing-object abort: with the unextended function the
+anonymized customer keeps its facts and the ordering probe records two facts still present at the
+instant `usuario_id` was nulled. Assertions 13/17/18 (`the ordering probe observed exactly one identity
+unlink`, `the idempotent second call never re-nulls the identity`, `the idempotent second call leaves
+other customers untouched`) passed on RED too, which is what makes the three failures specific rather
+than incidental.
+
+#### The runner actually used, and why (exact reproduction recipe)
+
+`scripts/run-selfhost-supabase-tests.sh` is this suite's designated runner, and its own preflight
+refuses on this host:
+
+```
+$ bash scripts/run-selfhost-supabase-tests.sh supabase/tests/admin_user_dual_deletion.sql
+pgTAP extension is unavailable in asados-supabase-db
+selfhost_exit=1
+```
+
+`pgTAP` is not installed in the production `postgres` database
+(`select count(*) from pg_extension where extname='pgtap'` → `0`), and installing an extension into
+the production database is a production write that stays with the human, so it was not done.
+
+The RED/GREEN cycles therefore ran through the designated runner's own flow, reproduced verbatim
+against the same container and the same psql flags, with pgTAP installed **in the disposable clone
+only**:
+
+```bash
+container=asados-supabase-db; db="asados_slice4_<label>_$$"
+docker exec "$container" createdb -U postgres "$db"
+docker exec "$container" sh -c "pg_dump -U supabase_admin --format=custom --exclude-schema=realtime postgres \
+  | pg_restore -U supabase_admin -d '$db' --exit-on-error"
+docker exec "$container" psql -U postgres -d "$db" -Atqc \
+  'create extension if not exists pgtap; create extension if not exists dblink;'
+docker exec "$container" sh -c "printf '\\\\ir tests/admin_user_dual_deletion.sql\n' > /tmp/slice4/run.sql"
+docker exec "$container" psql --no-psqlrc --quiet --tuples-only --no-align --pset pager=off \
+  -v ON_ERROR_STOP=1 -U supabase_admin -d "$db" -f /tmp/slice4/run.sql
+# then: dropdb -U postgres --if-exists --force "$db" and rm -rf the staged tree
+```
+
+This is a genuine runtime boundary: the repository's real suite, the real migration files, the real
+production schema cloned read-only from the live database (`pg_dump` only), the same
+`public.ecr.aws/supabase/postgres` image, and the same psql invocation the harness uses. Each run
+dropped its scratch database and staged tree afterwards; a re-check after the last run showed no
+`asados_slice4%`/`asados_sql_test%` database and no `/tmp/slice4-suites*` directory left behind.
+
+#### Evidence surfaces that are met, partially met, or unmet
+
+1. **Met — clone runner (above):** RED 3 failures → GREEN 51/51 → TRIANGULATE 56/56, plus the
+   machine-checked verbatim/ordering comparison. This is the evidence the four task checkboxes rest
+   on.
+2. **Partially met — repository-local harness.** Six `supabase start` attempts were made against
+   `scripts/run-local-sofia-sql-tests.sh` (one direct, three in a retry loop, two more after pruning
+   the Docker build cache). Five failed at the readiness race the parent already described —
+   `supabase_storage_... container is not ready: unhealthy`, sometimes with `realtime`, `studio`, or
+   `pg_meta` — and the harness reported `error: disposable local Supabase failed to start`. **One
+   attempt did start**, ran the full migration chain twice (`initial supabase db reset` exit 0 in 98s
+   and `supabase db reset before admin_user_dual_deletion.sql` exit 0 in 99s), staged 14 suite files,
+   and then stopped at the suite's own plan line:
+
+   ```
+   admin_user_dual_deletion.sql:35: ERROR:  function plan(integer) does not exist
+   select plan(56);
+   FAIL admin_user_dual_deletion.sql (assertions=0 failed=0 psql_exit=3 tap_exit=1)
+   ```
+
+   That failure is **pre-existing and environmental, not a defect of this slice**: the disposable
+   local stack ships pgTAP as an available extension but does not install it, and this suite never
+   created it (unlike `supabase/tests/sofia_customer_memory.sql`, whose own prelude, added in Slice 1,
+   does `create extension if not exists pgtap;`). It is also why this suite is absent from the
+   harness's `default_suites` and why the tasks name the self-hosted runner for it. Adding
+   `create extension` to the suite is outside this slice's authorized edit surface, so it was not
+   done; it is recorded here as an option for the parent. Two useful facts did come out of that run:
+   the new migration applies cleanly inside the full `supabase db reset` chain, and the harness's
+   normalization printed `owner_transfers_removed=8`, so the new migration adds no
+   `alter function ... owner to supabase_admin` transfer and the harness's own invariant still holds.
+3. **Unmet — the designated self-hosted runner:** blocked by its `pgTAP extension is unavailable in
+   asados-supabase-db` preflight, as quoted above. No claim is made that it would have passed.
+4. **Not attempted — the whole default suite set.** The seven default suites do not reference
+   `public.fatos_cliente` or `anonymizar_usuario_admin`, and this slice only adds a suite file change
+   plus one function replacement, so the regression surface there is empty; the harness's flakiness
+   made the attempt not worth the host cost. No claim is made that the default set is green.
+
+### Deviations from the design and from this slice's task text
+
+1. **A second guarded include (`20260918010000_fatos_cliente_schema.sql`) was added to the prelude.**
+   Task 15 names only the anonymization include, but the suite inserts into `public.fatos_cliente` and
+   the runners clone a database that does not contain the table yet, so without the schema include the
+   suite cannot run outside a database where the migration was already applied. It follows the same
+   `to_regclass` guard pattern as the pre-existing includes. Recorded rather than silently absorbed.
+2. **The anonymization guard tests the function definition, not an object's existence.** The
+   migration is `create or replace`, so `to_regclass`/`to_regprocedure` cannot distinguish "already
+   applied" from "not applied": the guard is
+   `position('fatos_cliente' in pg_get_functiondef('public.anonymizar_usuario_admin(uuid)'::regprocedure)) = 0`.
+   It is false in the repository-local harness (chain already applied) and true in a clone, which is
+   exactly the behaviour the two runners need.
+3. **The ordering probe is a `BEFORE UPDATE` trigger with a `SECURITY DEFINER` function.** The probe
+   must write a row from inside `anonymizar_usuario_admin`, whose owner is `postgres`
+   (`select proowner::regrole` on the live database) while the harness's psql session user is
+   `supabase_admin`; an invoker trigger would run as `postgres` and could not insert into a table
+   owned by the session user. `SECURITY DEFINER` makes the trigger run as its own owner, which is the
+   role that created the probe table in that session, so the probe works under both session roles. The
+   probe table and the trigger function are created inside the suite's transaction and disappear with
+   its final `rollback;`.
+4. **`plan(38 + k)` resolved to `plan(56)`** — 38 pre-existing assertions plus 18 new ones. The count
+   is asserted exactly and the plan matches the executed assertions.
+5. **`tasks.md` forecast table left as-is** (`Chain strategy: pending`, budget risk High): the parent
+   supplied `stacked-to-main`, and this phase owns only the task checkboxes.
+
+### Remaining tasks (unchanged, still unchecked)
+
+25 unchecked tasks, tasks 19–43, all of them in Slices 5–10
+(`grep -n '^- \[ \]' openspec/changes/sofia-customer-memory/tasks.md` reproduces them exactly):
+
+- [ ] 19. **RED:** Create failing `tests/unit/sofia-customer-memory.test.ts` and `tests/unit/sofia-customer-memory-extraction.test.ts` covering: `customerMemoryEnabled` strictness (`undefined`, `'false'`, `'TRUE'`, `'1'`, `'yes'`, `' true'` all false; only `'true'` true); `normalizarValor` (NFKC, invisible/bidi stripping, newline/tab collapsing, double-space collapsing, whitespace-only rejection, 500/501 boundary, control characters, discard-never-truncate); candidate validation (unknown `tipo`, bad `chave`, over-long `valor` discarded while valid siblings survive; `assunto !== 'cliente'` discards the whole response; dedupe by `(tipo, chave)`; 10-candidate cap); and extraction (gate closed → zero provider calls and zero RPC; gate open → exactly one provider call for a batch of several messages; provider failure → logged, zero facts, no throw, no retry, no second call; parse failure → zero facts; exact RPC arguments `p_origem: 'ia'`, `p_forcar_pendente: false`, the batch conversation id; one candidate's `23505`/`22023` not aborting its siblings; no `valor` in any log line). Evidence: `bash scripts/workspace-preflight.sh run -- vitest run tests/unit/sofia-customer-memory.test.ts tests/unit/sofia-customer-memory-extraction.test.ts` fails.
+- [ ] 20–43. Slice 5 (gate, helpers, extraction, deploy defaults), Slice 6 (worker hook), Slice 7
+  (prompt block), Slice 8 (operator auth move + review actions), Slice 9 (operator facts panel), and
+  Slice 10 (client facts section) — none started, none touched.
+
+### Chain context (chained-pr / work-unit-commits contract)
+
+Strategy `stacked-to-main`; one deliverable work unit per PR; the migration, the fixtures, the probe,
+and the assertions stay in the unit they verify.
+
+```text
+main
+ └── PR 1 (tasks 1-5)  schema, constraints, index set            committed 5665370
+      ├── PR 2 (tasks 6-10)   write path + prompt read RPCs      committed a794fb9
+      ├── PR 3 (tasks 11-14)  operator/owner RPCs, isolation     committed 01f4c6c
+      ├── PR 4 (tasks 15-18)  LGPD anonymization extension       📍 current (uncommitted)
+      ├── PR 5 (tasks 19-23)  gate + helpers + extraction + deploy defaults
+      ├── PR 6 (tasks 24-27)  worker post-completion hook
+      ├── PR 7 (tasks 28-31)  approved-facts prompt block
+      ├── PR 8 (tasks 32-35)  operator auth move + review actions
+      ├── PR 9 (tasks 36-39)  operator facts panel + `fatos` tab
+      └── PR 10 (tasks 40-43) client facts section in `/cliente/perfil`
+```
+
+- **Current PR**: 4 of 10, ends at task 18. Out of scope for this PR: every task 19–43, all
+  TypeScript, the worker hook, the prompt block, both UI surfaces, and any commit.
+- **Dependency note for reviewers**: this slice reads Slice 1's table and nothing else; it is
+  independent of the RPC slices, so it can land before or after PR 2/3.
+- **Rollback boundary**: revert `20260918030000_anonymize_fatos_cliente.sql` **together with**
+  `public.fatos_cliente`. Reverting the deletion alone silently re-creates the anonymization leak,
+  which is stated in the migration header and repeated in the REFACTOR task above.
+- **Review budget**: 125 changed lines against the 400-line budget; no `size:exception` needed.
+- **Verification plan**: re-run the clone-runner recipe above (RED/GREEN/TRIANGULATE as recorded), and
+  once pgTAP is available to a sanctioned runner, `bash scripts/run-selfhost-supabase-tests.sh
+  supabase/tests/admin_user_dual_deletion.sql` for the 56-assertion suite.
+- **Runtime boundary**: real — the suite executes against a PostgreSQL clone of the live schema with
+  `pgTAP` and the real migration files. There is no application runtime boundary in this slice because
+  no application code changed.
+- **Uncommitted**: the parent commits each slice; this unit is left in the working tree.
+
+### Final-byte evidence anchor (2026-09-18)
+
+The TRIANGULATE run below was repeated after the last edit to either file, so the numbers are
+anchored to the exact bytes this slice leaves in the working tree:
+
+| File | md5 |
+|------|-----|
+| `supabase/migrations/20260918030000_anonymize_fatos_cliente.sql` | `26724175c2900953f148fbb7ce72ee1d` |
+| `supabase/tests/admin_user_dual_deletion.sql` | `2de5e577cc49620bcd8075770cdb6ed2` |
+
+```
+$ bash /tmp/slice4-run.sh final
+1..56
+ok=56 not_ok=0   # 56 'ok' lines, 0 'not ok' lines, no "Looks like you failed" banner, psql exit 0
+```
+
+### Slice 4 — evidence obtained, and a corrected false alarm (parent, 2026-09-18)
+
+**The LGPD slice now has sanctioned evidence.**
+
+    bash scripts/run-local-sofia-sql-tests.sh supabase/tests/admin_user_dual_deletion.sql
+    initial supabase db reset -> exit=0 (32s)
+    PASS admin_user_dual_deletion.sql (assertions=56 failed=0 psql_exit=0)
+    all selected suites passed
+
+**CORRECTION — the migration chain was never broken.** An earlier note in this file's history and
+the parent's working conclusion claimed the three new `20260918*` migrations broke
+`supabase db reset`, and that a production deploy would therefore fail. That claim was FALSE. It was
+artefactual to the development host, which runs the production Compose stack (27 containers) on
+7.8 GB and cannot reliably start the harness's own disposable stack. An A/B there appeared
+decisive — `db reset` failed with the migrations and passed without them — but the difference was
+resource contention, not SQL. Re-run on a host with headroom (16 CPU / 15.57 GiB), `db reset`
+succeeds **with** the migrations in 32 seconds. The migrations are sound; no production risk exists.
+
+The transferable lesson: a test failure on a saturated host masquerades as a code defect, and an A/B
+run on that same host returns a false verdict, because control and treatment differ only by a factor
+that interacts with resource pressure. Verify code-defect claims on a host with headroom.
+
+**Suite fixes required to make this suite runnable at all.** This suite was never exercised by the
+local harness (it is not in `default_suites`), and two pre-existing gaps hid behind that:
+
+1. It never created the pgTAP extension. Fixed with an idempotent
+   `create extension if not exists pgtap;`, matching all seven sibling suites.
+2. It assumed a session that can switch to `supabase_admin`. The local harness connects as
+   `postgres`, which is not a superuser under Supabase, so both `set role` and the three
+   `set local role` sites failed with `42501`. Each is now guarded by
+   `pg_has_role(current_user, 'supabase_admin', 'member')`, and the negative branch runs
+   `reset role` rather than staying on `authenticated` — the switch genuinely has to escalate, since
+   fixture inserts run after `set local role authenticated`.
+
+Registering this suite in `default_suites` would keep the LGPD path exercised routinely; it was
+deliberately left out of this slice to avoid widening the shared regression set.
