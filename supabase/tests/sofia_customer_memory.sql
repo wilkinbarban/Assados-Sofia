@@ -4,12 +4,17 @@
 -- ainda pode nao conter esta migracao. O harness tambem afirma a contagem exata de
 -- `alter function ... owner to supabase_admin`; este slice nao adiciona nenhuma.
 create extension if not exists pgtap;
+create extension if not exists dblink;
 select not to_regclass('public.fatos_cliente') is not null as apply_fatos_cliente_schema \gset
 \if :apply_fatos_cliente_schema
 \ir ../migrations/20260918010000_fatos_cliente_schema.sql
 \endif
+select not to_regprocedure('public.registrar_fato_cliente(uuid,text,text,text,text,uuid,numeric,boolean)') is not null as apply_fatos_cliente_rpcs \gset
+\if :apply_fatos_cliente_rpcs
+\ir ../migrations/20260918020000_fatos_cliente_rpcs.sql
+\endif
 begin;
-select plan(87);
+select plan(146);
 set role postgres;
 
 insert into public.clientes(id,nome,telefone) values
@@ -137,6 +142,122 @@ select is((select count(*)::integer from public.fatos_cliente f where f.chave='h
 select lives_ok($$insert into public.fatos_cliente(cliente_id,tipo,chave,valor,origem,estado) values('f1000000-0000-4000-8000-000000000001','preferencia','substituido_historico','antigo','operador','substituido')$$,'a superseded fact is retained as history');
 select lives_ok($$insert into public.fatos_cliente(cliente_id,tipo,chave,valor,origem,estado) values('f1000000-0000-4000-8000-000000000001','preferencia','substituido_historico','novo','operador','aprovado')$$,'a superseded row does not block a new live fact for the key');
 select is((select count(*)::integer from public.fatos_cliente f where f.chave='substituido_historico' and f.estado in ('pendente','aprovado')),1,'exactly one live row remains for the key after a supersession');
+
+-- Slice 2, task 6 (RED): funcoes de backend. A autoridade e conferida antes da forma e a forma
+-- antes da existencia, para que um chamador nao autorizado nao use codigos de erro como oraculo.
+insert into public.clientes(id,nome,telefone) values ('f1000000-0000-4000-8000-000000000003','Memoria C','5541997000003');
+insert into public.conversas(id,cliente_id) values ('f2000000-0000-4000-8000-000000000003','f1000000-0000-4000-8000-000000000003');
+select set_config('request.jwt.claim','{"role":"anon"}',false);
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','autoridade','x','ia',null,0.90,false)$$,'42501','SOFIA_FATO_SERVICE_ROLE_REQUIRED','authority is checked before argument shape for the writer');
+select set_config('request.jwt.claim','{"role":"service_role"}',false);
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','cor','entrada','x','ia',null,0.90,false)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a tipo outside the five values is invalid input');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','entrada','x','voz',null,null,false)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','an origem outside the four values is invalid input');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','entrada',null,'ia',null,0.90,false)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a missing required value is invalid input');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','Entrada','x','ia',null,0.90,false)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a key outside the regex is invalid input');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','entrada','ao ponto'||chr(10)||'sem cebola','ia',null,0.90,false)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a newline inside a value is invalid input before the constraint is reached');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','entrada','x','cliente',null,0.90,false)$$,'22023','SOFIA_FATO_CONFIANCA_INVALIDA','a non-inferred origin cannot carry a confidence');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','entrada','x','ia',null,null,false)$$,'22023','SOFIA_FATO_CONFIANCA_INVALIDA','an inference without a confidence is invalid input');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','entrada','x','ia',null,1.20,false)$$,'22023','SOFIA_FATO_CONFIANCA_INVALIDA','an inference outside the 0..1 confidence window is invalid input');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','entrada','x','ia','f2000000-0000-4000-8000-000000000002',0.90,false)$$,'22023','SOFIA_FATO_CONVERSA_INVALIDA','a provenance conversation of another customer is invalid input');
+select throws_ok($$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-0000000000ff','preferencia','entrada','x','ia',null,0.90,false)$$,'P0002','SOFIA_FATO_CLIENTE_NAO_ENCONTRADO','an unknown customer is reported only after authority and shape');
+
+-- Derivacao de estado e leitura do prompt: somente aprovado e nunca observacao.
+select is((select estado from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000003','preferencia','prompt_limite','ao ponto','ia','f2000000-0000-4000-8000-000000000003',0.90,false)),'aprovado','a high-confidence inference with a provenance conversation lands approved');
+select is((select estado from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000003','preferencia','prompt_pendente','bem passado','ia',null,0.50,false)),'pendente','a below-threshold inference lands pending');
+select is((select estado from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000003','observacao','prompt_interno','cliente prefere retirada','operador',null,null,false)),'aprovado','a trusted operator note is approved');
+select is((select array_agg(f.tipo||'/'||f.chave order by f.tipo,f.chave) from public.buscar_fatos_para_prompt('f1000000-0000-4000-8000-000000000003',20) f),array['preferencia/prompt_limite']::text[],'the prompt surface returns only approved non-observacao facts');
+select is((select count(*)::integer from public.buscar_fatos_para_prompt('f1000000-0000-4000-8000-000000000003',1)),1,'the prompt surface honours the caller limit inside the 1..20 window');
+select is((select count(*)::integer from public.buscar_fatos_para_prompt('f1000000-0000-4000-8000-0000000000ff',20)),0,'an unknown customer returns an empty set rather than P0002');
+select throws_ok($$select * from public.buscar_fatos_para_prompt('f1000000-0000-4000-8000-000000000003',0)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a zero limit is invalid input');
+select throws_ok($$select * from public.buscar_fatos_para_prompt('f1000000-0000-4000-8000-000000000003',21)$$,'22023','SOFIA_FATO_ENTRADA_INVALIDA','a limit above the surface cap is invalid input');
+select set_config('request.jwt.claim','{"role":"anon"}',true);
+select throws_ok($$select * from public.buscar_fatos_para_prompt('f1000000-0000-4000-8000-000000000003',20)$$,'42501','SOFIA_FATO_SERVICE_ROLE_REQUIRED','the prompt read requires the backend service role');
+select set_config('request.jwt.claim','{"role":"service_role"}',true);
+
+-- ACLs e definidor de seguranca: EXECUTE apenas para service_role nas duas funcoes.
+select function_privs_are('public','registrar_fato_cliente',array['uuid','text','text','text','text','uuid','numeric','boolean'],'service_role',array['EXECUTE'],'the writer is executable by the backend service role');
+select function_privs_are('public','registrar_fato_cliente',array['uuid','text','text','text','text','uuid','numeric','boolean'],'authenticated',array[]::text[],'the writer is not executable by an authenticated user');
+select function_privs_are('public','registrar_fato_cliente',array['uuid','text','text','text','text','uuid','numeric','boolean'],'anon',array[]::text[],'the writer is not executable by anon');
+select ok(not exists (select 1 from pg_catalog.pg_proc p cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) a where p.oid='public.registrar_fato_cliente(uuid,text,text,text,text,uuid,numeric,boolean)'::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE'),'PUBLIC cannot execute the writer');
+select function_privs_are('public','buscar_fatos_para_prompt',array['uuid','integer'],'service_role',array['EXECUTE'],'the prompt read is executable by the backend service role');
+select function_privs_are('public','buscar_fatos_para_prompt',array['uuid','integer'],'authenticated',array[]::text[],'the prompt read is not executable by an authenticated user');
+select function_privs_are('public','buscar_fatos_para_prompt',array['uuid','integer'],'anon',array[]::text[],'the prompt read is not executable by anon');
+select ok(not exists (select 1 from pg_catalog.pg_proc p cross join lateral pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) a where p.oid='public.buscar_fatos_para_prompt(uuid,integer)'::regprocedure and a.grantee=0 and a.privilege_type='EXECUTE'),'PUBLIC cannot execute the prompt read');
+select ok((select p.prosecdef and (select count(*) = 1 and bool_and(config in ('search_path=', 'search_path=""')) from pg_catalog.unnest(coalesce(p.proconfig, array[]::text[])) as config where config like 'search_path=%') from pg_catalog.pg_proc p where p.oid = 'public.registrar_fato_cliente(uuid,text,text,text,text,uuid,numeric,boolean)'::regprocedure),'the writer is security definer with a safe empty search path');
+select ok((select p.prosecdef and (select count(*) = 1 and bool_and(config in ('search_path=', 'search_path=""')) from pg_catalog.unnest(coalesce(p.proconfig, array[]::text[])) as config where config like 'search_path=%') from pg_catalog.pg_proc p where p.oid = 'public.buscar_fatos_para_prompt(uuid,integer)'::regprocedure),'the prompt read is security definer with a safe empty search path');
+
+-- Slice 2, task 8: precedencia de proveniencia cliente > operador > importado > ia. Uma correcao
+-- do cliente materializa a mesma forma que `corrigir_meu_fato_cliente` grava: origem=cliente e
+-- estado=aprovado no fato vigente.
+select is((select estado from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','endereco','precedencia_cliente','Rua das Flores, 123','cliente',null,null,false)),'aprovado','a customer correction lives as an approved origem=cliente row');
+create temporary table precedencia_antes as select f.id, f.valor, f.origem, f.estado, f.atualizado_em from public.fatos_cliente f where f.chave='precedencia_cliente';
+create temporary table precedencia_ia as select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','endereco','precedencia_cliente','Rua das Pedras, 999','ia',null,0.99,false);
+select is((select substituido_id from precedencia_ia),null::uuid,'a strictly lower-ranked candidate returns substituido_id null');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='precedencia_cliente'),1,'a strictly lower-ranked candidate creates no successor row');
+select is((select f.valor||'|'||f.origem||'|'||f.estado from public.fatos_cliente f where f.chave='precedencia_cliente'),(select p.valor||'|'||p.origem||'|'||p.estado from precedencia_antes p),'the live row is byte-identical after the discarded inference');
+select ok((select f.atualizado_em = p.atualizado_em from public.fatos_cliente f, precedencia_antes p where f.chave='precedencia_cliente'),'the discarded inference does not even touch atualizado_em');
+select is((select fato_id from precedencia_ia),(select p.id from precedencia_antes p),'the returned fact is the surviving customer fact, so a later ia candidate cannot overwrite the correction');
+
+-- Repeticao identica de mesmo rank: no-op idempotente.
+create temporary table repetido_primeiro as select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','repetido','ao ponto','ia',null,0.95,false);
+create temporary table repetido_segundo as select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','repetido','ao ponto','ia',null,0.95,false);
+select is((select fato_id from repetido_segundo),(select fato_id from repetido_primeiro),'a repeated identical inference returns the existing live row');
+select is((select substituido_id from repetido_segundo),null::uuid,'the repeated inference supersedes nothing');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='repetido'),1,'the repeated extraction never produces a second live fact');
+select is((select estado from repetido_segundo),'aprovado','the idempotent replay preserves the stored state');
+
+-- Mesmo rank com valor diferente: substituicao com elo de historico.
+create temporary table sucessao_antes as select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','formato_pedido','sucessao','sem cebola','operador',null,null,false);
+create temporary table sucessao_depois as select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','formato_pedido','sucessao','com cebola','operador',null,null,false);
+select is((select substituido_id from sucessao_depois),(select fato_id from sucessao_antes),'a same-rank candidate with a different value supersedes its predecessor');
+select is((select f.estado from public.fatos_cliente f where f.id=(select fato_id from sucessao_antes)),'substituido','the predecessor transitions to substituido instead of being deleted');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='sucessao' and f.estado in ('pendente','aprovado')),1,'exactly one live row remains for the key after a supersession');
+select is((select f.substitui_id from public.fatos_cliente f where f.id=(select fato_id from sucessao_depois)),(select fato_id from sucessao_antes),'the successor links its predecessor through substitui_id');
+
+-- Corrida da mesma chave: o perdedor espera o pg_advisory_xact_lock e substitui, sem 23505.
+select dblink_connect('fatos_owner', :'runtime_dblink_conninfo');
+select dblink_connect('fatos_contender', :'runtime_dblink_conninfo');
+select dblink_exec('fatos_owner', $$set request.jwt.claim = '{"role":"service_role"}'$$);
+select dblink_exec('fatos_contender', $$set request.jwt.claim = '{"role":"service_role"}'$$);
+-- A suite roda em uma unica transacao nao confirmada, que as sessoes dblink nao enxergam: o
+-- cliente da corrida e criado pela propria conexao, em autocommit, para que ambos o vejam.
+select dblink_exec('fatos_owner', $$insert into public.clientes(id,nome,telefone) values ('f1000000-0000-4000-8000-000000000004','Corrida Concorrente','5541997000004')$$);
+select dblink_exec('fatos_owner', $$begin$$);
+select dblink_exec('fatos_owner', $$do $remote$ begin perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('f1000000-0000-4000-8000-000000000004|preferencia|corrida_concorrente', 91423)); end $remote$ $$);
+select dblink_send_query('fatos_contender', $$select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000004','preferencia','corrida_concorrente','versao do concorrente','operador',null,null,false)$$);
+select is(dblink_is_busy('fatos_contender'),1,'the competing same-key writer waits on the advisory key lock');
+select dblink_exec('fatos_owner', $$do $remote$ begin perform public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000004','preferencia','corrida_concorrente','versao do dono','operador',null,null,false); end $remote$ $$);
+select dblink_exec('fatos_owner', $$commit$$);
+create temporary table corrida as select * from dblink_get_result('fatos_contender') as result(fato_id uuid, estado text, substituido_id uuid);
+select dblink_disconnect('fatos_owner');
+select dblink_disconnect('fatos_contender');
+select ok((select substituido_id is not null from corrida),'the same-key race resolves as a supersession instead of a 23505');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='corrida_concorrente' and f.estado in ('pendente','aprovado')),1,'one live row survives the same-key race');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='corrida_concorrente' and f.estado='substituido'),1,'the race leaves exactly one superseded predecessor');
+select ok(not ('fatos_owner' = any(coalesce(dblink_get_connections(), array[]::text[])) or 'fatos_contender' = any(coalesce(dblink_get_connections(), array[]::text[]))),'both concurrent writers finish cleanly and their connections are closed');
+
+-- Slice 2, task 9: durabilidade da recusa. A recusa bruta abaixo e a mesma transicao que
+-- `revisar_fato_cliente` fara no slice 3 (rejeitar nao apaga e libera a chave).
+select is((select estado from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','formato_pedido','recusa_ia','sem cebola','operador',null,null,false)),'aprovado','the refused claim starts as a live approved fact for the setup');
+update public.fatos_cliente set estado='rejeitado', atualizado_em=pg_catalog.now() where chave='recusa_ia';
+create temporary table recusa_antes as select f.id, f.atualizado_em from public.fatos_cliente f where f.chave='recusa_ia';
+create temporary table recusa_depois as select * from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','formato_pedido','recusa_ia','sem cebola','ia',null,1.00,false);
+select is((select estado from recusa_depois),'pendente','a re-inferred value identical to a refused claim lands pending, never approved');
+select is((select substituido_id from recusa_depois),null::uuid,'the re-inferred candidate supersedes nothing');
+select ok((select f.estado='rejeitado' and f.atualizado_em=(select a.atualizado_em from recusa_antes a) from public.fatos_cliente f where f.id=(select a.id from recusa_antes a)),'the refused row stays rejected and is not touched');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='recusa_ia' and f.estado='substituido'),0,'the refusal is never superseded by re-inference');
+select is((select count(*)::integer from public.fatos_cliente f where f.chave='recusa_ia' and f.estado in ('pendente','aprovado')),1,'exactly one live row exists after the re-inference');
+
+-- Slice 2, task 10 (REFACTOR): nenhuma funcao aceita estado de aprovacao solicitado e a tabela
+-- continua inalcancavel fora da superficie de funcoes.
+select is((select estado from public.registrar_fato_cliente('f1000000-0000-4000-8000-000000000001','preferencia','forcar_pendente','ao ponto','operador',null,null,true)),'pendente','p_forcar_pendente makes approval harder even for a trusted origin');
+select ok(position('p_estado' in pg_catalog.pg_get_functiondef('public.registrar_fato_cliente(uuid,text,text,text,text,uuid,numeric,boolean)'::regprocedure)) = 0,'no function accepts a requested approval state');
+set local role authenticated;
+select throws_ok($$select * from public.fatos_cliente$$,'42501',null,'direct table access stays denied for authenticated');
+reset role;
+set local role service_role;
+select throws_ok($$select * from public.fatos_cliente$$,'42501',null,'direct table access stays denied for service_role as well');
+reset role;
 
 select * from finish();
 rollback;
