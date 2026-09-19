@@ -939,3 +939,310 @@ local harness (it is not in `default_suites`), and two pre-existing gaps hid beh
 
 Registering this suite in `default_suites` would keep the LGPD path exercised routinely; it was
 deliberately left out of this slice to avoid widening the shared regression set.
+
+---
+
+## Slice 5 — Gate, helpers, extraction, deploy defaults (tasks 19–23)
+
+Appended cumulatively; every Slice 1–4 byte above is untouched.
+
+### Delivery ledger (this run)
+
+| Field | Value |
+|-------|-------|
+| Change | `sofia-customer-memory` |
+| Artifact store | `openspec` (native status is the lifecycle authority) + `engram` mirror (this run writes both, per `openspec/config.yaml` `persistence.mode: both`) |
+| Delivery strategy | `ask-on-risk` |
+| Chain strategy (parent-resolved) | `stacked-to-main` |
+| This run | **PR 5 of 10 — Slice 5: runtime gate, pure helpers, provider helper, extraction, deploy defaults** |
+| PR base | `main` (chain; depends on PR 2's RPCs for the persistence call, though this slice only needs their names) |
+| Slice forecast | ~290 lines |
+| Slice measured | **673 authored lines** (104 + 91 + 111 production, 150 + 204 tests, 13 tracked additions) |
+
+### Structured status consumed (native, read-only)
+
+Re-consumed before any edit with
+`gentle-ai sdd-status sofia-customer-memory --cwd /home/wilkin/proyectos/CRM_Sofia_Manager`:
+`schema: gentle-ai.sdd-status@2`, `store: openspec`, `next: apply`, `apply: ready`, `verify: ready`,
+`archive: ready`, `actionContext.mode: repo-local`,
+`workspaceRoot: /home/wilkin/proyectos/CRM_Sofia_Manager`,
+`allowedEditRoots: [/home/wilkin/proyectos/CRM_Sofia_Manager]`, `applyState: ready`,
+`taskProgress: 18/43 complete`; no blocked reasons, no notes. Status granted no writes; the parent
+scoped this run to tasks 19–23 and supplied the resolved delivery path (`stacked-to-main`, PR 5 of
+10, base `main`, PR 4 committed as `404151d`).
+
+### Review Workload Gate — decision required (measured, not forecast)
+
+`tasks.md` carries `Decision needed before apply: Yes`, `Chained PRs recommended: Yes`,
+`400-line budget risk: High`, `Chain strategy: pending`. The parent resolved `stacked-to-main` and
+scoped this run to tasks 19–23 with the instruction to keep the slice inside the 400-line budget and
+near the ~290 forecast. **The measured slice is 673 authored lines: 68% above the 400-line budget
+and 132% above the forecast.** The parent's `next_recommended` for this run is a delivery decision it
+must raise with the user.
+
+Where the lines actually are, and why they cannot be cut without losing required coverage:
+
+| File | Lines | Why it is this size |
+|------|-------|---------------------|
+| `apps/web/src/lib/sofia/customer-memory.ts` | 104 | `FATO_TIPOS` + the five constants/interface + `normalizarValor` (NFKC, invisible/bidi stripping, newline/tab collapsing, double-space collapsing, trim, three discard rules) + `validarCandidatos` (five per-field rules, per-candidate discard, dedupe, 10-cap). Every rule in it is a named assertion in task 19. |
+| `apps/web/src/lib/ai/llm-json.ts` | 91 | Two provider paths: the OmniRoute `business-economy` call and the legacy OpenRouter/DeepSeek resolution (`sk-or-` detection, `OPENROUTER_MODEL` from `obterConfiguracaoSistema`, `AbortSignal.timeout(timeoutMs)`, the two headers `openrouter.ts` sets). Task 20 names every one of those details; `openrouter.ts` convergence onto this helper is an explicit non-goal. |
+| `apps/web/src/lib/sofia/customer-memory-extraction.ts` | 111 | `PROMPT_EXTRACAO` (§7.7 verbatim, 11 lines), `LoteExtraivel`, the gate read, the single provider call, tolerant JSON parsing, per-candidate persistence with its own try/catch, and the three log sites that must never carry a `valor`. |
+| `tests/unit/sofia-customer-memory.test.ts` | 150 | 23 cases: the 12-value strictness table, 8 normalization properties, 7 candidate-validation properties, and 2 source-level boundary assertions. |
+| `tests/unit/sofia-customer-memory-extraction.test.ts` | 204 | 23 cases across gate inertness, single-call-per-batch, exact RPC arguments, five failure paths, log hygiene, and the five adversarial cases task 22 names. |
+| `inbound-batch-gates.ts` / `docker-compose.yml` / `scripts/deploy-web.sh` | +10 / +2 / +1 | The gate function and the two closed-by-default deployment paths. |
+
+No comment, JSDoc block, blank line, test, or assertion was deleted or compressed to reach a number,
+and no file was restyled (the review-budget rule forbids it). The forecast assumed a terse test
+style; these suites are written in the readable style of `tests/unit/sofia-customer-memory*.test.ts`
+siblings rather than the dense one-line style of the older `evolution-*` suites. **Recommendation:
+accept `size:exception` for PR 5, or split Slice 5 into two PRs** (19 + 20 + 21 = gate, helpers,
+provider helper, deploy defaults ≈ 358 lines; 22 + 23 = the adversarial/refactor pass over the
+extraction suite). This run did not split mid-flight because the parent owns the PR boundary.
+
+### Completed tasks and persisted checkbox state
+
+Re-read after the final run; `grep -oE '^- \[[x ]\] [0-9]+\.' openspec/changes/sofia-customer-memory/tasks.md`
+shows tasks 1–23 as `- [x]` and tasks 24–43 as `- [ ]` (23 checked, 20 unchecked, 43 total):
+
+- [x] 19. RED — both failing suites created with the full task-19 coverage; run recorded as a real
+      RED (`Failed to resolve import "@/lib/sofia/customer-memory"`).
+- [x] 20. GREEN — `customerMemoryEnabled` + `customer-memory.ts` + `llm-json.ts` +
+      `customer-memory-extraction.ts`; 38 tests green.
+- [x] 21. GREEN — the deployment surface closed by default; `.env.example` recorded as **unresolved**
+      (policy-blocked path, contents not invented).
+- [x] 22. TRIANGULATE — five adversarial cases; 46 tests green.
+- [x] 23. REFACTOR — single gate read, no direct table access, no `valor` in any log; related
+      regression suites and `tsc`/`eslint`/`git diff --check` green; slice size recorded.
+
+### Files changed
+
+| Path | Change | Lines |
+|------|--------|-------|
+| `apps/web/src/lib/sofia/inbound-batch-gates.ts` | + `customerMemoryEnabled()` (strict `"true"`, same shape as the five existing gates) | +10 |
+| `apps/web/src/lib/sofia/customer-memory.ts` | new: `FATO_TIPOS`, `normalizarValor`, `validarCandidatos` (pure, no I/O, no logging) | +104 |
+| `apps/web/src/lib/ai/llm-json.ts` | new: `chamarModeloEconomicoJson` (OmniRoute economy, else legacy OpenRouter/DeepSeek; never throws) | +91 |
+| `apps/web/src/lib/sofia/customer-memory-extraction.ts` | new: `PROMPT_EXTRACAO`, `LoteExtraivel`, `extrairFatosDoLote` | +111 |
+| `tests/unit/sofia-customer-memory.test.ts` | new: 23 cases | +150 |
+| `tests/unit/sofia-customer-memory-extraction.test.ts` | new: 23 cases | +204 |
+| `docker-compose.yml` | + `SOFIA_CUSTOMER_MEMORY_ENABLED=${SOFIA_CUSTOMER_MEMORY_ENABLED:-false}` beside the Sofia batch gates | +2 |
+| `scripts/deploy-web.sh` | + `SOFIA_CUSTOMER_MEMORY_ENABLED=false` in `close_operational_gates` | +1 |
+| `.env.example` | **not modified** — policy-blocked path (see deviations) | 0 |
+| `openspec/changes/sofia-customer-memory/tasks.md` | tasks 19–23 checked off with in-line evidence | artifact |
+| `openspec/changes/sofia-customer-memory/apply-progress.md` | this cumulative Slice 5 section | artifact |
+
+No file outside the authorized edit surface was touched. The migrations, both SQL suites,
+`design.md`, `proposal.md`, the five spec artifacts, `inbound-batch-worker.ts` (Slice 6),
+`openrouter.ts` (Slice 7), and every later slice's file are untouched. No commit was created.
+
+### What each surface now does
+
+- **Gate.** `customerMemoryEnabled(value = process.env.SOFIA_CUSTOMER_MEMORY_ENABLED)` returns
+  `value === "true"`. `undefined`, `'false'`, `'TRUE'`, `'True'`, `'1'`, `'0'`, `'yes'`, `'on'`,
+  `' true'`, `'true '` and `''` are all false; only the exact string `'true'` opens it.
+- **`normalizarValor`.** Rejects non-strings, applies `NFKC`, strips `\u200B-\u200F`,
+  `\u202A-\u202E`, `\u2066-\u2069`, `\uFEFF`, collapses `\r\n`/`\n`/`\r`/`\t` runs to one space,
+  collapses runs of two or more spaces, trims, then discards empty/whitespace-only, `> 500`
+  characters, or any remaining control character (`\u0000-\u001F`, `\u007F`). **Discard, never
+  truncate**: a 501-character value returns `null`, not a 500-character lie.
+- **`validarCandidatos`.** Requires `assunto === 'cliente'` (any other subject discards the whole
+  response), then per candidate: `tipo` in the five values, `chave` matching
+  `^[a-z0-9_]{1,64}$`, a non-null normalized `valor`, and a finite `confianca` in `0..1`. Invalid
+  candidates are dropped individually with valid siblings surviving; dedupe by `(tipo, chave)` keeps
+  the first; the batch is capped at 10.
+- **`chamarModeloEconomicoJson`.** One function, two paths: OmniRoute `business-economy` when
+  `AI_ROUTING_V2_ENABLED === 'true'`, otherwise the legacy resolution identical to `openrouter.ts`
+  (`sk-or-` prefix detection, `deepseek-chat` or `OPENROUTER_MODEL` from `obterConfiguracaoSistema`,
+  `AbortSignal.timeout(params.timeoutMs)`). JSON is requested through the prompt on **both** paths, so
+  the parser is the only schema authority and the memory gate never depends on another gate. It never
+  throws: any failure resolves to `null`.
+- **`extrairFatosDoLote(supabase, lote)`.** Step 1 is the single gate read. Step 2 is exactly one
+  `chamarModeloEconomicoJson({ system: PROMPT_EXTRACAO, user: lote.contexto, maxTokens: 400,
+  timeoutMs: 5000 })` call for the whole batch — `lote.contexto` is the hoisted
+  `formatBatchContext(c.members)` string, so extraction performs **no second DB read**. Step 3 parses
+  (tolerating a fenced block or trailing text) and validates. Step 4 persists each candidate through
+  `supabase.rpc('registrar_fato_cliente', { p_cliente_id, p_tipo, p_chave, p_valor, p_origem: 'ia',
+  p_origem_conversa_id, p_confianca, p_forcar_pendente: false })` with **no client-side threshold
+  check** — the state comes from the database invariant. Step 5 returns the count of persisted facts.
+  The function never throws and never retries; `23505` and `22023` are logged by code and do not abort
+  sibling candidates. The module contains no `.from(`, `.insert(`, or `.update(`: the RPC is the only
+  write surface.
+
+### TDD Cycle Evidence
+
+Strict TDD is active (`openspec/config.yaml`: `strict_tdd: true`, runner `vitest`). Four cycles, in
+the task order:
+
+| Cycle | Step | Command | Observed result |
+|-------|------|---------|-----------------|
+| 1 | RED (task 19) | `bash scripts/workspace-preflight.sh run -- npx vitest run tests/unit/sofia-customer-memory.test.ts tests/unit/sofia-customer-memory-extraction.test.ts` | exit 1: `Test Files 2 failed (2)`, `Tests no tests`, `Error: Failed to resolve import "@/lib/sofia/customer-memory" from "tests/unit/sofia-customer-memory.test.ts". Does the file exist?` (and the same for `customer-memory-extraction`) |
+| 2 | GREEN (task 20) | same command | `Test Files 2 passed (2)`, `Tests 38 passed (38)` |
+| 3 | TRIANGULATE (task 22) | same command | first attempt of the added source-inspection assertions failed honestly (`ENOENT ... tests/unit/undefined`, because under the jsdom environment `fs.readFileSync` does not accept the jsdom `URL` instance; fixed by resolving with `node:path` against `process.cwd()`), then `Test Files 2 passed (2)`, `Tests 46 passed (46)` |
+| 4 | REFACTOR (task 23) | suite command + `npx vitest run tests/unit/sofia-inbound-batch-worker.test.ts tests/unit/sofia-inbound-batch-maintenance-route.test.ts tests/unit/sofia-inbound-batch-maintenance-scheduler.test.ts tests/unit/phase8-operations.test.ts` + `npx tsc --noEmit -p apps/web/tsconfig.json` + `npx eslint <six files>` + `git diff --check` + `bash -n scripts/deploy-web.sh` | slice suite `46 passed (46)`; related suites `Test Files 4 passed (4)`, `Tests 82 passed (82)`; `tsc` no output, exit 0; `eslint` exit 0; `git diff --check` exit 0; `bash -n` exit 0 |
+
+**Runner note (recorded, not hidden).** The literal command in the task text
+(`bash scripts/workspace-preflight.sh run -- vitest run ...`) cannot start on this host:
+`scripts/workspace-preflight.sh: line 110: exec: vitest: not found`, because the preflight `exec`s the
+command directly and only an npm script puts `node_modules/.bin` on `PATH`. `npx vitest run ...` —
+the same binary the repository's own `npm run test` invokes — is the runner used here. This is a
+PATH detail, not a test failure.
+
+**Evidence surfaces met / not attempted.**
+
+1. **Met** — the two vitest suites with their real runner and real counts (RED 2 failed / 0 tests →
+   GREEN 38 passed → TRIANGULATE 46 passed), plus the related-suite regression run and the
+   `tsc`/`eslint`/`bash -n`/`git diff --check` checks. A SQL harness is not needed for this slice:
+   the pgTAP surface belongs to Slices 1–4 and was not re-run.
+2. **Not attempted** — the whole-repository `npm run test` and `npm run build`. Both are owned by
+   later slices and by the whole-change verification table; no claim is made that either is green, and
+   no result is invented for either.
+3. **Unmet by policy** — the `.env.example` documentation line (below).
+
+### Deviations from the design and from this slice's task text
+
+1. **`.env.example` is unresolved, not written.** Task 21 permits exactly this outcome ("if that file
+   cannot be read or does not exist, record it as unresolved rather than inventing contents"). The
+   harness safety policy refuses the path for the `read` **and** `edit` tools
+   (`Gentle AI safety policy blocked access to sensitive path: .../.env.example`), and no contents
+   were invented and no policy bypass was attempted through the shell. The two deployment surfaces
+   that actually close the gate (`docker-compose.yml` default `${SOFIA_CUSTOMER_MEMORY_ENABLED:-false}`
+   and the `close_operational_gates` rollback line) are in place, so the gate is closed by default in
+   production; only the template documentation is owed. This closes `design.md` §16 item 1 as
+   "policy-blocked path", replacing its earlier "contents were not verified" wording.
+2. **Two source-level boundary assertions were added instead of a prose-only REFACTOR claim**
+   (task 23). They read the four modules from disk and assert that
+   `process.env.SOFIA_CUSTOMER_MEMORY_ENABLED` occurs exactly once in the whole of `apps/web/src`
+   (inside `customerMemoryEnabled()`), that the extraction, `llm-json`, and `customer-memory` modules
+   never mention the variable, and that the extraction module contains no `.from(`/`.insert(`/`.update(`.
+   They are executable proof of two task-23 obligations that would otherwise be reviewer-only claims.
+3. **`LoteExtraivel` is declared in the extraction module and types `canal` inline** as
+   `'telegram' | 'whatsapp' | 'web'`, because the worker's `Channel` type is module-private
+   (`inbound-batch-worker.ts:10`). Slice 6 can map its local `Channel` into this structural type
+   without introducing a cross-module type dependency, which is also why the divergence cannot leak.
+4. **`chamarModeloEconomicoJson` swallows every failure and returns `null`**, and
+   `extrairFatosDoLote` handles both `null` and a thrown rejection. The design's §7.4 step 5 requires
+   the failure to be logged once with a token and a batch id; keeping the helper silent and logging in
+   the extraction module means exactly one log line per failure and no leaked provider message (a
+   provider error can contain a `valor`, and a test proves it never reaches the log).
+5. **The dedupe keeps the first candidate for a `(tipo, chave)` pair.** Task 19 says "dedupe by
+   `(tipo, chave)`" without fixing which wins; first-wins is the deterministic choice, is asserted,
+   and cannot promote a later, unvalidated duplicate over the earlier validated one.
+6. **The adversarial "ignore as instruções" case asserts the schema boundary, not a model behaviour.**
+   The provider response in that test carries an out-of-enum `tipo` and a duplicate key; the assertion
+   is that only the schema-validated, first-seen candidate reaches the RPC. No claim is made that a
+   model can be talked out of anything.
+7. **`tasks.md` forecast table left as-is** (`Chain strategy: pending`, budget risk High): the parent
+   supplied `stacked-to-main`, and this phase owns only the task checkboxes.
+
+### Remaining tasks (unchanged, still unchecked)
+
+20 unchecked tasks, `openspec/changes/sofia-customer-memory/tasks.md` lines 143–176
+(`grep -n '^- \[ \]' openspec/changes/sofia-customer-memory/tasks.md` reproduces them exactly):
+
+- Slice 6 — worker post-completion hook: tasks 24–27 (`inbound-batch-worker.ts`,
+  `tests/unit/sofia-inbound-batch-worker.test.ts`). It owns the `extractFacts?` dep, the deferred drain
+  loop, and the at-most-once comment; it consumes `LoteExtraivel` and `extrairFatosDoLote` from this
+  slice and is the first production caller of both.
+- Slice 7 — approved-facts prompt block: tasks 28–31 (extends `customer-memory.ts` with
+  `agruparFatosParaPrompt`, edits `openrouter.ts`).
+- Slice 8 — operator authorization move and review actions: tasks 32–35.
+- Slice 9 — operator facts panel and `fatos` tab: tasks 36–39.
+- Slice 10 — client facts section in `/cliente/perfil`: tasks 40–43.
+
+Nothing in Slices 6–10 was started: `inbound-batch-worker.ts`, `openrouter.ts`,
+`app/actions/atendimento.ts`, both UI surfaces, and the worker suite are byte-unchanged by this run.
+
+### Chain context (chained-pr / work-unit-commits contract)
+
+Strategy `stacked-to-main`; one deliverable work unit per PR; tests stay with the unit they verify.
+
+```text
+main
+ ├── PR 1 (tasks 1-5)   committed 5665370 — schema, constraints, index set
+ ├── PR 2 (tasks 6-10)  committed a794fb9 — backend RPCs
+ ├── PR 3 (tasks 11-14) committed 01f4c6c — operator/owner RPCs, isolation
+ ├── PR 4 (tasks 15-18) committed 404151d — LGPD anonymization extension
+ └── PR 5 (tasks 19-23) 📍 current (uncommitted) — gate + helpers + extraction + deploy defaults
+      ├── PR 6 (tasks 24-27)  worker post-completion hook                  depends on PR 5
+      ├── PR 7 (tasks 28-31)  approved-facts prompt block                  depends on PR 3,5
+      ├── PR 8 (tasks 32-35)  operator auth move + review actions          depends on PR 3
+      ├── PR 9 (tasks 36-39)  operator facts panel + `fatos` tab           depends on PR 8
+      └── PR 10 (tasks 40-43) client facts section in `/cliente/perfil`     depends on PR 3
+```
+
+- **Current PR**: 5 of 10, base `main`, ends at task 23. Out of scope for this PR: every task 24–43,
+  the worker hook, the prompt block, both UI surfaces, and any commit.
+- **Dependency note for reviewers**: this slice ships no production caller of `extrairFatosDoLote` —
+  the gate is closed by default in both deployment paths, and Slice 6 is what wires the worker hook.
+  Nothing in this PR changes existing runtime behaviour: `inbound-batch-gates.ts` is the only
+  pre-existing production file touched, and it only gained an unused-by-default function.
+- **Rollback boundary**: revert the three new modules, the two test files, the `docker-compose.yml`
+  line, and the `deploy-web.sh` line; the change returns to the PR 4 state and the memory feature
+  has no runtime surface at all. The gate being closed by default (`:-false`, and the explicit
+  `=false` in `close_operational_gates`) means no rollback window depends on an env change landing.
+- **Review budget**: 673 authored lines against the 400-line budget — a `size:exception` decision (or
+  a 2-PR split of the slice) is required and is recorded above.
+- **Uncommitted**: the parent commits each slice; this unit is left in the working tree.
+
+### Workload / PR boundary
+
+- PR 5 of 10 delivers exactly the gate, the pure helpers, the provider helper, the extraction
+  function, and the closed-by-default deployment surface. The unit is cohesive: the extraction suite
+  cannot be split from the gate it exercises without leaving either an untested gate or a test file
+  whose subject is absent, and the deployment lines exist precisely to default-close the gate they
+  name.
+- Measured PR-5 code diff: **673 lines** = 319 authored production lines (306 in the three new
+  modules + 13 tracked additions: the gate function and the two config lines) + 354 test lines.
+
+  Verified counts: `wc -l` reports 104 + 91 + 111 = 306 production lines in the three new modules and
+  150 + 204 = 354 test lines; `git diff --numstat` reports +10 (`inbound-batch-gates.ts`), +2
+  (`docker-compose.yml`), +1 (`scripts/deploy-web.sh`). 306 + 354 + 13 = **673**.
+- Runtime boundary: real — the vitest suites execute the actual gate, the actual normalization and
+  validation, and the actual extraction function against injected provider and Supabase fakes; the
+  only surfaces not exercised end to end are the live provider HTTP call and the real RPC.
+- Verification owed to later phases: the whole-repository `npm run test` and the `npm run build`
+  integration check (the change's own verification table), plus a controlled-window enablement smoke
+  described in `design.md` §17.
+
+### Final-byte evidence anchor (2026-09-18)
+
+The slice suite was re-run after the last edit to any of these files, so the counts are anchored to
+the exact bytes this slice leaves in the working tree (`Tests 46 passed (46)`):
+
+| File | md5 |
+|------|-----|
+| `apps/web/src/lib/sofia/customer-memory.ts` | `f3dbedf875b840394a4d3d0f7be852b1` |
+| `apps/web/src/lib/ai/llm-json.ts` | `ca2ca29a2abb3c26346e2ffc2ac3c194` |
+| `apps/web/src/lib/sofia/customer-memory-extraction.ts` | `6eed98ee83b4b19e9045af71f02b45a0` |
+| `apps/web/src/lib/sofia/inbound-batch-gates.ts` | `464509033a90c21143a960e2dc390403` |
+| `tests/unit/sofia-customer-memory.test.ts` | `78a2dbfee0db1f3339d66edb50d6527b` |
+| `tests/unit/sofia-customer-memory-extraction.test.ts` | `c0dc0015d137dbae572785144ff6c4cf` |
+
+Native status re-consumed after the run (read-only, native is the lifecycle authority):
+`schema: gentle-ai.sdd-status@2`, `next: apply`, `apply: ready`, `verify: ready`, `archive: ready`,
+`tasks: 23/43 complete`, `applyState: ready`, no blocked reasons. The remaining 20 tasks are real
+unimplemented work (Slices 6-10), not bookkeeping: `next: apply` is correct.
+
+### Slice 5 — review budget exception and `.env.example` resolution (parent, 2026-09-18)
+
+**Accepted exception.** Slice 5 measured **673 authored lines** (319 production: 306 across three new
+modules plus 13 tracked additions; 354 test lines) against the 400-line review budget, 68% over, and
+well above the ~290 forecast. The user explicitly accepted `size:exception`. The overage is structural
+rather than padding: the slice creates three production modules and a suite carrying 46 assertions that
+the task list itself specifies. No comment, test, or code was deleted or compressed to reach a smaller
+number. Note for contrast: `restricao_alimentar` is never auto-approved and `normalizarValor` discards
+an invalid value rather than truncating it, because a 500-character truncation would misrepresent what
+the customer actually said — both are correctness requirements that cost lines.
+
+**`.env.example` resolved by the parent.** Task 21 asked for `SOFIA_CUSTOMER_MEMORY_ENABLED=false` to be
+documented there. The apply executor could not read or edit the path (its safety policy classifies it as
+sensitive), so it recorded the item as unresolved. The parent documented it directly: the file already
+documents six `*_ENABLED` gates for other subsystems but carried none of Sofia's, so the gate was added
+in its own commented group at the end. `git check-ignore` confirms the path remains tracked, not
+ignored. Both deployment paths still close the gate by default, and they are what actually enforce it.
+
+**Evidence.** 46 Vitest cases pass across the two new suites, reproduced by the parent with
+`npx vitest run tests/unit/sofia-customer-memory.test.ts tests/unit/sofia-customer-memory-extraction.test.ts`
+-> `Test Files 2 passed (2), Tests 46 passed (46)`. The runner note in the slice record stands: the
+literal `scripts/workspace-preflight.sh run -- vitest run` form cannot start on this host because the
+preflight execs without `node_modules/.bin` on `PATH`; `npx vitest run` is the working equivalent of the
+repository's own `npm run test`.
