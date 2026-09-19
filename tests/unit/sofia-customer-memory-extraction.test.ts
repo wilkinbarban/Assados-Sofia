@@ -149,7 +149,7 @@ describe('extrairFatosDoLote adversarial cases',()=>{
     expect(await extrairFatosDoLote(client,lote)).toBe(0)
     expect(m.json).not.toHaveBeenCalled()
     expect(rpc).not.toHaveBeenCalled()
-    expect(rpc.mock.calls.some(([nome])=>nome==='buscar_fatos_para_prompt')).toBe(false)
+    expect((rpc.mock.calls as unknown[][]).some(([nome])=>nome==='buscar_fatos_para_prompt')).toBe(false)
   })
   it('still makes exactly one provider call when a batch reports the maximum of candidates',async()=>{
     abrirGate()
