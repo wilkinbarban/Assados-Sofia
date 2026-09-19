@@ -6,20 +6,22 @@
 
 For Telegram, WhatsApp/Evolution, and Web customer messages, the system MUST use one durable, per-conversation Sofia batching contract. The database admission time of each accepted inbound message MUST be authoritative for batching; process-local timers MUST NOT be the source of truth. At most one mutable pending batch SHALL exist per conversation.
 
-A pending batch MUST be due at `min(latest_inbound_at + 10 seconds, first_inbound_at + 20 seconds)`. Each eligible arrival before claim MUST update `latest_inbound_at` without changing `first_inbound_at`. Durable maintenance MUST discover due batches at least every 2 seconds while maintenance is available.
+A pending batch MUST be due at `min(latest_inbound_at + 25 seconds, first_inbound_at + 60 seconds)`. Each eligible arrival before claim MUST update `latest_inbound_at` without changing `first_inbound_at`. Durable maintenance MUST discover due batches at least every 2 seconds while maintenance is available.
+
+> **Corrected values.** The delivered window is a 25-second sliding silence under a 60-second starvation cap, restored by commit `15cdd6a` (`supabase/migrations/20260913010000_sofia_timing_and_pacing_correction.sql`). This delta previously stated 10 seconds / 20 seconds. Those values were never the shipped behaviour, so they are superseded here to keep the canonical spec of record aligned with the runtime and with `docs/runbooks/sofia-multichannel-status-and-handover.md`.
 
 #### Scenario: Latest admitted arrival resets the silence window
 
 - GIVEN a pending batch whose first message was admitted at T0
 - WHEN another eligible message is admitted at T1 before the batch is claimed
 - THEN the batch MUST retain T0 as its first inbound time
-- AND the batch MUST be due at the earlier of T1 plus 10 seconds or T0 plus 20 seconds
+- AND the batch MUST be due at the earlier of T1 plus 25 seconds or T0 plus 60 seconds
 
 #### Scenario: Continuous arrivals reach the first-message cap
 
 - GIVEN eligible messages keep being admitted to one pending batch
-- WHEN 10 seconds after the latest message would be later than 20 seconds after the first message
-- THEN the batch MUST be due no later than 20 seconds after its first admitted message
+- WHEN 25 seconds after the latest message would be later than 60 seconds after the first message
+- THEN the batch MUST be due no later than 60 seconds after its first admitted message
 
 #### Scenario: Maintenance discovers durable due work
 

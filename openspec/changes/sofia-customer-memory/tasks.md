@@ -1,0 +1,240 @@
+# Implementation Tasks: Sofia Customer Memory (`fatos_cliente`)
+
+Sofia gains a per-customer typed fact store: one table (`public.fatos_cliente`), seven RPCs, an
+approved-only prompt block, an operator review surface, a client rectification surface, and the LGPD
+anonymization extension. Runtime behavior (extraction + injection) sits behind the default-closed
+gate `SOFIA_CUSTOMER_MEMORY_ENABLED`.
+
+Derived from `proposal.md`, `specs/memoria_cliente/spec.md` (13 requirements, 37 scenarios), the four
+ADDED-only deltas, and `design.md` (19 sections). The design's `## 14. File and test plan` names the
+real paths used below; `## 18` is the starting point for the slicing.
+
+**Current state:** no implementation exists yet. `supabase/migrations/20260918010000_fatos_cliente_schema.sql`,
+`supabase/tests/sofia_customer_memory.sql`, and the other new files named below are all to be created.
+Every task in this file is unchecked by design.
+
+---
+
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | ≈1940–1990 authored (`+`/`-`), per the design's §18 forecast (~1990) re-sliced into 10 work units |
+| 400-line budget risk | High |
+| Chained PRs recommended | Yes |
+| Suggested split | 10 chained slices: 1 schema → 2 backend RPCs → 3 operator/owner RPCs → 4 LGPD extension → 5 gate + extraction → 6 worker hook → 7 prompt block → 8 operator auth + actions → 9 operator panel → 10 client surface |
+| Delivery strategy | ask-on-risk |
+| Chain strategy | pending |
+
+```text
+Decision needed before apply: Yes
+Chained PRs recommended: Yes
+Chain strategy: pending
+400-line budget risk: High
+```
+
+### Why the forecast is High, stated plainly
+
+- The design's own honest forecast is **~1990 authored lines** across 8 work units. That total is
+  unchanged by slicing; only the per-PR boundary moves.
+- Two units as the design stated them individually **exceed** the 400-line budget:
+  **unit 2, the RPC migration plus its assertions (~410)** and **unit 7, the operator surface
+  authorization move + actions + panel + tests (~490)**. Both are split below rather than trimmed:
+  - unit 2 → **Slice 2** (`registrar_fato_cliente` + `buscar_fatos_para_prompt`: write path + prompt
+    read) and **Slice 3** (the five operator/owner functions), each with its own pgTAP assertions;
+  - unit 7 → **Slice 8** (`lib/auth/operador.ts` move + review actions + action tests) and
+    **Slice 9** (`OperatorClientFactsPanel.tsx` + the `fatos` tab).
+- After this single honest slicing pass every slice is ≤ ~290 lines, but the change as a whole is
+  ~5× the review budget. **Chained PRs are therefore recommended, and the chain strategy is
+  deliberately left `pending`:** under `ask-on-risk` this phase does not choose a chain strategy,
+  does not infer `size:exception`, and does not shrink the diff to fit. The parent raises the
+  delivery decision with the user before apply.
+- Line counts here are a forecast, not a measurement; each slice's REFACTOR task reports the actual
+  changed-line count.
+
+### Slice forecast
+
+| # | Slice | Est. lines | Depends on |
+|---|-------|-----------|------------|
+| 1 | Schema migration + schema/constraint pgTAP assertions | ~215 | — |
+| 2 | Backend RPCs (`registrar_fato_cliente`, `buscar_fatos_para_prompt`) + assertions | ~205 | Slice 1 |
+| 3 | Operator/owner RPCs + grants + authorization/isolation assertions | ~205 | Slices 1–2 |
+| 4 | LGPD anonymization extension + `admin_user_dual_deletion.sql` extension | ~85 | Slice 1 |
+| 5 | Gate + pure helpers + provider helper + extraction + deploy defaults | ~290 | Slices 1–2 |
+| 6 | Worker post-completion hook + worker test extension | ~150 | Slice 5 |
+| 7 | Prompt block + prompt/gate unit tests | ~180 | Slices 3–5 |
+| 8 | `lib/auth/operador.ts` move + operator review actions + action tests | ~200 | Slice 3 |
+| 9 | `OperatorClientFactsPanel.tsx` + `fatos` tab | ~290 | Slice 8 |
+| 10 | Client facts section + `/cliente/perfil` wiring | ~120 | Slice 3 |
+| | **Total** | **≈1940–1990** | |
+
+---
+
+## Strict TDD protocol for every implementation task
+
+Strict TDD is active (`openspec/config.yaml`: `strict_tdd: true`, runner `vitest`). Every task below
+is sequenced **RED → GREEN → TRIANGULATE → REFACTOR** and names its evidence surface.
+
+| Layer | Test authority | Command |
+|---|---|---|
+| TypeScript | `vitest` | `bash scripts/workspace-preflight.sh run -- vitest run <files>` |
+| SQL / pgTAP | `supabase/tests/sofia_customer_memory.sql` (new) | `bash scripts/run-local-sofia-sql-tests.sh supabase/tests/sofia_customer_memory.sql` |
+| SQL / LGPD | `supabase/tests/admin_user_dual_deletion.sql` (extended, currently `plan(38)` at line 23) | `bash scripts/run-selfhost-supabase-tests.sh supabase/tests/admin_user_dual_deletion.sql` |
+| Build | Next.js build | `npm run build` |
+
+SQL tasks have no `vitest` surface: their RED step is the pgTAP suite failing before the migration
+lands, and their GREEN step is the same suite passing after it. Both SQL suites need a disposable or
+hosted Supabase runner; if a runner is unavailable, report that as an unmet evidence surface instead
+of assuming a pass. No task in this file runs a database command from the planning phase.
+
+Deviations from the design's file plan, recorded:
+
+- The suite registration in `scripts/run-local-sofia-sql-tests.sh` (`default_suites` line 62 and the
+  `usage()` "six" line at line 79) moves into **Slice 1**, with the suite it registers. Leaving it in
+  a later slice would mean the new suite is not in the default run when it is created.
+- The deployment surfaces (`docker-compose.yml`, `scripts/deploy-web.sh`, `.env.example`) move into
+  **Slice 5**, with the gate they default-close, so one work unit owns the complete rollback lever.
+- `20260918020000_fatos_cliente_rpcs.sql` is created in Slice 2 and extended in Slice 3 (§14.1 keeps
+  its three-migration plan); the file is shared across two slices intentionally, and each slice owns
+  its own function bodies, grants, and assertions.
+- `apps/web/src/lib/sofia/customer-memory.ts` is created in Slice 5 (validation/normalization) and
+  extended in Slice 7 (the renderer), so the renderer never ships without its tests.
+
+---
+
+## Slice 1 — Schema, constraints, and index set (~215 lines)
+
+- [ ] 1. **RED:** Create `supabase/tests/sofia_customer_memory.sql` with the guarded `\if`-include prelude for the three new migrations (pattern: `supabase/tests/admin_user_dual_deletion.sql:1-21`), `plan(N)`, and failing assertions for table/column existence, the `tipo`/`origem`/`estado` enums, `chave ~ '^[a-z0-9_]{1,64}$'`, and the four `valor` checks (empty, 501 chars, leading/trailing whitespace, newline, C0 control character, zero-width/bidi character). Register the suite in `scripts/run-local-sofia-sql-tests.sh` `default_suites` (line 62) and bump the `usage()` line 79 count from "six" to "seven". Evidence: `bash scripts/run-local-sofia-sql-tests.sh supabase/tests/sofia_customer_memory.sql` fails because the table does not exist.
+- [ ] 2. **GREEN:** Create `supabase/migrations/20260918010000_fatos_cliente_schema.sql` with the exact DDL of design §4.1/§5/§6.1/§8: all 14 columns; FKs `cliente_id → public.clientes on delete cascade`, `origem_conversa_id → public.conversas on delete set null`, `substitui_id → public.fatos_cliente on delete set null`, and **`revisado_por` with no foreign key at all**; `ck_fatos_cliente_confianca`, `ck_fatos_cliente_revisao`, `ck_fatos_cliente_aprovacao` carrying the `0.85` **literal inside the constraint** and excluding `tipo = 'restricao_alimentar'` while trusting only `cliente` and `operador` (`importado` is **not** trusted for auto-approval); `uq_fatos_cliente_vigente` partial unique on `(cliente_id, tipo, chave) where estado in ('pendente','aprovado')`; the five supporting indexes (`fatos_cliente_prompt`, `fatos_cliente_revisao`, `fatos_cliente_auto_aprovados`, `fatos_cliente_origem_conversa`, `fatos_cliente_substitui`); `comment on table`/`comment on column` (pt-BR) for the table and for `tipo`, `chave`, `valor`, `origem`, `estado`, and both central constraints. Evidence: the suite is green.
+- [ ] 3. **TRIANGULATE (bounded auto-approval):** Extend `supabase/tests/sofia_customer_memory.sql` with the full approval matrix: `ia`/`preferencia`/`confianca = 0.85` auto-approves with no reviewer; `0.84` stored `aprovado` is rejected but accepted as `pendente`; a raw `aprovado` insert at `0.50` is rejected by the database with no caller-side check; `restricao_alimentar` at `confianca = 1.00` stays `pendente`; `importado` + `aprovado` + `revisado_por IS NULL` is rejected; `ck_fatos_cliente_confianca` rejects confidence on `cliente`/`operador` and accepts it on `ia`; and the audit predicate `origem = 'ia' AND revisado_por IS NULL AND estado = 'aprovado'` selects exactly the auto-approved row and excludes the operator-approved one. Evidence: pgTAP assertions in the named suite.
+- [ ] 4. **TRIANGULATE (index + ownership):** In the same suite assert `uq_fatos_cliente_vigente` rejects a second live row written by raw insert (`23505`) while a `rejeitado`/`substituido` row for the same key does not block a new live row; assert the existence and predicates of the five indexes; assert the migration adds **no** `alter function ... owner to supabase_admin` statement, so `expected_owner_transfers=8` in `scripts/run-local-sofia-sql-tests.sh:54` is still correct (if a hosted transfer is ever required, it must be added and that constant bumped **in the same task**). Evidence: pgTAP `has_index`/`throws_ok` assertions plus the harness's own transfer-count assertion.
+- [ ] 5. **REFACTOR:** Make `plan(N)` match the actual assertion count exactly, remove duplicated assertions, and confirm no constraint is expressed twice. Evidence: suite green with the exact plan; recorded `git diff --stat` for the slice.
+
+## Slice 2 — Backend RPCs: write path and prompt read (~205 lines)
+
+- [ ] 6. **RED:** Extend `supabase/tests/sofia_customer_memory.sql` with failing assertions for both backend functions: caller without `service_role` → `42501` `SOFIA_FATO_SERVICE_ROLE_REQUIRED`; invalid `tipo`/`origem`/null required argument → `22023` `SOFIA_FATO_ENTRADA_INVALIDA`; non-null `confianca` on a non-`ia` origin and null/out-of-range `confianca` on `ia` → `22023` `SOFIA_FATO_CONFIANCA_INVALIDA`; a `p_origem_conversa_id` belonging to another customer → `22023` `SOFIA_FATO_CONVERSA_INVALIDA`; unknown `p_cliente_id` → `P0002` `SOFIA_FATO_CLIENTE_NAO_ENCONTRADO`; and for `buscar_fatos_para_prompt`: approved-only, `observacao` excluded, `p_limite` outside `1..20` → `22023`, an unknown customer returning an **empty set rather than `P0002`**, plus per-function `acl` assertions (EXECUTE for `service_role`; absent for `anon`, `public`, `authenticated`) and `prosecdef`/empty `search_path`. Evidence: suite fails for missing functions.
+- [ ] 7. **GREEN:** Create `supabase/migrations/20260918020000_fatos_cliente_rpcs.sql` with `registrar_fato_cliente(uuid,text,text,text,text,uuid,numeric,boolean)` and `buscar_fatos_para_prompt(uuid,integer)`: `language plpgsql security definer set search_path = ''`, fully qualified references, authority checked **before** argument shape and shape before existence, `SOFIA_*` messages with no custom `details`, `comment on function` (pt-BR), and the exact `revoke all` + `grant execute ... to service_role` block of design §9.2. `registrar_fato_cliente` must have **no `p_estado` parameter** — only `p_forcar_pendente`, which can only make approval harder — and must derive state as §4.1 states, with the per-key `pg_advisory_xact_lock(hashtextextended(cliente|tipo|chave, 91423))` followed by `select ... for update`. Evidence: suite green.
+- [ ] 8. **TRIANGULATE (provenance precedence):** Assert the enforced rank `cliente > operador > importado > ia`: a strictly lower-rank candidate leaves the live row byte-identical, writes nothing, creates no successor, and returns `substituido_id = null`; equal rank with an identical normalized `valor` is an idempotent no-op (the "repeated extraction" scenario); a higher/equal-rank different value supersedes, setting the predecessor to `substituido` and linking `substitui_id`; a concurrent same-key race resolves as a supersession via the advisory lock (dblink pattern as in `supabase/tests/sofia_activity_core_a.sql`) rather than a `23505`; and a customer-applied `origem = 'cliente'` correction is **not** overwritten by a later `ia` candidate for the same `(cliente_id, tipo, chave)`. Evidence: pgTAP assertions in the named suite.
+- [ ] 9. **TRIANGULATE (refusal durability):** Assert that when a `rejeitado` row exists for the key with the same normalized `valor` and no live row exists, an incoming `ia` candidate at `confianca = 1.00` lands `pendente`, never `aprovado`; the refused row stays `rejeitado`, is **not** superseded, and the new row's `substitui_id` is null. Evidence: pgTAP assertions in the named suite.
+- [ ] 10. **REFACTOR:** Confirm no function accepts a requested approval state, `prosecdef = true` and empty `search_path` for both functions, direct table access denied for `authenticated` **and** `service_role`, and `plan(N)` reconciled. Evidence: suite green; recorded changed-line count for the slice.
+
+## Slice 3 — Operator and owner RPCs, grants, isolation (~205 lines)
+
+- [ ] 11. **RED:** Extend `supabase/tests/sofia_customer_memory.sql` with failing assertions for the five remaining functions: `listar_fatos_cliente` (operator gate → `42501` `SOFIA_FATO_OPERADOR_REQUERIDO`; all four states returned with provenance; `order by estado, atualizado_em desc`; `p_limite` outside `1..500` and an out-of-enum `p_estados` value → `22023`; unknown customer → `P0002`); `revisar_fato_cliente` (approve/reject/correct effects incl. `corrigir` setting `confianca = null` and `aprovar`/`rejeitar` leaving it unchanged, `revisado_por`/`revisado_em` recorded, `SOFIA_FATO_NAO_REVISAVEL` for `rejeitado`/`substituido`, `SOFIA_FATO_NAO_ENCONTRADO` for an unknown id); `meus_fatos_cliente` (owner resolution through `clientes.usuario_id = auth.uid()`, `42501` `SOFIA_FATO_NAO_AUTENTICADO` when anonymous, `observacao` absent, narrower projection); `corrigir_meu_fato_cliente` (in-place update to `origem = 'cliente'`, `estado = 'aprovado'`, `confianca = null`, `origem_conversa_id = null`, `revisado_por`/`revisado_em` untouched; `SOFIA_FATO_NAO_ENCONTRADO` for a non-`aprovado` own fact; `SOFIA_FATO_NAO_EXPOSTO` for an own `observacao`; `42501` `SOFIA_FATO_NAO_AUTORIZADO` for another customer's fact); `recusar_meu_fato_cliente` (`estado = 'rejeitado'`, `origem`/`confianca`/`origem_conversa_id` unchanged, row retained). Evidence: suite fails for missing functions.
+- [ ] 12. **GREEN:** Add the five functions to `supabase/migrations/20260918020000_fatos_cliente_rpcs.sql` with the same house style, the owner RPCs clearing `origem_conversa_id` on correction (an in-place update, **not** a supersession), and the exact grants of design §9.2: `grant execute ... to authenticated` only, with `service_role` receiving **no** EXECUTE on any operator or owner function and `anon` receiving nothing anywhere. Evidence: suite green.
+- [ ] 13. **TRIANGULATE (authorization + isolation):** Assert the full ACL matrix per function signature (EXECUTE present/absent per role, `anon` and `public` absent everywhere, `service_role` absent on the five), `prosecdef` and empty `search_path` for all seven, the complete §4.8 error-token matrix via `throws_ok`, an anonymous caller rejected on every owner function, owner isolation (customer A correcting or refusing customer B's fact → `42501`, with B's row unchanged afterwards), and that a direct `select` on `public.fatos_cliente` fails for `authenticated` and `service_role`. Evidence: pgTAP assertions in the named suite, in the `function_privs_are` style of `supabase/tests/sofia_web_atomic_admission.sql`.
+- [ ] 14. **REFACTOR:** Share one advisory-key-lock expression between the two write paths, remove any argument-validation duplication, confirm `enable row level security` is present and **`force row level security` is absent** (a forced RLS would make every `security definer` RPC silently see zero rows), and reconcile `plan(N)`. Evidence: suite green with the exact plan; recorded changed-line count.
+
+## Slice 4 — LGPD anonymization extension (~85 lines)
+
+- [ ] 15. **RED:** Extend `supabase/tests/admin_user_dual_deletion.sql` (currently `plan(38)` at line 23, with the `\if`-guarded migration chain at lines 1–22) to `plan(38 + k)` with: facts inserted for the anonymized customer **and** for an unrelated customer; the anonymized customer's `fatos_cliente` rows deleted; the unrelated customer's facts unchanged; the existing `nome`/`telefone` clearing, `usuario_id`/`email`/`telegram_chat_id` nulling, `perfis` update, and `logs_auditoria` entry still asserted; the unauthorized caller getting `42501` with **no** fact deleted; and the total-purge path leaving no facts behind. Add the `\if`-guarded `\ir ../migrations/20260918030000_anonymize_fatos_cliente.sql` include. Evidence: the suite fails before the migration exists.
+- [ ] 16. **GREEN:** Create `supabase/migrations/20260918030000_anonymize_fatos_cliente.sql` with `create or replace public.anonymizar_usuario_admin(uuid)` reproducing the current body (`supabase/migrations/20260826222000_dual_deletion_runtime_fixes.sql:2-20`) plus exactly one new statement, placed **immediately before** the `update public.clientes ... set usuario_id = null`: `delete from public.fatos_cliente f using public.clientes c where c.id = f.cliente_id and c.usuario_id = p_usuario_alvo_id;`. Preserve verbatim the `admin` authority check through `public.tem_funcoes`, the anti-lockout rule, the target `for update` lock, the idempotent `deletion_requested_at` early return, the anonymized-phone allocation loop, the `perfis` update, the `logs_auditoria` insert, and the `revoke`/`grant` pair. Evidence: self-hosted suite green.
+- [ ] 17. **TRIANGULATE:** Assert the ordering property directly: the deletion happens inside the same call, before `clientes.usuario_id` is nulled, so no fact remains reachable for that customer afterwards, and a second idempotent call deletes nothing extra; plus the purge-cascade assertion that deleting the customer row removes its facts while another customer's facts survive. Evidence: pgTAP assertions in `supabase/tests/admin_user_dual_deletion.sql`.
+- [ ] 18. **REFACTOR:** Confirm the extension lives in its own migration file so a reviewer can see the exact rollback boundary (reverting this migration **and** the table together; reverting the deletion alone would silently re-create the anonymization leak), and record the final `plan(N)`. Evidence: suite green; recorded changed-line count.
+
+## Slice 5 — Gate, helpers, extraction, deploy defaults (~290 lines)
+
+- [ ] 19. **RED:** Create failing `tests/unit/sofia-customer-memory.test.ts` and `tests/unit/sofia-customer-memory-extraction.test.ts` covering: `customerMemoryEnabled` strictness (`undefined`, `'false'`, `'TRUE'`, `'1'`, `'yes'`, `' true'` all false; only `'true'` true); `normalizarValor` (NFKC, invisible/bidi stripping, newline/tab collapsing, double-space collapsing, whitespace-only rejection, 500/501 boundary, control characters, discard-never-truncate); candidate validation (unknown `tipo`, bad `chave`, over-long `valor` discarded while valid siblings survive; `assunto !== 'cliente'` discards the whole response; dedupe by `(tipo, chave)`; 10-candidate cap); and extraction (gate closed → zero provider calls and zero RPC; gate open → exactly one provider call for a batch of several messages; provider failure → logged, zero facts, no throw, no retry, no second call; parse failure → zero facts; exact RPC arguments `p_origem: 'ia'`, `p_forcar_pendente: false`, the batch conversation id; one candidate's `23505`/`22023` not aborting its siblings; no `valor` in any log line). Evidence: `bash scripts/workspace-preflight.sh run -- vitest run tests/unit/sofia-customer-memory.test.ts tests/unit/sofia-customer-memory-extraction.test.ts` fails.
+- [ ] 20. **GREEN:** Add `customerMemoryEnabled(value = process.env.SOFIA_CUSTOMER_MEMORY_ENABLED): boolean { return value === "true" }` to `apps/web/src/lib/sofia/inbound-batch-gates.ts`; create `apps/web/src/lib/sofia/customer-memory.ts` with `FATO_TIPOS`, `normalizarValor`, and `validarCandidatos`; create `apps/web/src/lib/ai/llm-json.ts` with `chamarModeloEconomicoJson` (OmniRoute `business-economy` when `AI_ROUTING_V2_ENABLED === 'true'`, otherwise the legacy OpenRouter/DeepSeek resolution — `sk-or-` detection, `OPENROUTER_MODEL` from `obterConfiguracaoSistema`, `AbortSignal.timeout(timeoutMs)` — with JSON requested through the prompt on both paths); create `apps/web/src/lib/sofia/customer-memory-extraction.ts` with `PROMPT_EXTRACAO`, `LoteExtraivel`, and `extrairFatosDoLote` implementing design §7.4 steps 1–5, using `lote.contexto` (no second DB read), logging counts and batch ids only, never throwing and never retrying. Evidence: both vitest files green.
+- [ ] 21. **GREEN (closed-by-default deployment surface):** Add `- SOFIA_CUSTOMER_MEMORY_ENABLED=${SOFIA_CUSTOMER_MEMORY_ENABLED:-false}` to `docker-compose.yml` beside the existing Sofia gates, and add `SOFIA_CUSTOMER_MEMORY_ENABLED=false` to the `close_operational_gates` block in `scripts/deploy-web.sh`, so the rollback lever matches the other Sofia gates. Document `SOFIA_CUSTOMER_MEMORY_ENABLED=false` in `.env.example`; if that file cannot be read or does not exist, record it as unresolved rather than inventing contents (design §16 item 1). Evidence: diff of the two config paths plus the recorded `.env.example` outcome.
+- [ ] 22. **TRIANGULATE:** Add the adversarial cases: gate closed → no provider call, no `buscar_fatos_para_prompt`, extraction returns `0`; gate open with several messages in one batch → still exactly one provider call; a rejection from `extractFacts` never propagates; a provider that returns a fenced or trailing-text JSON payload; and a batch whose context contains the word "ignore as instruções" still yields only schema-validated candidates. Evidence: vitest green with the added cases.
+- [ ] 23. **REFACTOR:** Confirm `SOFIA_CUSTOMER_MEMORY_ENABLED` is read only inside `customerMemoryEnabled()` (no second gate read on the extraction path), that the extraction module touches no table directly, and that no log line contains `valor`. Evidence: vitest green; recorded changed-line count for the slice.
+
+## Slice 6 — Worker post-completion extraction hook (~150 lines)
+
+- [ ] 24. **RED:** Extend `tests/unit/sofia-inbound-batch-worker.test.ts` with failing cases: runtime-on → `extractFacts` called exactly once with the completed batch's ids after a successful `completePaced`; **not** called when `completePaced` returns null, when the batch is cancelled, when eligibility fails, or when generation throws; runtime-off → called exactly once after `complete` returns true and not when it returns false; a rejecting `extractFacts` does not change `BatchCounts` and does not fail the pass; extraction for a batch never runs before that batch's delivery attempt in the same pass; `extractFacts` absent → no-op. Evidence: vitest fails.
+- [ ] 25. **GREEN:** In `apps/web/src/lib/sofia/inbound-batch-worker.ts`: add `LoteExtraivel`, add the optional `extractFacts?(lote: LoteExtraivel)` member to `BatchWorkerDeps` (interface at line 19, mirroring `beginActivity?`/`startWhatsAppPresence?` so the existing worker tests still compile), hoist `const contexto = formatBatchContext(c.members)` in the runtime-on path, push onto a per-pass `lotesCompletos` list at exactly the two success points (after `complete` returns true; after `completePaced` returns non-null), add `executarHookExtracao` (try/catch, `console.warn('[sofia-inbound-batch] customer_memory_extraction_failed batch=...')`, never throws), drain the list once after the delivery loop and before `return out` (line ~184), and wire the production implementation in `createSofiaBatchWorkerDeps` (line ~191) as `extractFacts: lote => extrairFatosDoLote(supabase, lote)`. Evidence: the worker suite is green.
+- [ ] 26. **TRIANGULATE:** Assert both runtime paths push exactly once and that the drain loop executes after the delivery `while` loop, so extraction cannot delay a customer-visible reply and runs with the generation lease and typing/presence handles released. Add a code comment at the hook stating the honest semantics, with no fence claimed: at-most-once **by completion semantics only**, because `claim_sofia_inbound_batch` selects only `pending` or expired `processing` and completion clears the lease; a crash between completion and extraction loses that batch's facts permanently with no ledger, no backfill, and no compensating write (`23505` is treated as already recorded); a live-process failure is equally final and not retried. Evidence: worker suite green with the ordering assertions.
+- [ ] 27. **REFACTOR:** Confirm `BatchCounts` semantics, delivery ordering, and the existing heartbeat/typing/presence behavior are unchanged, and that a previous-pass batch can never be re-drained. Evidence: full `tests/unit/sofia-inbound-batch-worker.test.ts` green; recorded changed-line count.
+
+## Slice 7 — Approved-facts prompt block (~180 lines)
+
+- [ ] 28. **RED:** Create failing `tests/unit/sofia-customer-memory-prompt.test.ts` covering: the block appears after the active-orders context and before `HISTÓRICO DA CONVERSA`; the exact header/footer wording of design §6.3 including the non-instruction statement and the explicit subordination sentence that global `base_conhecimento` prevails; the fixed line grammar `- <tipo>/<chave>: <valor>`; the 20-line cap; the 1200-character cap of fact-line content with **no partial line** emitted; empty input → `null`; a value containing `\n` (only reachable if normalization is bypassed) cannot produce a second line; and the closed gate leaving `buscar_fatos_para_prompt` uncalled with a prompt byte-identical to the pre-change prompt for identical inputs. Evidence: vitest fails.
+- [ ] 29. **GREEN:** Add `agruparFatosParaPrompt` to `apps/web/src/lib/sofia/customer-memory.ts` as a pure function (no I/O, logs nothing), and in `apps/web/src/lib/ai/openrouter.ts` add the gated `contextoFatosCliente` fetch (design §7.5) and insert the block in the `systemPrompt` template **exactly between line 362 (`contextoPedidosAtivos`) and line 364 (`HISTÓRICO DA CONVERSA`)**, never inside `CONTEXTO DE SUPORTE`. Evidence: prompt suite green; `tests/unit/sofia-rag-enhancement.test.ts` still green.
+- [ ] 30. **TRIANGULATE:** With a mocked RPC, assert that pending, rejected, and superseded facts and `tipo = 'observacao'` cannot appear (the renderer has no path for them and the surface must not return them), that a conflicting customer fact stays in the customer-facts block and out of the global knowledge section, and that the renderer emits no log line containing `valor`. Evidence: prompt suite green with the added cases.
+- [ ] 31. **REFACTOR:** Confirm the block is added only through the gated path, the cap measures fact-line content only (header/footer excluded), and the fetch failure path degrades to an empty block rather than an exception. Evidence: `bash scripts/workspace-preflight.sh run -- vitest run tests/unit/sofia-customer-memory-prompt.test.ts tests/unit/sofia-rag-enhancement.test.ts` green; recorded changed-line count.
+
+## Slice 8 — Operator authorization move and review actions (~200 lines)
+
+- [ ] 32. **RED:** Create failing `tests/unit/sofia-customer-memory-actions.test.ts` covering: `listarFatosCliente` and `revisarFatoCliente` reject an unauthenticated or non-operator session **before** any RPC; the exact RPC names and argument objects (`listar_fatos_cliente` with `p_cliente_id`/`p_estados`/`p_limite`; `revisar_fato_cliente` with `p_fato_id`/`p_decisao`/`p_valor`); `42501`/`22023`/`P0002` mapped to the repository's `{ success, error }` shape used by `atualizarClienteCrm`; and that the module performs no direct `fatos_cliente` table access. Evidence: vitest fails.
+- [ ] 33. **GREEN:** Move `FUNCOES_OPERADOR_AUTORIZADAS` and `verificarOperadorAutorizado()` out of `apps/web/src/app/actions/atendimento.ts` (lines 20 and 49) into a new `apps/web/src/lib/auth/operador.ts`, keeping them verbatim, and replace them in `atendimento.ts` with an import so its three existing call sites (lines ~87, ~143, ~250) are untouched. Create `apps/web/src/app/actions/fatos-cliente.ts` as a `'use server'` module exporting `listarFatosCliente(clienteId)` and `revisarFatoCliente(fatoId, decisao, valor)`, each calling `verificarOperadorAutorizado()` first and then the RPC. Evidence: action suite green.
+- [ ] 34. **TRIANGULATE:** Assert the existing operator behavior is unchanged (the `atendimento` action tests and any `verificarOperadorAutorizado` consumers still pass) and that no `'use server'` module exports a non-serializable helper. Evidence: existing `tests/unit/sofia-*` and atendimento suites still green.
+- [ ] 35. **REFACTOR:** Confirm the actions surface exposes no raw Supabase client and no table access, and that error tokens are not leaked to the caller beyond the session-level error vocabulary. Evidence: vitest green; recorded changed-line count.
+
+## Slice 9 — Operator facts panel and `fatos` tab (~290 lines)
+
+- [ ] 36. **RED:** Create a failing component/interaction test for the operator review surface (repo pattern: colocated `tests/unit/operator-*.test.tsx`, e.g. `tests/unit/operator-inbox-sofia-status.test.tsx`): the `fatos` tab renders for an authorized operator; a pending inferred fact shows `origem = 'ia'` with its confidence; approve, reject, and correct actions call the Slice 8 actions; loading and empty states render; `observacao` is visually distinguished; and keyboard navigation moves across four tabs. Evidence: vitest fails.
+- [ ] 37. **GREEN:** Create `apps/web/src/components/operator/OperatorClientFactsPanel.tsx` listing every state (`pendente`, `aprovado`, `rejeitado`, `substituido`) with `tipo`, `chave`, `valor`, `origem`, `confianca`, and the originating conversation, with approve/reject/correct controls, and add a fourth `fatos` tab to `apps/web/src/components/operator/ClientCrmPanel.tsx` (extend the `ClientPanelTab` union at line 15, the `tabRefs` record at lines 22–26, and the keyboard order array at line 108). Evidence: the panel test is green.
+- [ ] 38. **TRIANGULATE:** Assert `carrinho`, `pedidos`, and `crm` keep their current behavior and that `endereco`/`tags`/`notas` editing through `atualizarClienteCrm` is untouched; assert an unauthorized caller never receives fact data (the action rejects before the RPC) and that the panel reads facts only through the actions. Evidence: panel test plus the existing operator suites green.
+- [ ] 39. **REFACTOR:** Confirm no direct table access in the component, no duplicated formatting logic with the CRM tab, and unchanged `aria`/keyboard semantics for the first three tabs. Evidence: `bash scripts/workspace-preflight.sh run -- vitest run <panel test>` plus the existing operator suites green; recorded changed-line count.
+
+## Slice 10 — Client facts section in `/cliente/perfil` (~120 lines)
+
+- [ ] 40. **RED:** Extend the existing `tests/unit/cliente/perfil.test.tsx` with failing cases: the customer's own approved facts are listed; an internal `observacao` fact and another customer's facts are never shown; correcting a fact shows the corrected value and marks it as the customer's own statement; refusing a fact removes it from the list; RPC failures render an error state without leaking detail. Evidence: vitest fails.
+- [ ] 41. **GREEN:** Create `apps/web/src/components/cliente/ClientFactsSection.tsx` reading `meus_fatos_cliente` and writing through `corrigir_meu_fato_cliente` / `recusar_meu_fato_cliente` with the browser Supabase client (matching the existing `/cliente/perfil` style), and render it in `apps/web/src/app/cliente/perfil/page.tsx` without changing the existing layout, verification gating, or profile form. Evidence: `tests/unit/cliente/perfil.test.tsx` green.
+- [ ] 42. **TRIANGULATE:** Assert the existing client-area gating is preserved (unverified phone still blocked by middleware exactly as before) and that only the owner-scoped functions are called. Evidence: `tests/unit/cliente/*.test.tsx` green, plus `npm run build`.
+- [ ] 43. **REFACTOR:** Confirm the section performs no direct table read, no `observacao` path exists client-side, and the corrected/refused state is reflected on the next render. Evidence: vitest green; `npm run build` green; recorded changed-line count.
+
+---
+
+## Design-review obligations → task map
+
+Every obligation raised in design review must be findable as a task or a task-level criterion.
+Reviewers can use this table to verify coverage without re-reading the design.
+
+| Obligation | Tasks |
+|---|---|
+| Provenance precedence `cliente > operador > importado > ia`; a customer correction survives later inference for the same `(cliente_id, tipo, chave)` | 8, 11 (`corrigir` semantics), 30 |
+| Refusal durability: a re-inferred value identical to a `rejeitado` row lands `pendente`, never auto-approved | 9, 11 |
+| Bounded auto-approval with the `0.85` threshold inside the database constraint, permanent `restricao_alimentar` exclusion, and `importado` **not** trusted | 2, 3 |
+| LGPD: `anonymizar_usuario_admin` deletes the customer's `fatos_cliente` rows, before `clientes.usuario_id` is nulled | 15, 16, 17 |
+| Prompt-injection hardening for `valor` (DB checks + `normalizarValor` + fixed line grammar), and the approved-only ~20 facts / ~1200 chars cap between `contextoPedidosAtivos` and `HISTÓRICO DA CONVERSA` | 2, 20, 28, 29, 30 |
+| Strict default-closed gate `SOFIA_CUSTOMER_MEMORY_ENABLED`; gate off preserves existing behavior unchanged | 19, 20, 21, 22, 28, 29 |
+| Extraction hook on both runtime paths, at-most-once by completion semantics, crash-loss window stated honestly with no fence claimed | 24, 25, 26 |
+| `revisado_por` carries no foreign key, deliberately | 2, 4 |
+| `force row level security` must not be used | 14 |
+| `scripts/run-local-sofia-sql-tests.sh` asserts exactly eight `owner to supabase_admin` transfers | 4 |
+| Full `crm_vendas` operator surface: all four states listed with provenance, approve/reject/correct, existing CRM editing preserved | 11, 12, 13, 36, 37, 38 |
+| Client access/correction/refusal with `observacao` never exposed and cross-customer access refused | 11, 13, 40, 41, 42 |
+
+## Whole-change verification (run once all slices land)
+
+| Command | Proves |
+|---|---|
+| `bash scripts/workspace-preflight.sh run -- vitest run tests/unit/sofia-customer-memory.test.ts tests/unit/sofia-customer-memory-extraction.test.ts tests/unit/sofia-customer-memory-prompt.test.ts tests/unit/sofia-customer-memory-actions.test.ts tests/unit/sofia-inbound-batch-worker.test.ts tests/unit/cliente/perfil.test.tsx` | Runtime surfaces: gate, normalization, extraction, prompt block, actions, worker hook, client section |
+| `bash scripts/run-local-sofia-sql-tests.sh supabase/tests/sofia_customer_memory.sql` | Schema, constraints, approval matrix, provenance precedence, refusal durability, RPC authorization, owner isolation, direct-access denial |
+| `bash scripts/run-selfhost-supabase-tests.sh supabase/tests/admin_user_dual_deletion.sql` | Anonymization deletion, unrelated-customer survival, purge cascade |
+| `npm run build` | The new surfaces integrate in the deployed app |
+
+## Recorded constraints carried into later phases
+
+- **Archive sequencing.** At archive time the canonical `openspec/specs/memoria_cliente/spec.md` is
+  created from this change's file, and this change's `rag_conhecimento` and `dashboard_admin`
+  requirements are appended to the shared canonical files. Archive this change **after** the applied
+  same-domain changes (`atendimento-preview-and-sofia-inbound-batching` and
+  `whatsapp-sofia-sleep-wake-control` for `rag_conhecimento`; `admin-estoque-security-deployment-hardening`
+  for `dashboard_admin`), and verify after archiving that the earlier requirements survive:
+  `grep -c "### Requirement:" openspec/specs/rag_conhecimento/spec.md` plus
+  `grep -q "Per-customer facts block in Sofia prompt assembly" openspec/specs/rag_conhecimento/spec.md`.
+  The already-archived `2026-09-18-humanized-multichannel-sofia-responses` `rag_conhecimento`
+  requirement must be preserved, not re-merged.
+- **Spec corrections already applied.** Design §10 (`importado` outside the trusted set) is reflected
+  in spec requirement 3, and §12's two refinements are reflected in requirement 5 ("Refusal is not
+  defeated by re-inference") and in the owner requirement ("A customer correction survives later
+  inference"). No spec edit remains pending from this phase; `design.md` §16 item 4 is closed.
+- **Enablement order.** When the gate is first opened: table and RPCs deployed → operator panel and
+  client section verified against real rows → extraction enabled → prompt injection enabled. The
+  single gate covers both runtime behaviors, so the intermediate step is achieved by seeding facts
+  through `registrar_fato_cliente` in a controlled window, not by a third flag.
+- **Rollback pairing.** Reverting `20260918030000_anonymize_fatos_cliente.sql` and the
+  `fatos_cliente` table must happen in the same rollback; reverting the deletion logic while the table
+  survives silently re-creates the anonymization leak.
+- **Out of scope, not silently absorbed.** No rolling summary or embeddings; no channel-side surface;
+  no conversation-close extraction event; the pre-existing `clientes.notas` anonymization gap stays a
+  follow-up; no `size:exception` is inferred and no chain strategy is chosen here.
+
+## Open decision for the parent
+
+The forecast is High and the chain strategy is unset. Before apply, the user must choose a chain
+strategy (`stacked-to-main`, `feature-branch-chain`, or an explicitly accepted `size:exception`).
+This phase deliberately records the decision as open rather than selecting it.
