@@ -9,6 +9,8 @@ import { formatarCardapioResumido } from '@/lib/cardapio/formatar'
 import { gerarCatalogoCardsCompleto, obterCartaoCombo } from '@/lib/cardapio/cards'
 import { classifySofiaRequestTier } from '@/lib/ai/router'
 import { isOmniRouteEnabled, chamarOmniRouteGateway, isLegacyFallbackEnabled } from '@/lib/ai/omniroute'
+import { customerMemoryEnabled } from '@/lib/sofia/inbound-batch-gates'
+import { agruparFatosParaPrompt } from '@/lib/sofia/customer-memory'
 
 const LEGACY_LLM_TIMEOUT_MS = 15_000
 const LEGACY_LLM_MAX_TOKENS = 1024
@@ -305,6 +307,20 @@ export async function processarRagPipeline(
     console.error('[RAG Pipeline] Erro ao buscar pedidos ativos do cliente:', err)
   }
 
+  // 5.3 Buscar fatos aprovados do cliente (memória de cliente) — gate único
+  let contextoFatosCliente = ''
+  if (customerMemoryEnabled()) {
+    try {
+      const { data } = await supabase.rpc('buscar_fatos_para_prompt', {
+        p_cliente_id: (conversa as any).cliente_id,
+        p_limite: 20,
+      })
+      contextoFatosCliente = agruparFatosParaPrompt(data ?? []) ?? ''
+    } catch (err) {
+      console.error('[RAG Pipeline] Erro ao buscar fatos do cliente:', err)
+    }
+  }
+
   // 6. Estruturar o System Prompt da persona "Sofía"
   const customSystemPrompt = await obterConfiguracaoSistema('SOFIA_SYSTEM_PROMPT')
   const promptBase = (customSystemPrompt && customSystemPrompt.trim())
@@ -347,6 +363,10 @@ Se você responder em qualquer idioma que não seja português, estará violando
 
   const regraIdiomaRodape = `⚠️ LEMBRETE FINAL: Sua resposta DEVE estar em PORTUGUÊS DO BRASIL. Revise sua resposta antes de enviá-la. Se não estiver em português, REESCREVA-A em português. NÃO responda em espanhol.`
 
+  // O bloco de fatos entra na MESMA linha fisica do bloco de pedidos ativos: com
+  // o gate fechado (ou sem nenhum fato aproveitavel) `contextoFatosCliente` e '',
+  // entao a interpolacao nao contribui byte algum e o prompt montado continua
+  // byte-identico ao de antes desta mudanca (design §7.5, tarefa 28).
   const systemPrompt = `${regraIdiomaTopo}
 
 ---
@@ -359,7 +379,7 @@ CONTEXTO DE SUPORTE:
 ${contextoHorarios ? contextoHorarios + '\n\n' : ''}${contextoArtigos || 'Nenhuma informação específica adicional da base de conhecimento foi encontrada.'}
 ${contextoProdutos ? '\n\n' + contextoProdutos : ''}
 ${contextoCarrinho ? '\n\n' + contextoCarrinho : ''}
-${contextoPedidosAtivos ? '\n\n' + contextoPedidosAtivos : ''}
+${contextoPedidosAtivos ? '\n\n' + contextoPedidosAtivos : ''}${contextoFatosCliente ? '\n\n' + contextoFatosCliente : ''}
 
 HISTÓRICO DA CONVERSA:
 ${historicoMensagens || 'Sem histórico anterior.'}
