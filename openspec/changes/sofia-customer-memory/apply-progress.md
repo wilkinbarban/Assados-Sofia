@@ -1379,3 +1379,93 @@ One more host note, because it cost time: on this checkout a stale `tsconfig.tsb
 reported `tests/unit/evolution-payment-proof-intake.test.ts(100,18): error TS7023`, which CI does not
 report and which disappears with `--incremental false`; the root program is otherwise clean. Verify a
 suspicious type error that way before treating it as real.
+
+## Slice 7 — Approved-facts prompt block (tasks 28-31)
+
+### Delivery ledger (this run)
+
+- **Files:** `apps/web/src/lib/sofia/customer-memory.ts` (+64), `apps/web/src/lib/ai/openrouter.ts` (+21/−1),
+  NEW `tests/unit/sofia-customer-memory-prompt.test.ts` (582 lines, 20 tests, 108 assertions).
+  **668 changed lines** against the ~180 forecast and the 400-line budget → `size:exception` (below).
+- **Evidence observed by the parent:** focused suite 20/20; regression 47/47 across
+  `sofia-rag-enhancement`, `sofia-customer-memory` and `sofia-customer-memory-extraction`; pipeline
+  consumers 17/17; `npx tsc --noEmit --incremental false` clean; `npm run lint` clean.
+- **Two independent read-only verifications.** The first one **rejected** this slice and is the reason
+  the delivered shape differs from the first implementation; the second re-verified the repair.
+
+### What the slice delivers
+
+`agruparFatosParaPrompt` (design §6.3) as a pure renderer in `customer-memory.ts`: header/footer
+verbatim from the design, the fixed `- <tipo>/<chave>: <valor>` grammar, at most 20 fact lines and
+1200 characters of joined fact-line content, whole lines only, `null` when nothing usable remains. In
+`openrouter.ts`, the single gated `buscar_fatos_para_prompt` fetch (design §7.5) and one template
+insertion between the active-orders interpolation and `HISTÓRICO DA CONVERSA:`.
+
+### TDD Cycle Evidence
+
+- **RED:** observed on first creation (`Tests 16 failed | 2 passed (18)`) and re-derived over the
+  final bytes with the implementation temporarily reverted (`Tests 19 failed | 1 passed (20)`), then
+  again after the repair by restoring the two-line interpolation (`4 failed | 16 passed`).
+- **GREEN:** 20/20 focused, 47/47 regression, 17/17 pipeline consumers, `tsc` clean, `lint` clean.
+- **TRIANGULATE:** byte-exact regions, cap boundaries, injection attempts, subordination region and
+  both failure paths, all through the real pipeline with a mocked RPC.
+- **REFACTOR:** single null path in the renderer; source-level assertions pin the one-line insertion.
+
+### First verification rejected the slice — the honest record
+
+The first implementation put the facts interpolation on its own physical template line and claimed
+byte-identity for the closed gate. Independent verification measured the opposite: the segment before
+`HISTÓRICO DA CONVERSA:` went from 5 newlines to 6, and the assertion that was supposed to prove
+identity compared two post-change renders, so it would also have passed with the renderer deleted. It
+also found the placement assertion non-falsifiable (a block misplaced anywhere after the article
+listing would still pass), a forbidden-string loop over rows its mock never contained, and a
+fact-value log assertion on a branch where the value cannot occur. All four were repaired before this
+slice was committed, and the second verification confirmed each repair fails on the corresponding
+mutation.
+
+### Deviations and known limits
+
+1. **§7.5's snippet contradicts its own byte-identity claim (load-bearing deviation).** The snippet
+   shows the facts interpolation on its own template line; that shape adds one newline even when the
+   block is empty, contradicting §7.5 and `specs/memoria_cliente/spec.md`'s requirement that the
+   closed-gate prompt be identical to the pre-change prompt. The interpolation therefore shares the
+   physical line with `${contextoPedidosAtivos}`. The design document is left as approved; this
+   record is the deviation trail.
+2. **F4 — the RPC `error` field is ignored (not changed here).** `const { data } = await
+   supabase.rpc(...)` inside `try`/`catch` is design §7.5 verbatim and matches the neighbouring
+   active-orders fetch in the same file. A resolved error result therefore degrades silently to an
+   empty block: with the gate enabled and no rows, the prompt is indistinguishable from the gate being
+   closed. Fixing it means logging `error` or emitting a metric, i.e. changing §7.5 — a follow-up.
+3. **F5 — the footer is one physical line** while §6.3's fenced block wraps it across three. Joining
+   those three document lines with single spaces reproduces the constant exactly (verified
+   mechanically, not by eye), and the normative spec does not mandate wrapping.
+4. **Log scope, disclosed.** The §7.5 catch logs the error object verbatim. No fact `valor` can reach
+   it (the RPC request carries only `p_cliente_id` and `p_limite`; the renderer logs nothing), but a
+   value-shaped string inside a driver error message is echoed. The rejection-path test therefore
+   asserts what is true: no header/footer in any log line, and exactly one driver echo, rather than a
+   "no value-shaped bytes ever" claim it cannot make without changing §7.5.
+5. **The DB owns the state filter.** The renderer does no `estado`/`observacao` filtering; that rule is
+   the RPC predicate and is covered by the pgTAP suite. The unit tests state this boundary instead of
+   faking a local proof of it.
+
+### Size exception (parent decision, declared for review)
+
+**668 changed lines**, of which 582 are the new test file — and that file is assertion-dense, not
+padded: 20 tests carrying 108 assertions (≈5.4 lines per assertion), whose longest constants are the
+proof itself (the documented pre-change byte replay and the §6.3 wording). Compacting it toward the
+minified style of the sibling suites in this change would make it harder to review without removing a
+single assertion. The size is structural: this is a prompt-injection surface where every guarantee is
+a byte-exact region, so each one costs a literal.
+
+### Chain context (chained-pr / work-unit-commits contract)
+
+| Field | Value |
+| --- | --- |
+| Strategy | Feature Branch Chain — slice 7 of 10; slices 1-6 are already in `main` (`56e3236`) |
+| Tracker | Issue #165 |
+| Position | 7 of 10 |
+| Base | `main` |
+| Dependency | Slices 1-6 (`buscar_fatos_para_prompt`, the gate, the RPCs) |
+| Follow-up | Slice 8 (operator authorization move and review actions, tasks 32-35) |
+| Rollback | Revert this commit; with the gate closed the prompt returns to the pre-change bytes |
+| Verification | Focused + regression + pipeline-consumer suites, root `tsc`, `npm run lint`; CI re-runs all of it |
