@@ -793,4 +793,170 @@ describe('Sofia inbound batch worker', () => {
     expect(d.claimBatch).toHaveBeenCalledTimes(10);expect(d.claimDelivery).toHaveBeenCalledTimes(10)
     expect(vi.mocked(d.claimBatch).mock.calls.length+vi.mocked(d.claimDelivery).mock.calls.length).toBeLessThanOrEqual(20)
   })
+  describe('customer memory extraction hook', () => {
+    // G de geracao e handle de digitacao sao obrigatorios no caminho runtime-on.
+    const runtimeOnDeps = () => ({ beginActivity:vi.fn().mockResolvedValue({ attempt_id:'g', expires_at:'' }), clearActivity:vi.fn().mockResolvedValue(true) })
+    const completedLote = { batch_id:'b', conversa_id:'c', cliente_id:'u', canal:'telegram' as const, contexto:formatBatchContext(claim.members) }
+    const orderOf = (fn: ReturnType<typeof vi.fn>, match: (call: unknown[]) => boolean) => {
+      const index = fn.mock.calls.findIndex(call => match(call as unknown[]))
+      expect(index).toBeGreaterThanOrEqual(0)
+      return fn.mock.invocationCallOrder[index]!
+    }
+    it('extracts facts once with the completed batch payload after a paced completion', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const extractFacts=vi.fn().mockResolvedValue(1)
+      const d=deps({ ...runtimeOnDeps(), extractFacts })
+      const result=await runSofiaBatchMaintenance(d,1)
+      expect(result).toMatchObject({ completed:1, failed:0 })
+      expect(extractFacts).toHaveBeenCalledTimes(1)
+      expect(extractFacts).toHaveBeenCalledWith(completedLote)
+    })
+    it('extracts facts once with the completed batch payload after a legacy completion', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','false')
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({ extractFacts })
+      const result=await runSofiaBatchMaintenance(d,1)
+      expect(result).toMatchObject({ completed:1, failed:0 })
+      expect(d.complete).toHaveBeenCalledWith('b','l','resposta')
+      expect(extractFacts).toHaveBeenCalledTimes(1)
+      expect(extractFacts).toHaveBeenCalledWith(completedLote)
+    })
+    it('never extracts facts when paced completion loses its fence', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({ ...runtimeOnDeps(), completePaced:vi.fn().mockResolvedValue(null), extractFacts })
+      const result=await runSofiaBatchMaintenance(d,1)
+      expect(result).toMatchObject({ completed:0, failed:1 })
+      expect(extractFacts).not.toHaveBeenCalled()
+    })
+    it('never extracts facts when a legacy completion returns false', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','false')
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({ complete:vi.fn().mockResolvedValue(false), extractFacts })
+      const result=await runSofiaBatchMaintenance(d,1)
+      expect(result).toMatchObject({ completed:0, failed:1 })
+      expect(extractFacts).not.toHaveBeenCalled()
+    })
+    it('never extracts facts for a batch cancelled by eligibility', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({ claimBatch:vi.fn().mockResolvedValueOnce({ ...claim, eligibility:{ db_eligible:false } }).mockResolvedValue(null), extractFacts })
+      const result=await runSofiaBatchMaintenance(d,1)
+      expect(result).toMatchObject({ cancelled:1, completed:0 })
+      expect(extractFacts).not.toHaveBeenCalled()
+    })
+    it('never extracts facts when generation throws on either runtime path', async () => {
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const paced=deps({ ...runtimeOnDeps(), generate:vi.fn().mockRejectedValue(Error('private')), extractFacts })
+      expect(await runSofiaBatchMaintenance(paced,1)).toMatchObject({ completed:0, failed:1 })
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','false')
+      const legacy=deps({ generate:vi.fn().mockRejectedValue(Error('private')), extractFacts })
+      expect(await runSofiaBatchMaintenance(legacy,1)).toMatchObject({ completed:0, failed:1 })
+      expect(extractFacts).not.toHaveBeenCalled()
+    })
+    it('keeps the completion counts and the pass alive when extraction rejects', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const warn=vi.spyOn(console,'warn').mockImplementation(()=>undefined)
+      try{
+        const extractFacts=vi.fn().mockRejectedValue(Error('provider secret leaked'))
+        const d=deps({ ...runtimeOnDeps(), extractFacts })
+        const result=await runSofiaBatchMaintenance(d,1)
+        expect(result).toEqual({ claimed:1, completed:1, cancelled:0, failed:0, delivery_attempted:0 })
+        expect(warn).toHaveBeenCalledWith('[sofia-inbound-batch] customer_memory_extraction_failed batch=b')
+        expect(JSON.stringify(warn.mock.calls)).not.toContain('provider secret leaked')
+      }finally{ warn.mockRestore() }
+    })
+    it('never extracts a batch before its own delivery attempt in the same pass', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const delivery={ batch_id:'b', conversa_id:'c', canal:'telegram' as const, response_text:'r', lease_token:'dl', remaining_ms:0 }
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({
+        ...runtimeOnDeps(),
+        claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+        adoptActivity:vi.fn().mockResolvedValue({ attempt_id:'d', expires_at:'' }),
+        extractFacts,
+      })
+      const result=await runSofiaBatchMaintenance(d,2)
+      expect(result).toMatchObject({ completed:1, delivery_attempted:1 })
+      expect(extractFacts).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(extractFacts).mock.invocationCallOrder[0]!).toBeGreaterThan(vi.mocked(d.beginDelivery).mock.invocationCallOrder[0]!)
+      expect(vi.mocked(extractFacts).mock.invocationCallOrder[0]!).toBeGreaterThan(vi.mocked(d.sendTelegram).mock.invocationCallOrder[0]!)
+      expect(orderOf(extractFacts,call=>Boolean(call[0]))).toBeGreaterThan(vi.mocked(d.claimDelivery).mock.invocationCallOrder.at(-1)!)
+    })
+    it('stays a no-op when the worker carries no extraction dependency', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const d=deps(runtimeOnDeps())
+      const result=await runSofiaBatchMaintenance(d,1)
+      expect(result).toEqual({ claimed:1, completed:1, cancelled:0, failed:0, delivery_attempted:0 })
+    })
+    it.each([['runtime-on','true'],['runtime-off','false']] as const)('pushes exactly one completed batch per batch on the %s path', async (_label,runtime) => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED',runtime)
+      const second={ ...claim, batch_id:'b2' }
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({
+        claimBatch:vi.fn().mockResolvedValueOnce(claim).mockResolvedValueOnce(second).mockResolvedValue(null),
+        extractFacts,
+        ...(runtime==='true'?runtimeOnDeps():{}),
+      })
+      const result=await runSofiaBatchMaintenance(d,4)
+      expect(result).toMatchObject({ completed:2, failed:0 })
+      expect(extractFacts).toHaveBeenCalledTimes(2)
+      expect(extractFacts.mock.calls.map(call=>(call[0] as { batch_id:string }).batch_id)).toEqual(['b','b2'])
+    })
+    it('never re-drains a batch completed by a previous pass', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','false')
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({ extractFacts })
+      expect(await runSofiaBatchMaintenance(d,1)).toMatchObject({ completed:1 })
+      expect(await runSofiaBatchMaintenance(d,1)).toMatchObject({ completed:0 })
+      expect(extractFacts).toHaveBeenCalledTimes(1)
+    })
+    it('drains after the delivery loop once the generation lease and the typing handle are released', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const delivery={ batch_id:'b', conversa_id:'c', canal:'telegram' as const, response_text:'r', lease_token:'dl', remaining_ms:0 }
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({
+        ...runtimeOnDeps(),
+        claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+        adoptActivity:vi.fn().mockResolvedValue({ attempt_id:'d', expires_at:'' }),
+        setInterval:vi.fn((_callback,ms)=>ms===4_000?'typing':'heartbeat'),
+        clearInterval:vi.fn(),
+        extractFacts,
+      })
+      const result=await runSofiaBatchMaintenance(d,2)
+      expect(result).toMatchObject({ completed:1, delivery_attempted:1 })
+      const extractOrder=vi.mocked(extractFacts).mock.invocationCallOrder[0]!
+      expect(extractOrder).toBeGreaterThan(orderOf(vi.mocked(provided(d.clearActivity)),call=>call[0]==='b'&&call[1]==='d'))
+      expect(extractOrder).toBeGreaterThan(orderOf(vi.mocked(provided(d.clearInterval)),call=>call[0]==='typing'))
+      expect(extractOrder).toBeGreaterThan(vi.mocked(d.claimDelivery).mock.invocationCallOrder.at(-1)!)
+    })
+    it('drains only after the WhatsApp presence handle was released', async () => {
+      vi.stubEnv('SOFIA_INBOUND_BATCH_RUNTIME_ENABLED','true')
+      const delivery={ batch_id:'b', conversa_id:'c', canal:'whatsapp' as const, response_text:'r', lease_token:'dl', remaining_ms:0 }
+      const stopPresence=vi.fn()
+      const extractFacts=vi.fn().mockResolvedValue(0)
+      const d=deps({
+        claimBatch:vi.fn().mockResolvedValueOnce({ ...claim, channel:'whatsapp' as const }).mockResolvedValue(null),
+        beginActivity:vi.fn().mockResolvedValue({ attempt_id:'g', expires_at:'' }),
+        clearActivity:vi.fn().mockResolvedValue(true),
+        startWhatsAppPresence:vi.fn().mockReturnValue({ stop:stopPresence }),
+        claimDelivery:vi.fn().mockResolvedValueOnce(delivery).mockResolvedValue(null),
+        adoptActivity:vi.fn().mockResolvedValue({ attempt_id:'d', expires_at:'' }),
+        setInterval:vi.fn(()=> 'heartbeat'),
+        clearInterval:vi.fn(),
+        extractFacts,
+      })
+      const result=await runSofiaBatchMaintenance(d,2)
+      expect(result).toMatchObject({ completed:1, delivery_attempted:1 })
+      expect(stopPresence).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(extractFacts).mock.invocationCallOrder[0]!).toBeGreaterThan(orderOf(stopPresence,call=>call.length===0))
+      expect(vi.mocked(extractFacts).mock.invocationCallOrder[0]!).toBeGreaterThan(vi.mocked(d.sendWhatsApp).mock.invocationCallOrder[0]!)
+    })
+    it('wires the production extraction dependency into the worker deps', async () => {
+      vi.stubEnv('SOFIA_CUSTOMER_MEMORY_ENABLED','false')
+      const production=createSofiaBatchWorkerDeps({ rpc:vi.fn() } as never)
+      await expect(provided(production.extractFacts)(completedLote)).resolves.toBe(0)
+    })
+  })
 })

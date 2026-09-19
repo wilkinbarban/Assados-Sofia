@@ -1246,3 +1246,136 @@ ignored. Both deployment paths still close the gate by default, and they are wha
 literal `scripts/workspace-preflight.sh run -- vitest run` form cannot start on this host because the
 preflight execs without `node_modules/.bin` on `PATH`; `npx vitest run` is the working equivalent of the
 repository's own `npm run test`.
+
+## Slice 6 — Worker post-completion extraction hook (tasks 24–27)
+
+### Delivery ledger (this run)
+
+- **Tasks:** 24–27, persisted as `- [x]` in `tasks.md` with inline `**Evidence (2026-09-19):**` clauses.
+- **Files:** `apps/web/src/lib/sofia/inbound-batch-worker.ts` (+31/−3) and
+  `tests/unit/sofia-inbound-batch-worker.test.ts` (+166/−0) = **200 changed lines** against the
+  400-line budget.
+- **Observed by the parent:** suite `Tests 83 passed (83)`; with the payment-proof harness guard,
+  `Tests 112 passed (112)`; `npx tsc --noEmit -p apps/web/tsconfig.json` no errors; `npm run lint`
+  exit 0.
+- **Independent verification:** a separate read-only verifier agent ran the four commands and answered
+  five structural questions from the source. It confirmed exactly two `lotesCompletos.push` sites
+  (lines 134 and 161), the drain at line 194 after the delivery `while` loop (169–192) and before
+  `return out`, that `executarHookExtracao` cannot mutate `BatchCounts`, and that the worker reads the
+  customer-memory gate **zero** times.
+
+### TDD Cycle Evidence
+
+- **RED (re-derived, not reported).** With the implementation temporarily stashed
+  (`git stash push apps/web/src/lib/sofia/inbound-batch-worker.ts`) the suite fails with **10 failing
+  cases**: `extracts facts once with the completed batch payload after a paced completion`, the same
+  `after a legacy completion`, `keeps the completion counts and the pass alive when extraction rejects`,
+  `never extracts a batch before its own delivery attempt in the same pass`, `pushes exactly one
+  completed batch per batch on the runtime-on path`, the same `on the runtime-off path`, `never
+  re-drains a batch completed by a previous pass`, `drains after the delivery loop once the generation
+  lease and the typing handle are released`, `drains only after the WhatsApp presence handle was
+  released`, and `wires the production extraction dependency into the worker deps`. The implementation
+  was then restored from the stash and the suite went green again, so the ten names above are the
+  unambiguous falsification set for this slice.
+- **GREEN.** `Test Files 1 passed (1)`, `Tests 83 passed (83)` (73 before the slice).
+- **TRIANGULATE.** Ordering, single-push and no-re-drain assertions run through the worker's own pass
+  loop; the honest-semantics comment ships at the hook with no fence claimed.
+- **REFACTOR.** 83 unchanged, plus `tsc` clean and `npm run lint` exit 0.
+
+### Deviations, honest limits and reviewer notes
+
+1. **The negative assertions are negative by nature.** `expect(extractFacts).not.toHaveBeenCalled()`
+   would also pass if the hook did not exist. They are corroborated by the positive
+   `toHaveBeenCalledTimes(1)` / `toHaveBeenCalledWith(completedLote)` assertions, which the RED run
+   above proves fail without the hook. Recorded because a reviewer should not read the negative half as
+   an existence proof.
+2. **`LoteExtraivel` is imported, not declared here.** Task 25 says "add `LoteExtraivel`"; the type
+   already exists in `customer-memory-extraction.ts` (Slice 5), so the worker imports it together with
+   `extrairFatosDoLote`. Re-declaring it would have created a second definition of the same contract.
+3. **The gate is read zero times in the worker.** `SOFIA_CUSTOMER_MEMORY_ENABLED` /
+   `customerMemoryEnabled` do not appear in `inbound-batch-worker.ts`; the single gate read stays inside
+   `extrairFatosDoLote`, which returns `0` when closed. This keeps the "one gate, one read" invariant
+   from Slice 5 intact.
+4. **`npx eslint` is not usable as evidence on this host.** `npx` resolves a global ESLint 6.4.0 that
+   cannot read this repository's flat config and exits 2 with an unparseable body. The repo-local binary
+   (`node_modules/.bin/eslint`, 9.39.4) exits 0 on both files, and CI's `Lint` step runs
+   `npm run lint`, which was run and exits 0. The slice-5 record's `npx eslint` line is a host artifact
+   of the same kind and is corrected by this note.
+5. **The first writer attempt returned a derailed report.** Its session received the in-session RDD
+   review reminder while it mutated files and answered a review-disposition question instead of
+   reporting the work, returning `status: partial` with no file change claimed — even though the two
+   files were in fact written. The parent verified the worktree, reviewed the diff, re-derived the RED
+   and re-ran the checks rather than trusting the report. **Operational consequence:** while an
+   unreviewed accumulated candidate exists, every mutation in any session re-offers that candidate, and
+   delegation to writers can be interrupted by it.
+
+### Chain context (chained-pr / work-unit-commits contract)
+
+| Field | Value |
+| --- | --- |
+| Strategy | Feature Branch Chain (stacked-to-main) |
+| Tracker | Issue #165 (documentation); PR chain #166–#173 published before this slice |
+| Position | Slice 6 of 10; PR 9 of the published chain |
+| Base | `feat/sofia-customer-memory-slice-5` |
+| Dependency | PR 8 (Slice 5) — `extrairFatosDoLote` |
+| Follow-up | Slice 7 (approved-facts prompt block, tasks 28–31) |
+| Changed-line budget | 200 of 400 |
+| Verification | Worker suite + payment-proof harness guard, `tsc`, `npm run lint`; CI re-runs all of it |
+
+## Corrections — defects exposed by the published chain (2026-09-19)
+
+Publishing the branch chain ran the repository's `pull_request` workflow for the first time on this
+work, and it found **two** defects that the slice-local evidence could not see. CI failed on Slice 4
+(`Run hermetic tests`), failing Slice 5 with it:
+
+```
+FAIL tests/unit/payment-proof-harness-bootstrap.test.ts > admin_user_dual_deletion.sql imports only
+its explicitly allowlisted forward migrations
+AssertionError: expected [ …(13) ] to deeply equal [ …(11) ]
+```
+
+`payment-proof-harness-bootstrap.test.ts` pins the exact, ordered list of forward migrations each SQL
+suite may import. Task 15/16 of Slice 4 added two guarded `\ir` includes to
+`supabase/tests/admin_user_dual_deletion.sql` (`20260918010000_fatos_cliente_schema.sql` and
+`20260918030000_anonymize_fatos_cliente.sql`) without updating that allowlist. The Slice 4 task text
+never named this guard, and neither the focused pgTAP evidence nor the local runs could see it: the
+guard is a hermetic Vitest test that only the whole-suite CI job exercises. Fixed on the Slice 4 branch
+by commit `cc1c52c` (`test(sofia): allowlist the customer-memory migrations in the dual-deletion
+guard`), which adds the two entries in the file's own order; the local RED/GREEN pair is
+`expected [ …(13) ] to deeply equal [ …(11) ]` → `Tests 29 passed (29)`.
+
+This is the honest failure mode of a slice-local evidence discipline: a **cross-cutting hermetic guard**
+is only enforced when the whole suite runs together. It also corrects the implicit assumption in the
+Slice 4 record that its suite green plus the sanctioned run covered the slice — they did not cover the
+guard. Slice 1, 2, 3 and the roadmap/hygiene PR passed the same workflow unchanged.
+
+### Slice 5 — the root type-check program
+
+The same workflow then failed the Slice 5 pull request at `Type-check` instead:
+
+```
+##[error]tests/unit/sofia-customer-memory-extraction.test.ts(152,34): error TS2493: Tuple type '[]'
+of length '0' has no element at index '0'.
+```
+
+A spy created as `vi.fn(async () => ...)`, without a parameter signature, has `mock.calls` typed as the
+empty tuple `[]`, so destructuring call index 0 is a type error. Fixed on the Slice 5 branch by
+`73d734e`, which types the call list at the assertion site; the suite stays green at 46/46.
+
+Why the slice record could not catch it: the type-check command in the task text, and therefore in the
+slice evidence, was `npx tsc --noEmit -p apps/web/tsconfig.json`, and **that program excludes `tests/`**.
+CI runs the root `npx tsc --noEmit`, which includes every test file. A slice that only type-checks
+`apps/web` cannot see a defect in its own test file.
+
+### The lesson both corrections share
+
+The slice-local evidence commands were narrower than the CI job in **two independent ways**: the focused
+suite missed a cross-cutting hermetic guard (Slice 4), and the narrowed type-check program missed the
+test files the slice had just written (Slice 5). From here, a slice's evidence uses the CI commands
+themselves — root `npx tsc --noEmit` and the full hermetic suite — whenever the slice touches `tests/`.
+
+One more host note, because it cost time: on this checkout a stale `tsconfig.tsbuildinfo` (gitignored,
+`incremental: true`) **fabricates** an error in a file the slice never touched. Locally the root program
+reported `tests/unit/evolution-payment-proof-intake.test.ts(100,18): error TS7023`, which CI does not
+report and which disappears with `--incremental false`; the root program is otherwise clean. Verify a
+suspicious type error that way before treating it as real.
