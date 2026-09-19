@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { processarRagBatchPipeline } from '@/lib/ai/openrouter'
 import { obterSofiaGlobalChannelConfig } from '@/lib/config/sistema'
 import { verificarHorarioAtendimento } from '@/lib/horarios/verificar'
+import { extrairFatosDoLote, type LoteExtraivel } from '@/lib/sofia/customer-memory-extraction'
 import { inboundBatchRuntimeEnabled } from '@/lib/sofia/inbound-batch-gates'
 import { enviarAcaoChatTelegram, enviarMensagemTelegram, TELEGRAM_CHAT_ACTION_REASONS, type TelegramChatActionOutcome, type TelegramChatActionReason, type TelegramChatActionReport } from '@/lib/telegram/send'
 import { enviarMensagemWhatsapp } from '@/lib/whatsapp/send'
@@ -26,6 +27,7 @@ export interface BatchWorkerDeps {
  sendTelegramTyping(id:string):Promise<TelegramChatActionReport>;sendTelegram(id:string,text:string):Promise<unknown>;sendWhatsApp(id:string,text:string,typingDelayMs?:number):Promise<unknown>;startWhatsAppPresence?(id:string,observe?:(event:EvolutionPresenceEvent)=>void):TypingHandle|Promise<TypingHandle>
  observeTelegramTyping?(event:TelegramTypingObservation):void
  observeWhatsAppPresence?(event:EvolutionPresenceEvent):void
+ extractFacts?(lote:LoteExtraivel):Promise<unknown>
 }
 export function formatBatchContext(members:Member[]):string {
  return ['MENSAGENS RECEBIDAS NESTE LOTE (ordem cronológica):',...members.map((m,i)=>{
@@ -112,6 +114,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
  const typingHandles=new Map<string,TypingHandle>()
  const presenceHandles=new Map<string,TypingHandle|undefined>()
  const closedPresence=new Set<string>()
+ const lotesCompletos:LoteExtraivel[]=[]
  const releaseTyping=(batchId:string)=>{const handle=typingHandles.get(batchId);if(!handle)return;typingHandles.delete(batchId);handle.stop()}
  const releasePresence=(batchId:string)=>{closedPresence.add(batchId);const handle=presenceHandles.get(batchId);presenceHandles.delete(batchId);handle?.stop()}
  const ensureTyping=(batchId:string,conversationId:string)=>{const retained=typingHandles.get(batchId);if(retained)return retained;const handle=startTelegramTyping(d,conversationId);typingHandles.set(batchId,handle);return handle}
@@ -124,8 +127,12 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
     if(!reason&&c.channel==='whatsapp'&&!(await d.whatsappEligible(c)))reason='sleep_or_cooldown'
     if(reason){await d.cancel(c.batch_id,c.lease_token,reason);out.cancelled++;continue}
     if(!runtimeEnabled){
-     const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
-     if(!(await d.complete(c.batch_id,c.lease_token,text))){out.failed++;continue}out.completed++;continue
+     const contexto=formatBatchContext(c.members)
+     const text=await d.generate(c.conversa_id,contexto,c.channel)
+     if(!(await d.complete(c.batch_id,c.lease_token,text))){out.failed++;continue}
+     out.completed++
+     lotesCompletos.push({batch_id:c.batch_id,conversa_id:c.conversa_id,cliente_id:c.cliente_id,canal:c.channel,contexto})
+     continue
     }
     const activity=await d.beginActivity?.(c.batch_id,c.lease_token)
     if(!activity){out.failed++;continue}
@@ -139,10 +146,11 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
      else { const handle=started as TypingHandle;if(closedPresence.has(c.batch_id))handle.stop();else presenceHandles.set(c.batch_id,handle) }
     }catch{observeWhatsAppPresence(d,{event:'unavailable',reason:'provider_unavailable'});releasePresence(c.batch_id)}
    }
+    const contexto=formatBatchContext(c.members)
     let retainGenerationActivity=false
     try{
      const startedAt=d.now()
-     const text=await d.generate(c.conversa_id,formatBatchContext(c.members),c.channel)
+     const text=await d.generate(c.conversa_id,contexto,c.channel)
      const elapsedMs=Math.max(0,d.now()-startedAt)
      await heartbeat.settle()
      if(heartbeat.lost()){out.failed++;continue}
@@ -150,6 +158,7 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
      if(!paced){out.failed++;continue}
      pacedRemainders.set(c.batch_id,paced.remaining_ms)
      retainGenerationActivity=true;out.completed++
+     lotesCompletos.push({batch_id:c.batch_id,conversa_id:c.conversa_id,cliente_id:c.cliente_id,canal:c.channel,contexto})
     }finally{
      heartbeat.stop()
      if(!retainGenerationActivity){releaseTyping(c.batch_id);releasePresence(c.batch_id);await d.clearActivity?.(c.batch_id,activity.attempt_id)}
@@ -181,11 +190,29 @@ export async function runSofiaBatchMaintenance(d:BatchWorkerDeps,limit=20):Promi
    }catch{await d.recordDeliveryFailure(job.batch_id,'provider_unavailable')}
    finally{releaseTyping(job.batch_id);releasePresence(job.batch_id);if(deliveryActivity)await d.clearActivity?.(job.batch_id,deliveryActivity.attempt_id)}
   }
+  // Single drain after the delivery loop: extraction can never delay a customer-visible reply.
+  for(const lote of lotesCompletos)await executarHookExtracao(d,lote)
   return out
  }finally{
   for(const batchId of [...typingHandles.keys()])releaseTyping(batchId)
   for(const batchId of [...presenceHandles.keys()])releasePresence(batchId)
  }
+}
+/**
+ * Post-completion extraction hook. Best effort by contract: it never throws and never fails the pass.
+ *
+ * At-most-once **by completion semantics only**, with no stronger fence claimed: `claim_sofia_inbound_batch`
+ * selects only `pending` batches or `processing` batches past `claimed_until`, and completion clears the
+ * lease, so a completed batch is never re-drained. A crash between completion and this call loses that
+ * batch's facts permanently: there is no ledger, no backfill and no compensating write (`23505` counts as
+ * already recorded). A failure in a live process is equally final and is never retried, and anything that
+ * rejects before the drain (for example a delivery-loop failure) skips the remaining extraction of that
+ * pass for the same reason.
+ */
+async function executarHookExtracao(d:BatchWorkerDeps,lote:LoteExtraivel):Promise<void>{
+ if(!d.extractFacts)return
+ try{await d.extractFacts(lote)}
+ catch{console.warn(`[sofia-inbound-batch] customer_memory_extraction_failed batch=${lote.batch_id}`)}
 }
 function row<T>(data:T|T[]|null):T|null{return Array.isArray(data)?data[0]??null:data}
 export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
@@ -194,6 +221,7 @@ export function createSofiaBatchWorkerDeps(db:SupabaseClient):BatchWorkerDeps{
   claimBatch:()=>rpc('claim_sofia_inbound_batch',{p_lease_seconds:60}),cancel:(id,l,r)=>rpc('cancel_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_reason:r}),fail:(id,l,e)=>rpc('fail_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_error:e}),
   businessHours:async()=>(await verificarHorarioAtendimento()).dentro,globalEnabled:async c=>c==='web'?true:(await obterSofiaGlobalChannelConfig(c)).enabled,whatsappEligible:async c=>(await isWhatsAppInboundEligibleForSofia({supabase:db,clienteId:c.cliente_id,conversaId:c.conversa_id})).eligible,
   generate:processarRagBatchPipeline,complete:async(id,l,t)=>!!await rpc('complete_sofia_inbound_batch',{p_batch_id:id,p_lease_token:l,p_response_text:t}),completePaced:(id,l,t,e)=>rpc('complete_sofia_inbound_batch_paced',{p_batch_id:id,p_lease_token:l,p_response_text:t,p_generation_elapsed_ms:e}),claimDelivery:()=>rpc('claim_sofia_response_delivery',{p_lease_seconds:60}),beginDelivery:(id,l)=>rpc('begin_sofia_response_delivery',{p_batch_id:id,p_lease_token:l}),recordDeliveryFailure:(id,r)=>rpc('record_sofia_response_delivery_failure',{p_batch_id:id,p_failure:r}),
+  extractFacts:lote=>extrairFatosDoLote(db,lote),
   beginActivity:(id,l)=>rpc('begin_sofia_batch_activity',{p_batch_id:id,p_batch_lease_token:l,p_ttl_seconds:30}),renewActivity:async(id,l,a)=>!!await rpc('renew_sofia_owner_activity',{p_batch_id:id,p_owner_kind:'generation',p_owner_token:l,p_attempt_id:a,p_owner_ttl_seconds:30,p_activity_ttl_seconds:30}),clearActivity:(id,a)=>rpc('clear_sofia_batch_activity',{p_batch_id:id,p_attempt_id:a}),adoptActivity:(id,l)=>rpc('adopt_sofia_response_activity',{p_batch_id:id,p_delivery_lease_token:l,p_ttl_seconds:30}),
   setInterval:(callback,ms)=>setInterval(callback,ms),clearInterval:timer=>clearInterval(timer as ReturnType<typeof setInterval>),now:()=>Date.now(),sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),sendTelegramTyping:id=>enviarAcaoChatTelegram(id,'typing'),
   // Observador de produção: tag fixa + enums seguros, uma linha por tentativa e por desfecho.
